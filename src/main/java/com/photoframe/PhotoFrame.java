@@ -25,7 +25,6 @@ import com.defano.jsegue.renderers.WipeRightEffect;
 import com.defano.jsegue.renderers.WipeUpEffect;
 import com.defano.jsegue.renderers.ZoomInEffect;
 import com.defano.jsegue.renderers.ZoomOutEffect;
-import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.awt.*;
 import java.awt.event.*;
@@ -34,8 +33,6 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileReader;
 import java.io.IOException;
-import java.nio.file.DirectoryStream;
-import java.nio.file.Files;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
