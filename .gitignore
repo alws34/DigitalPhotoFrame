@@ -1,1 +1,3 @@
 resources/*
+/src/main/java/org/alws/photoframe/resources/*
+/target/classes/org/alws/photoframe/resources/*
