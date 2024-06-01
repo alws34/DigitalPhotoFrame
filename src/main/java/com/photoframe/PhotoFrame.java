@@ -31,7 +31,9 @@ import java.awt.event.*;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 import javax.imageio.ImageIO;
@@ -44,32 +46,64 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
     private static final int DEFAULT_SLEEP_DURATION = 30000; // 30 seconds
     private static final int DEFAULT_MAX_FPS = 30;
     private static final int DEFAULT_MAX_ANIMATIONS = 24; // this is all the animation segue supports.
-    private JPanel photoPanel;
+    private JPanel backPanel;
     private JLabel photoLabel;
+    JLabel dateLabel = new JLabel();
+    JLabel timeLabel = new JLabel();
     private List<BufferedImage> photos;
     private int currentPhotoIndex;
     private AnimatedSegue currentSegue;
     private int screenWidth;
     private int screenHeight;
+    private Timer timer;
 
     public PhotoFrame() {
         super("Photo Frame");
         setExtendedState(JFrame.MAXIMIZED_BOTH);
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
 
-        // Create and add the photo panel
-        photoPanel = new JPanel();
-        photoPanel.setLayout(new BorderLayout());
+        // Create and set up the back panel
+        backPanel = new JPanel();
+        SpringLayout springLayout = new SpringLayout();
+        backPanel.setLayout(springLayout);
+
+        Color foregroundColor = Color.decode("#410037");
+        String fontName = "Arial";
+
+        // Create and set up the time label
+        timeLabel = new JLabel();
+        timeLabel.setFont(new Font(fontName, Font.BOLD, 120));
+        timeLabel.setForeground(foregroundColor);
+
+        // Position the time label in the bottom-left corner
+        springLayout.putConstraint(SpringLayout.WEST, timeLabel, 10, SpringLayout.WEST, backPanel);
+        springLayout.putConstraint(SpringLayout.SOUTH, timeLabel, -60, SpringLayout.SOUTH, backPanel);
+        backPanel.add(timeLabel);
+
+        // Create and set up the date label
+        dateLabel = new JLabel();
+        dateLabel.setFont(new Font(fontName, Font.BOLD, 60));
+        dateLabel.setForeground(foregroundColor);
+
+        // Position the date label in the bottom-left corner
+        springLayout.putConstraint(SpringLayout.WEST, dateLabel, 60, SpringLayout.WEST, backPanel);
+        springLayout.putConstraint(SpringLayout.SOUTH, dateLabel, -10, SpringLayout.SOUTH, backPanel);
+        backPanel.add(dateLabel);
+
+        // Create and set up the photo label
         photoLabel = new JLabel();
         photoLabel.setHorizontalAlignment(SwingConstants.CENTER);
-        photoPanel.add(photoLabel, BorderLayout.CENTER);
-        add(photoPanel, BorderLayout.CENTER); // Add panel to frame
+        photoLabel.setVerticalAlignment(SwingConstants.CENTER);
+        backPanel.add(photoLabel);
+
+        add(backPanel, BorderLayout.CENTER); // Add back panel to frame
 
         // Add window listener to handle fullscreen mode
         addWindowListener(new WindowAdapter() {
             @Override
             public void windowOpened(WindowEvent e) {
                 setUndecorated(true); // Remove window decorations
+                backPanel.setSize(getWidth(), getHeight());
             }
         });
 
@@ -80,6 +114,12 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
 
         currentPhotoIndex = 0;
         startPhotoLoop();
+        startDateTimeUpdater();
+    }
+
+    private void startDateTimeUpdater() {
+        timer = new Timer(1000, e -> updateDateTimeLabel());
+        timer.start();
     }
 
     // region Animations
@@ -276,6 +316,13 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
     @Override
     public void onFrameRendered(AnimatedSegue segue, BufferedImage image) {
         photoLabel.setIcon(new ImageIcon(image));
+    }
+
+    private void updateDateTimeLabel() {
+        String date = new SimpleDateFormat("dd/MM/yyyy").format(new Date());
+        String time = new SimpleDateFormat("HH:mm:ss").format(new Date());
+        timeLabel.setText(time);
+        dateLabel.setText(date);
     }
 
     public static int getRandInt(int max) {
