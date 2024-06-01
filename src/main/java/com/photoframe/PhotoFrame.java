@@ -25,12 +25,17 @@ import com.defano.jsegue.renderers.WipeRightEffect;
 import com.defano.jsegue.renderers.WipeUpEffect;
 import com.defano.jsegue.renderers.ZoomInEffect;
 import com.defano.jsegue.renderers.ZoomOutEffect;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.awt.*;
 import java.awt.event.*;
 import java.awt.image.BufferedImage;
+import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileReader;
 import java.io.IOException;
+import java.nio.file.DirectoryStream;
+import java.nio.file.Files;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
@@ -42,33 +47,48 @@ import java.util.Random;
 
 public class PhotoFrame extends JFrame implements SegueAnimationObserver {
 
-    private static final long DEFAULT_ANIMATION_DURATION = 5000; // 5 seconds
-    private static final int DEFAULT_SLEEP_DURATION = 30000; // 30 seconds
-    private static final int DEFAULT_MAX_FPS = 30;
+    private static long DEFAULT_ANIMATION_DURATION;
+    private static int DEFAULT_SLEEP_DURATION;
+    private static int DEFAULT_MAX_FPS;
+
     private static final int DEFAULT_MAX_ANIMATIONS = 24; // this is all the animation segue supports.
+
     private JPanel backPanel;
     private JLabel photoLabel;
     JLabel dateLabel = new JLabel();
     JLabel timeLabel = new JLabel();
+
     private List<BufferedImage> photos;
     private int currentPhotoIndex;
     private AnimatedSegue currentSegue;
     private int screenWidth;
     private int screenHeight;
     private Timer timer;
+    AppSettings appSettings = new AppSettings();
 
     public PhotoFrame() {
         super("Photo Frame");
         setExtendedState(JFrame.MAXIMIZED_BOTH);
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
 
+        String jsonString;
+        try {
+            jsonString = readFile("src/main/java/com/photoframe/settings.json");
+            appSettings = AppSettings.deserialize(jsonString);
+        } catch (IOException e) {
+            e.printStackTrace();
+        } // Replace with your reading method
+
+        DEFAULT_ANIMATION_DURATION = appSettings.DefaultAnimationDuration;
+        DEFAULT_SLEEP_DURATION = appSettings.DelayBetweenImages;
+        DEFAULT_MAX_FPS = appSettings.DefaultMaxFPS;
         // Create and set up the back panel
         backPanel = new JPanel();
         SpringLayout springLayout = new SpringLayout();
         backPanel.setLayout(springLayout);
 
-        Color foregroundColor = Color.decode("#410037");
-        String fontName = "Arial";
+        Color foregroundColor = Color.decode(appSettings.colorHex);
+        String fontName = appSettings.FontName;
 
         // Create and set up the time label
         timeLabel = new JLabel();
@@ -283,7 +303,19 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
     private List<BufferedImage> LoadPhotos() {
         photos = new ArrayList<>();
         try {
-            File[] imageFiles = new File("resources")
+            String path = appSettings.ImagesPath;
+            File directory;
+            if (path == null) {
+                path = "resources";
+                directory = new File(path);
+                if (!directory.exists()) {
+                    directory.mkdirs();
+                    throw new Exception(
+                            "Created new Directory \"resources\". please add some photos and restart the app.");
+                }
+            }
+
+            File[] imageFiles = new File(path)
                     .listFiles(file -> file.isFile() &&
                             (file.getName().toLowerCase().endsWith(".jpg") ||
                                     file.getName().toLowerCase().endsWith(".png") ||
@@ -319,8 +351,8 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
     }
 
     private void updateDateTimeLabel() {
-        String date = new SimpleDateFormat("dd/MM/yyyy").format(new Date());
-        String time = new SimpleDateFormat("HH:mm:ss").format(new Date());
+        String date = new SimpleDateFormat(appSettings.DateFormat).format(new Date());
+        String time = new SimpleDateFormat(appSettings.TimeFormat).format(new Date());
         timeLabel.setText(time);
         dateLabel.setText(date);
     }
@@ -328,5 +360,19 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
     public static int getRandInt(int max) {
         Random random = new Random();
         return random.nextInt(max) + 1;
+    }
+
+    public static String readFile(String filePath) throws IOException {
+
+        StringBuilder content = new StringBuilder();
+        try (BufferedReader reader = new BufferedReader(new FileReader(filePath))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                content.append(line).append("\n");
+            }
+        } catch (Exception e) {
+            return null;
+        }
+        return content.toString().trim();
     }
 }
