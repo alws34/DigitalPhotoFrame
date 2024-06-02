@@ -33,11 +33,16 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileReader;
 import java.io.IOException;
-import java.text.SimpleDateFormat;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
-import java.util.Date;
 import java.util.List;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.concurrent.TimeUnit;
+import java.util.stream.Collectors;
+
 import javax.imageio.ImageIO;
 import javax.swing.*;
 import java.util.Random;
@@ -59,14 +64,15 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
     JLabel dateLabel = new JLabel();
     JLabel timeLabel = new JLabel();
 
-    private List<BufferedImage> photos;
+    private List<String> photos;
     private int currentPhotoIndex;
     private AnimatedSegue currentSegue;
     private int screenWidth;
     private int screenHeight;
     private Timer timer;
     AppSettings appSettings = new AppSettings();
-
+    private boolean m_isRunning = true;
+    
     public PhotoFrame() {
         super("Photo Frame");
         setExtendedState(JFrame.MAXIMIZED_BOTH);
@@ -83,6 +89,8 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
             appSettings = AppSettings.deserialize(jsonString);
         } catch (IOException e) {
             e.printStackTrace();
+            m_isRunning = false;
+            return;
         } // Replace with your reading method
 
         DEFAULT_ANIMATION_DURATION = appSettings.DefaultAnimationDuration;
@@ -134,7 +142,7 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
         });
 
         setScreenSize();
-        photos = LoadPhotos();
+        photos = loadPhotos();
         if (photos.isEmpty())
             return;
 
@@ -280,15 +288,27 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
 
     private void startPhotoLoop() {
         new Thread(() -> {
-            while (true) {
+            while (m_isRunning) {
                 if (currentPhotoIndex >= photos.size()) {
                     currentPhotoIndex = 0; // Wrap around
                 }
 
+                BufferedImage currentImage ;
+                BufferedImage nextImage;
+				try {
+					currentImage  = ImageIO.read(new File(photos.get(currentPhotoIndex)));
+					nextImage = ImageIO.read(new File(photos.get((currentPhotoIndex + 1) % photos.size())));
+
+				} catch (IOException e) {
+					// TODO Auto-generated catch block
+					e.printStackTrace();
+					continue;
+				}
+                
                 // Resize images to screen size (assuming we know the screen dimensions)
-                BufferedImage resizedSourceImage = resizeImage(photos.get(currentPhotoIndex), screenWidth,
+                BufferedImage resizedSourceImage = resizeImage(currentImage , screenWidth,
                         screenHeight);
-                BufferedImage resizedDestinationImage = resizeImage(photos.get((currentPhotoIndex + 1) % photos.size()),
+                BufferedImage resizedDestinationImage = resizeImage(nextImage,
                         screenWidth, screenHeight);
 
                 setSegue(resizedSourceImage, resizedDestinationImage);
@@ -301,48 +321,45 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
                     Thread.sleep(DEFAULT_SLEEP_DURATION + DEFAULT_ANIMATION_DURATION);
                 } catch (InterruptedException e) {
                     // Handle interruptions gracefully
+                	m_isRunning = false;
+                    break;
                 }
             }
         }).start();
     }
 
-    private List<BufferedImage> LoadPhotos() {
-        photos = new ArrayList<>();
+    private List<String> loadPhotos() {
+        List<String> paths = new ArrayList<>();
         try {
             String path = appSettings.ImagesPath;
-            File directory;
             if (path == null) {
-                path = "./resources";//"./src/main/java/org/alws/photoframe/resources"
-                directory = new File(path);
-                if (!directory.exists()) {
-                    directory.mkdirs();
-                    throw new Exception(
-                            "Created new Directory \"resources\". please add some photos and restart the app.");
-                }
+                path = "./resources";
             }
 
-            File[] imageFiles = new File(path)
-                    .listFiles(file -> file.isFile() &&
-                            (file.getName().toLowerCase().endsWith(".jpg") ||
-                                    file.getName().toLowerCase().endsWith(".png") ||
-                                    file.getName().toLowerCase().endsWith(".jpeg") ||
-                                    file.getName().toLowerCase().endsWith(".heic") ||
-                                    file.getName().toLowerCase().endsWith(".heif")));
-            if (imageFiles != null) {
-                for (File imageFile : imageFiles) {
-                    try {
-                        photos.add(ImageIO.read(imageFile));
-                    } catch (Exception e) {
-                        continue;
-                    }
-                }
+            Path directoryPath = Paths.get(path);
+            if (!Files.exists(directoryPath)) {
+                Files.createDirectories(directoryPath);
+                throw new Exception(
+                        "Created new Directory \"resources\". please add some photos and restart the app.");
             }
+
+            // Use Stream API and Path API
+            paths = Files.list(directoryPath)
+                    .filter(file -> file.toFile().isFile() &&
+                            (file.toString().toLowerCase().endsWith(".jpg") ||
+                                    file.toString().toLowerCase().endsWith(".png") ||
+                                    file.toString().toLowerCase().endsWith(".jpeg") ||
+                                    file.toString().toLowerCase().endsWith(".heic") ||
+                                    file.toString().toLowerCase().endsWith(".heif")))
+                    .map(Path::toString)
+                    .collect(Collectors.toList());
         } catch (Exception e) {
             e.printStackTrace();
         }
-        return photos;
+        return paths;
     }
 
+    
     private BufferedImage resizeImage(BufferedImage image, int width, int height) {
         BufferedImage resizedImage = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g2d = resizedImage.createGraphics();
@@ -368,6 +385,7 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
         return random.nextInt(max) + 1;
     }
 
+    
     public static String readFile(String filePath) throws IOException {
 
         StringBuilder content = new StringBuilder();
