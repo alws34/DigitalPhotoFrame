@@ -1,5 +1,3 @@
-package org.alws.photoframe;
-
 import com.defano.jsegue.*;
 import com.defano.jsegue.renderers.AlphaDissolveEffect;
 import com.defano.jsegue.renderers.BarnDoorCloseEffect;
@@ -43,16 +41,20 @@ import java.util.Date;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
+
+import java.util.*;
+import java.awt.image.*;
+import javax.imageio.ImageIO;
+import javax.swing.*;
+import java.awt.geom.AffineTransform;
+
 import javax.imageio.ImageIO;
 import javax.swing.*;
 import java.util.Random;
 
 public class PhotoFrame extends JFrame implements SegueAnimationObserver {
 
-    /**
-     * 
-     */
-    private static final long serialVersionUID = 1L;
+    private static final int BLUR_RADIUS = 100;
     private static long DEFAULT_ANIMATION_DURATION;
     private static int DEFAULT_SLEEP_DURATION;
     private static int DEFAULT_MAX_FPS;
@@ -68,11 +70,11 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
     private AnimatedSegue currentSegue;
     private int screenWidth;
     private int screenHeight;
-    private Timer timer;
     AppSettings appSettings = new AppSettings();
     private boolean m_isRunning = true;
+    private javax.swing.Timer timer = null;
 
-    private boolean m_IsDebug = false;
+    private final boolean m_IsDebug = false;
 
     public PhotoFrame() {
         super("Photo Frame");
@@ -82,10 +84,14 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
             this.setUndecorated(true); // Remove window decorations
 
         String jsonString;
-        String filePath = "./settings.json";
 
         if (m_IsDebug)
-            filePath = "./src/main/java/org/alws/photoframe/settings.json";
+            System.out.println(System.getProperty("user.dir"));
+
+        String filePath = "./src/main/java/settings.json";
+
+        if (m_IsDebug)
+            filePath = "./settings.json";
 
         try {
             jsonString = readFile(filePath);
@@ -163,7 +169,7 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
     }
 
     private void startDateTimeUpdater() {
-        timer = new Timer(1000, e -> updateDateTimeLabel());
+        timer = new javax.swing.Timer(1000, e -> updateDateTimeLabel());
         timer.start();
     }
 
@@ -262,13 +268,9 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
                 currentSegue = buildSegue(sourceImage, destinationImage,
                         StretchFromTopEffect.class);
                 break;
-            case 24:
-                currentSegue = buildSegue(sourceImage, destinationImage,
-                        StretchFromCenterEffect.class);
-                break;
             default:
                 currentSegue = buildSegue(sourceImage, destinationImage,
-                        ScrollLeftEffect.class);
+                        StretchFromCenterEffect.class);
                 break;
         }
     }
@@ -305,7 +307,7 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
             BufferedImage nextImage = null;
 			
             try {
-            	currentImage = ImageIO.read(new File(photos.get(0)));
+            	currentImage = ImageIO.read(new File(photos.get( getRandInt(photos.size() - 1))));
 			} catch (IOException e) {
 				e.printStackTrace();
 				return;
@@ -327,21 +329,20 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
                 try {
                 	//currentImage = ImageIO.read(new File(photos.get(currentImageIdx)));
 					nextImage = ImageIO.read(new File(photos.get(nextImageIdx % photos.size())));
-               
+                    // Check if image is vertical and needs special handling
+
+                    if(isImageVertical(currentImage))
+                        currentImage = processVerticalImage(currentImage);
+
+                    if (isImageVertical(nextImage)) {
+                        nextImage = processVerticalImage(nextImage);
+                    } else {
+                        nextImage = resizeImage(nextImage, screenWidth, screenHeight);
+                    }
+
                     resizedSourceImage = resizeImage(currentImage, screenWidth, screenHeight);
-                    resizedDestinationImage = resizeImage(nextImage, screenWidth, screenHeight);
-                	
-                    if (resizedSourceImage == null || resizedSourceImage.getWidth() != screenWidth
-                            || resizedSourceImage.getHeight() != screenHeight) {
-                        resizedSourceImage = resizeImage(currentImage, screenWidth, screenHeight);
-                    }
 
-                    if (resizedDestinationImage == null || resizedDestinationImage.getWidth() != screenWidth
-                            || resizedDestinationImage.getHeight() != screenHeight) {
-                        resizedDestinationImage = resizeImage(nextImage, screenWidth, screenHeight);
-                    }
-
-                    setSegue(resizedSourceImage, resizedDestinationImage);
+                    setSegue(resizedSourceImage, nextImage);
                     currentSegue.start();
                     currentImage= nextImage;
                     
@@ -357,15 +358,77 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
         }).start();
     }
 
+    private boolean isImageVertical(BufferedImage image) {
+        return image.getHeight() > image.getWidth();
+    }
+
+    private BufferedImage processVerticalImage(BufferedImage image) {
+        int targetWidth = screenWidth;
+        int targetHeight = screenHeight;
+
+        // Stretch image to fit screen dimensions (optional: adjust positioning)
+        BufferedImage stretchedImage = new BufferedImage(targetWidth, targetHeight, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g2d = stretchedImage.createGraphics();
+        g2d.drawImage(image, 0, 0, targetWidth, targetHeight, null);
+        g2d.dispose();
+
+        // Apply average filter (frosted glass effect) with a larger kernel
+        int kernelSize = 50; // Larger kernel for a stronger frosted effect
+        int kernelRadius = kernelSize / 2;
+
+        BufferedImage frostedImage = new BufferedImage(targetWidth, targetHeight, BufferedImage.TYPE_INT_ARGB);
+        for (int y = 0; y < targetHeight; y++) {
+            for (int x = 0; x < targetWidth; x++) {
+                int red = 0, green = 0, blue = 0, count = 0;
+                // Sample neighboring pixels (larger kernel size)
+                for (int i = -kernelRadius; i <= kernelRadius; i++) {
+                    for (int j = -kernelRadius; j <= kernelRadius; j++) {
+                        int currentX = x + i;
+                        int currentY = y + j;
+                        if (currentX < 0 || currentX >= targetWidth || currentY < 0 || currentY >= targetHeight) {
+                            continue; // Handle pixels outside the image bounds
+                        }
+                        int color = stretchedImage.getRGB(currentX, currentY);
+                        red += (color >> 16) & 0xff;
+                        green += (color >> 8) & 0xff;
+                        blue += color & 0xff;
+                        count++;
+                    }
+                }
+                // Average the color values
+                int avgRed = red / count;
+                int avgGreen = green / count;
+                int avgBlue = blue / count;
+                frostedImage.setRGB(x, y, (0xff << 24) | (avgRed << 16) | (avgGreen << 8) | avgBlue);
+            }
+        }
+
+        // Overlay original image centered on frosted image (optional: adjust positioning)
+        BufferedImage finalImage = overlayImage(frostedImage, image, (targetWidth - image.getWidth()) / 2, (targetHeight - image.getHeight()) / 2);
+
+        return finalImage;
+    }
+
+    public static BufferedImage overlayImage(BufferedImage background, BufferedImage foreground, int x, int y) {
+        int targetWidth = Math.max(background.getWidth(), foreground.getWidth() + x);
+        int targetHeight = Math.max(background.getHeight(), foreground.getHeight() + y);
+        BufferedImage finalImage = new BufferedImage(targetWidth, targetHeight, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g2d = finalImage.createGraphics();
+        g2d.drawImage(background, 0, 0, null);
+        g2d.drawImage(foreground, x, y, null);
+        g2d.dispose();
+        return finalImage;
+    }
+
     private List<String> loadPhotos() {
         List<String> paths = new ArrayList<>();
         try {
             String path = appSettings.ImagesPath;
             if (path == null) {
-                path = "./resources";
+                path = "./src/main/resources";
 
                 if (m_IsDebug)
-                    path = "./src/main/java/org/alws/photoframe/resources";
+                    path = "../resources";
             }
 
             Path directoryPath = Paths.get(path);
@@ -391,10 +454,10 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
         return paths;
     }
 
-    private BufferedImage resizeImage(BufferedImage image, int width, int height) {
-        BufferedImage resizedImage = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+    private BufferedImage resizeImage(BufferedImage image, int targetWidth, int targetHeight) {
+        BufferedImage resizedImage = new BufferedImage(targetWidth, targetHeight, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g2d = resizedImage.createGraphics();
-        g2d.drawImage(image.getScaledInstance(width, height, Image.SCALE_SMOOTH), 0, 0, null);
+        g2d.drawImage(image, 0, 0, targetWidth, targetHeight, null);
         g2d.dispose();
         return resizedImage;
     }
@@ -428,5 +491,10 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
             return null;
         }
         return content.toString().trim();
+    }
+
+    public static void main(String[] args) {
+        PhotoFrame frame = new PhotoFrame();
+        frame.setVisible(true);
     }
 }

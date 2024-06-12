@@ -1,5 +1,3 @@
-package org.alws.photoframe;
-
 import java.io.IOException;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
