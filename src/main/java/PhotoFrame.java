@@ -54,7 +54,10 @@ import java.util.Random;
 
 public class PhotoFrame extends JFrame implements SegueAnimationObserver {
 
-    private static final int BLUR_RADIUS = 100;
+    private static final String VERSION = "1.0.0";
+
+    private final boolean m_IsDebug = false;
+
     private static long DEFAULT_ANIMATION_DURATION;
     private static int DEFAULT_SLEEP_DURATION;
     private static int DEFAULT_MAX_FPS;
@@ -74,7 +77,6 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
     private boolean m_isRunning = true;
     private javax.swing.Timer timer = null;
     private ImageProcessor imageProcessor;
-    private final boolean m_IsDebug = false;
 
     public PhotoFrame() {
         super("Photo Frame");
@@ -88,10 +90,10 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
         if (m_IsDebug)
             System.out.println(System.getProperty("user.dir"));
 
-        String filePath = "./src/main/java/settings.json";
+        String filePath = "./settings.json";
 
         if (m_IsDebug)
-            filePath = "./settings.json";
+            filePath = "./src/main/java/settings.json";
 
         try {
             jsonString = readFile(filePath);
@@ -550,10 +552,10 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
         try {
             String path = appSettings.ImagesPath;
             if (path == null) {
-                path = "./src/main/resources";
+                path = "./resources";
 
                 if (m_IsDebug)
-                    path = "../resources";
+                    path = "./src/main/resources";
             }
 
             Path directoryPath = Paths.get(path);

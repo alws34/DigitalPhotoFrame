@@ -1,0 +1,12 @@
+{
+    "colorHex": "#D5C0FF",
+    "FontName": "Arial",
+    "ImagesPath": null,
+    "DateFormat": "dd/MM/yyyy",
+    "TimeFormat": "HH:mm:ss",
+    "DelayBetweenImages":35000,
+    "DefaultMaxFPS":30,
+    "DefaultAnimationDuration":5000,
+	"DefaultVerticalImageEffect": 3
+}
+  
