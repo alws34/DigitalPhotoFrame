@@ -7,6 +7,6 @@
     "DelayBetweenImages":35000,
     "DefaultMaxFPS":30,
     "DefaultAnimationDuration":5000,
-	"DefaultVerticalImageEffect": 1
+	"DefaultVerticalImageEffect": 3
 }
   

@@ -113,6 +113,7 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
         // Create and set up the back panel
         backPanel = new JPanel();
         SpringLayout springLayout = new SpringLayout();
+        backPanel.setBackground(Color.BLACK);
         backPanel.setLayout(springLayout);
 
         Color foregroundColor = Color.decode(appSettings.colorHex);
@@ -172,6 +173,9 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
                 break;
             case 2:
                 imageProcessor = this::processVerticalImage2;
+                break;
+            case 3:
+                imageProcessor = this::processVerticalImage3;
                 break;
             default:
                 throw new IllegalArgumentException("Invalid DefaultVerticalImageEffect: " + appSettings.DefaultVerticalImageEffect);
@@ -325,27 +329,25 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
 				e.printStackTrace();
 				return;
 			}
-            
+
             while (m_isRunning) {
                 int currentImageIdx = getRandInt(photos.size() - 1);
                 int nextImageIdx = getRandInt(photos.size() - 1);
 
                 while (currentImageIdx == nextImageIdx) {
-                    // Make sure not to show the same image twice, also if there are not lot of
-                    // images,
-                    // skip this loop. this is a very rare occasion with large image libraries.
                     if (photos.size() < 10)
                         break;
                     nextImageIdx = getRandInt(photos.size() - 1);
                 }
 
                 try {
-                	//currentImage = ImageIO.read(new File(photos.get(currentImageIdx)));
-					nextImage = ImageIO.read(new File(photos.get(nextImageIdx % photos.size())));
-                    // Check if image is vertical and needs special handling
+                    nextImage = ImageIO.read(new File(photos.get(nextImageIdx % photos.size())));
 
-                    if(isImageVertical(currentImage))
+                    if (isImageVertical(currentImage)) {
                         currentImage = imageProcessor.process(currentImage);
+                    } else {
+                        currentImage = resizeImage(currentImage, screenWidth, screenHeight);
+                    }
 
                     if (isImageVertical(nextImage)) {
                         nextImage = imageProcessor.process(nextImage);
@@ -357,8 +359,8 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
 
                     setSegue(resizedSourceImage, nextImage);
                     currentSegue.start();
-                    currentImage= nextImage;
-                    
+                    currentImage = nextImage;
+
                     Thread.sleep(DEFAULT_SLEEP_DURATION);
                 } catch (IOException e) {
                     e.printStackTrace();
@@ -370,9 +372,6 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
             }
         }).start();
     }
-
-
-
     private boolean isImageVertical(BufferedImage image) {
         return image.getHeight() > image.getWidth();
     }
@@ -401,7 +400,7 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
         int targetWidth = screenWidth;
         int targetHeight = screenHeight;
 
-        // Stretch image to fit screen dimensions (optional: adjust positioning)
+        // Stretch image to fit screen dimensions (no rotation)
         BufferedImage stretchedImage = new BufferedImage(targetWidth, targetHeight, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g2d = stretchedImage.createGraphics();
         g2d.drawImage(image, 0, 0, targetWidth, targetHeight, null);
@@ -438,7 +437,7 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
             }
         }
 
-        // Overlay original image centered on frosted image (optional: adjust positioning)
+        // Overlay original image centered on frosted image
         BufferedImage finalImage = overlayImage(frostedImage, image, (targetWidth - image.getWidth()) / 2, (targetHeight - image.getHeight()) / 2);
 
         return finalImage;
@@ -516,6 +515,24 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
         return finalImage;
     }
 
+    private BufferedImage processVerticalImage3(BufferedImage image) {
+        int targetWidth = screenWidth;
+        int targetHeight = screenHeight;
+
+        // Create a blank image with the dimensions of the screen
+        BufferedImage finalImage = new BufferedImage(targetWidth, targetHeight, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g2d = finalImage.createGraphics();
+
+        // Calculate the position to center the image
+        int x = (targetWidth - image.getWidth()) / 2;
+        int y = (targetHeight - image.getHeight()) / 2;
+
+        // Draw the original image centered on the blank image
+        g2d.drawImage(image, x, y, null);
+        g2d.dispose();
+
+        return finalImage;
+    }
 
     public static BufferedImage overlayImage(BufferedImage background, BufferedImage foreground, int x, int y) {
         int targetWidth = Math.max(background.getWidth(), foreground.getWidth() + x);
