@@ -54,10 +54,7 @@ import java.util.Random;
 
 public class PhotoFrame extends JFrame implements SegueAnimationObserver {
 
-    private static final String VERSION = "1.0.0";
-
-    private final boolean m_IsDebug = false;
-
+    private static final int BLUR_RADIUS = 100;
     private static long DEFAULT_ANIMATION_DURATION;
     private static int DEFAULT_SLEEP_DURATION;
     private static int DEFAULT_MAX_FPS;
@@ -76,7 +73,8 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
     AppSettings appSettings = new AppSettings();
     private boolean m_isRunning = true;
     private javax.swing.Timer timer = null;
-    private ImageProcessor imageProcessor;
+
+    private final boolean m_IsDebug = false;
 
     public PhotoFrame() {
         super("Photo Frame");
@@ -90,7 +88,7 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
         if (m_IsDebug)
             System.out.println(System.getProperty("user.dir"));
 
-        String filePath = "./settings.json";
+        String filePath ="./settings.json";
 
         if (m_IsDebug)
             filePath = "./src/main/java/settings.json";
@@ -115,7 +113,6 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
         // Create and set up the back panel
         backPanel = new JPanel();
         SpringLayout springLayout = new SpringLayout();
-        backPanel.setBackground(Color.BLACK);
         backPanel.setLayout(springLayout);
 
         Color foregroundColor = Color.decode(appSettings.colorHex);
@@ -166,22 +163,6 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
         photos = loadPhotos();
         if (photos.isEmpty())
             return;
-
-
-        // Assign the appropriate function to the image processor based on DefaultVerticalImageEffect
-        switch (appSettings.DefaultVerticalImageEffect) {
-            case 1:
-                imageProcessor = this::processVerticalImage;
-                break;
-            case 2:
-                imageProcessor = this::processVerticalImage2;
-                break;
-            case 3:
-                imageProcessor = this::processVerticalImage3;
-                break;
-            default:
-                throw new IllegalArgumentException("Invalid DefaultVerticalImageEffect: " + appSettings.DefaultVerticalImageEffect);
-        }
 
         startPhotoLoop();
         startDateTimeUpdater();
@@ -331,28 +312,30 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
 				e.printStackTrace();
 				return;
 			}
-
+            
             while (m_isRunning) {
                 int currentImageIdx = getRandInt(photos.size() - 1);
                 int nextImageIdx = getRandInt(photos.size() - 1);
 
                 while (currentImageIdx == nextImageIdx) {
+                    // Make sure not to show the same image twice, also if there are not lot of
+                    // images,
+                    // skip this loop. this is a very rare occasion with large image libraries.
                     if (photos.size() < 10)
                         break;
                     nextImageIdx = getRandInt(photos.size() - 1);
                 }
 
                 try {
-                    nextImage = ImageIO.read(new File(photos.get(nextImageIdx % photos.size())));
+                	//currentImage = ImageIO.read(new File(photos.get(currentImageIdx)));
+					nextImage = ImageIO.read(new File(photos.get(nextImageIdx % photos.size())));
+                    // Check if image is vertical and needs special handling
 
-                    if (isImageVertical(currentImage)) {
-                        currentImage = imageProcessor.process(currentImage);
-                    } else {
-                        currentImage = resizeImage(currentImage, screenWidth, screenHeight);
-                    }
+                    if(isImageVertical(currentImage))
+                        currentImage = processVerticalImage(currentImage);
 
                     if (isImageVertical(nextImage)) {
-                        nextImage = imageProcessor.process(nextImage);
+                        nextImage = processVerticalImage(nextImage);
                     } else {
                         nextImage = resizeImage(nextImage, screenWidth, screenHeight);
                     }
@@ -361,8 +344,8 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
 
                     setSegue(resizedSourceImage, nextImage);
                     currentSegue.start();
-                    currentImage = nextImage;
-
+                    currentImage= nextImage;
+                    
                     Thread.sleep(DEFAULT_SLEEP_DURATION);
                 } catch (IOException e) {
                     e.printStackTrace();
@@ -374,35 +357,16 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
             }
         }).start();
     }
+
     private boolean isImageVertical(BufferedImage image) {
         return image.getHeight() > image.getWidth();
     }
 
-    @FunctionalInterface
-    interface ImageProcessor {
-        BufferedImage process(BufferedImage image);
-    }
-
-    /**
-     * Processes a vertical image by applying a frosted glass effect, resizing it,
-     * and combining it to create a visually appealing background for the original image.
-     * <p>
-     * The method performs the following steps:
-     * <ul>
-     *     <li>Stretches the image to fit half of the screen width while maintaining the full screen height.</li>
-     *     <li>Applies an average filter (frosted glass effect) with a large kernel size to the resized image.</li>
-     *     <li>Combines two blurred images side by side to fill the entire screen width.</li>
-     *     <li>Overlays the original image centered on the combined blurred images.</li>
-     * </ul>
-     *
-     * @param image The original vertical image to be processed.
-     * @return A new {@link BufferedImage} containing the processed image with a frosted glass effect background.
-     */
     private BufferedImage processVerticalImage(BufferedImage image) {
         int targetWidth = screenWidth;
         int targetHeight = screenHeight;
 
-        // Stretch image to fit screen dimensions (no rotation)
+        // Stretch image to fit screen dimensions (optional: adjust positioning)
         BufferedImage stretchedImage = new BufferedImage(targetWidth, targetHeight, BufferedImage.TYPE_INT_ARGB);
         Graphics2D g2d = stretchedImage.createGraphics();
         g2d.drawImage(image, 0, 0, targetWidth, targetHeight, null);
@@ -439,99 +403,8 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
             }
         }
 
-        // Overlay original image centered on frosted image
+        // Overlay original image centered on frosted image (optional: adjust positioning)
         BufferedImage finalImage = overlayImage(frostedImage, image, (targetWidth - image.getWidth()) / 2, (targetHeight - image.getHeight()) / 2);
-
-        return finalImage;
-    }
-
-    /**
-     * Processes a vertical image by applying a frosted glass effect, resizing it,
-     * and combining it to create a visually appealing background for the original image.
-     * the difference between this and @processVerticalImage is that this method will display 2 blurred
-     * images side by side and the original image on top.
-     * <p>
-     * The method performs the following steps:
-     * <ul>
-     *     <li>Stretches the image to fit half of the screen width while maintaining the full screen height.</li>
-     *     <li>Applies an average filter (frosted glass effect) with a large kernel size to the resized image.</li>
-     *     <li>Combines two blurred images side by side to fill the entire screen width.</li>
-     *     <li>Overlays the original image centered on the combined blurred images.</li>
-     * </ul>
-     *
-     * @param image The original vertical image to be processed.
-     * @return A new {@link BufferedImage} containing the processed image with a frosted glass effect background.
-     */
-    private BufferedImage processVerticalImage2(BufferedImage image) {
-        int targetWidth = screenWidth;
-        int targetHeight = screenHeight;
-
-        // Stretch image to fit half of the screen width while maintaining full screen height
-        int halfWidth = targetWidth / 2;
-        BufferedImage stretchedImage = new BufferedImage(halfWidth, targetHeight, BufferedImage.TYPE_INT_ARGB);
-        Graphics2D g2d = stretchedImage.createGraphics();
-        g2d.drawImage(image, 0, 0, halfWidth, targetHeight, null);
-        g2d.dispose();
-
-        // Apply average filter (frosted glass effect) with a larger kernel
-        int kernelSize = 50; // Larger kernel for a stronger frosted effect
-        int kernelRadius = kernelSize / 2;
-
-        BufferedImage frostedImage = new BufferedImage(halfWidth, targetHeight, BufferedImage.TYPE_INT_ARGB);
-        for (int y = 0; y < targetHeight; y++) {
-            for (int x = 0; x < halfWidth; x++) {
-                int red = 0, green = 0, blue = 0, count = 0;
-                // Sample neighboring pixels (larger kernel size)
-                for (int i = -kernelRadius; i <= kernelRadius; i++) {
-                    for (int j = -kernelRadius; j <= kernelRadius; j++) {
-                        int currentX = x + i;
-                        int currentY = y + j;
-                        if (currentX < 0 || currentX >= halfWidth || currentY < 0 || currentY >= targetHeight) {
-                            continue; // Handle pixels outside the image bounds
-                        }
-                        int color = stretchedImage.getRGB(currentX, currentY);
-                        red += (color >> 16) & 0xff;
-                        green += (color >> 8) & 0xff;
-                        blue += color & 0xff;
-                        count++;
-                    }
-                }
-                // Average the color values
-                int avgRed = red / count;
-                int avgGreen = green / count;
-                int avgBlue = blue / count;
-                frostedImage.setRGB(x, y, (0xff << 24) | (avgRed << 16) | (avgGreen << 8) | avgBlue);
-            }
-        }
-
-        // Create a new image to combine two blurred images side by side
-        BufferedImage combinedBlurredImage = new BufferedImage(targetWidth, targetHeight, BufferedImage.TYPE_INT_ARGB);
-        g2d = combinedBlurredImage.createGraphics();
-        g2d.drawImage(frostedImage, 0, 0, null);
-        g2d.drawImage(frostedImage, halfWidth, 0, null);
-        g2d.dispose();
-
-        // Overlay original image centered on combined blurred images
-        BufferedImage finalImage = overlayImage(combinedBlurredImage, image, (targetWidth - image.getWidth()) / 2, (targetHeight - image.getHeight()) / 2);
-
-        return finalImage;
-    }
-
-    private BufferedImage processVerticalImage3(BufferedImage image) {
-        int targetWidth = screenWidth;
-        int targetHeight = screenHeight;
-
-        // Create a blank image with the dimensions of the screen
-        BufferedImage finalImage = new BufferedImage(targetWidth, targetHeight, BufferedImage.TYPE_INT_ARGB);
-        Graphics2D g2d = finalImage.createGraphics();
-
-        // Calculate the position to center the image
-        int x = (targetWidth - image.getWidth()) / 2;
-        int y = (targetHeight - image.getHeight()) / 2;
-
-        // Draw the original image centered on the blank image
-        g2d.drawImage(image, x, y, null);
-        g2d.dispose();
 
         return finalImage;
     }

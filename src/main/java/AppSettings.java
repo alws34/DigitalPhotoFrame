@@ -12,7 +12,6 @@ public class AppSettings {
     public int DelayBetweenImages;
     public int DefaultMaxFPS;
     public int DefaultAnimationDuration;
-    public int DefaultVerticalImageEffect;
 
     public AppSettings() {
     }
