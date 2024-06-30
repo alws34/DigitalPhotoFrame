@@ -27,10 +27,7 @@ import com.defano.jsegue.renderers.ZoomOutEffect;
 import java.awt.*;
 import java.awt.event.*;
 import java.awt.image.BufferedImage;
-import java.io.BufferedReader;
-import java.io.File;
-import java.io.FileReader;
-import java.io.IOException;
+import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -41,15 +38,10 @@ import java.util.Date;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
-
-import java.util.*;
-import java.awt.image.*;
 import javax.imageio.ImageIO;
 import javax.swing.*;
-import java.awt.geom.AffineTransform;
-
-import javax.imageio.ImageIO;
-import javax.swing.*;
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
 import java.util.Random;
 
 public class PhotoFrame extends JFrame implements SegueAnimationObserver {
@@ -102,7 +94,7 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
             }
             appSettings = AppSettings.deserialize(jsonString);
         } catch (IOException e) {
-            e.printStackTrace();
+            logException(e);
             m_isRunning = false;
             return;
         } // Replace with your reading method
@@ -276,7 +268,7 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
     }
 
     public AnimatedSegue buildSegue(BufferedImage source, BufferedImage destination,
-            Class<? extends AnimatedSegue> effectClass) {
+                                    Class<? extends AnimatedSegue> effectClass) {
         return SegueBuilder.of(effectClass)
                 .withSource(source)
                 .withDestination(destination)
@@ -305,14 +297,14 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
             BufferedImage resizedDestinationImage = null;
             BufferedImage currentImage = null;
             BufferedImage nextImage = null;
-			
+
             try {
-            	currentImage = ImageIO.read(new File(photos.get( getRandInt(photos.size() - 1))));
-			} catch (IOException e) {
-				e.printStackTrace();
-				return;
-			}
-            
+                currentImage = ImageIO.read(new File(photos.get( getRandInt(photos.size() - 1))));
+            } catch (IOException e) {
+                logException(e);
+                return;
+            }
+
             while (m_isRunning) {
                 int currentImageIdx = getRandInt(photos.size() - 1);
                 int nextImageIdx = getRandInt(photos.size() - 1);
@@ -327,8 +319,8 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
                 }
 
                 try {
-                	//currentImage = ImageIO.read(new File(photos.get(currentImageIdx)));
-					nextImage = ImageIO.read(new File(photos.get(nextImageIdx % photos.size())));
+                    //currentImage = ImageIO.read(new File(photos.get(currentImageIdx)));
+                    nextImage = ImageIO.read(new File(photos.get(nextImageIdx % photos.size())));
                     // Check if image is vertical and needs special handling
 
                     if(isImageVertical(currentImage))
@@ -345,12 +337,13 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
                     setSegue(resizedSourceImage, nextImage);
                     currentSegue.start();
                     currentImage= nextImage;
-                    
+
                     Thread.sleep(DEFAULT_SLEEP_DURATION);
                 } catch (IOException e) {
-                    e.printStackTrace();
+                    logException(e);
                     continue;
                 } catch (InterruptedException e) {
+                    logException(e);
                     m_isRunning = false;
                     break;
                 }
@@ -409,6 +402,19 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
         return finalImage;
     }
 
+    private static void logException(Exception e) {
+        LocalTime currentTime = LocalTime.now();
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("HH:mm:ss");
+        String formattedTime = currentTime.format(formatter);
+
+        try (FileWriter fw = new FileWriter("exceptions.log", true)) {
+            fw.write( formattedTime + " **ERROR** ::" + e.toString() + "\n");
+
+        } catch (IOException ioException) {
+            ioException.printStackTrace();
+        }
+    }
+
     public static BufferedImage overlayImage(BufferedImage background, BufferedImage foreground, int x, int y) {
         int targetWidth = Math.max(background.getWidth(), foreground.getWidth() + x);
         int targetHeight = Math.max(background.getHeight(), foreground.getHeight() + y);
@@ -449,17 +455,34 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
                     .map(Path::toString)
                     .collect(Collectors.toList());
         } catch (Exception e) {
-            e.printStackTrace();
+            logException(e);
         }
         return paths;
     }
 
     private BufferedImage resizeImage(BufferedImage image, int targetWidth, int targetHeight) {
-        BufferedImage resizedImage = new BufferedImage(targetWidth, targetHeight, BufferedImage.TYPE_INT_ARGB);
-        Graphics2D g2d = resizedImage.createGraphics();
-        g2d.drawImage(image, 0, 0, targetWidth, targetHeight, null);
-        g2d.dispose();
+//        BufferedImage resizedImage = new BufferedImage(targetWidth, targetHeight, BufferedImage.TYPE_INT_ARGB);
+////        Graphics2D g2d = resizedImage.createGraphics();
+////        g2d.drawImage(image, 0, 0, targetWidth, targetHeight, null);
+////        g2d.dispose();
+////        return resizedImage;
+
+        // Calculate the ratio to maintain aspect ratio
+        double ratioX = (double) targetWidth / image.getWidth();
+        double ratioY = (double) targetHeight / image.getHeight();
+        double ratio = Math.min(ratioX, ratioY);
+
+        // Calculate the new image dimensions to fit the screen
+        int newWidth = (int) (image.getWidth() * ratio);
+        int newHeight = (int) (image.getHeight() * ratio);
+
+        // Create a new resized image
+        BufferedImage resizedImage = new BufferedImage(newWidth, newHeight, image.getType());
+        resizedImage.getGraphics().drawImage(image.getScaledInstance(newWidth, newHeight, java.awt.Image.SCALE_SMOOTH), 0, 0, null);
+
         return resizedImage;
+
+
     }
 
     @Override
@@ -488,6 +511,7 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
                 content.append(line).append("\n");
             }
         } catch (Exception e) {
+            logException(e);
             return null;
         }
         return content.toString().trim();
