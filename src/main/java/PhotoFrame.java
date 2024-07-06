@@ -28,23 +28,25 @@ import java.awt.*;
 import java.awt.event.*;
 import java.awt.image.BufferedImage;
 import java.io.*;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.ArrayList;
-import java.util.List;
+import java.util.*;
 import java.text.SimpleDateFormat;
-import java.util.Date;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import javax.imageio.ImageIO;
 import javax.swing.*;
+import javax.swing.Timer;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
-import java.util.Random;
 
 public class PhotoFrame extends JFrame implements SegueAnimationObserver {
+
+    private final boolean m_IsDebug = false;
 
     private static final int BLUR_RADIUS = 100;
     private static long DEFAULT_ANIMATION_DURATION;
@@ -66,7 +68,7 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
     private boolean m_isRunning = true;
     private javax.swing.Timer timer = null;
 
-    private final boolean m_IsDebug = false;
+    private static final Set<String> SUPPORTED_EXTENSIONS = Set.of(".jpg", ".png", ".jpeg", ".heic", ".heif");
 
     public PhotoFrame() {
         super("Photo Frame");
@@ -75,37 +77,75 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
         if (!m_IsDebug)
             this.setUndecorated(true); // Remove window decorations
 
-        String jsonString;
+        // Transparent 16 x 16 pixel cursor image.
+        BufferedImage cursorImg = new BufferedImage(16, 16, BufferedImage.TYPE_INT_ARGB);
+
+        // Create a new blank cursor.
+        Cursor blankCursor = Toolkit.getDefaultToolkit().createCustomCursor(
+                cursorImg, new Point(0, 0), "blank cursor");
+
+        // Set the blank cursor to the JFrame.
+        this.getContentPane().setCursor(blankCursor);
+
+        addWindowListener(new WindowAdapter() {
+            @Override
+            public void windowOpened(WindowEvent e) {
+                frameShow();
+                setUndecorated(true); // Remove window decorations
+                // setAlwaysOnTop(true); // Keep the window on top of other applications
+                backPanel.setSize(getWidth(), getHeight());
+                getRootPane().setWindowDecorationStyle(JRootPane.NONE); // Remove window borders
+                pack();
+            }
+        });
+
+
+        startDateTimeUpdater();
+        String settingsStr;
 
         if (m_IsDebug)
             System.out.println(System.getProperty("user.dir"));
 
-        String filePath ="./settings.json";
-
-        if (m_IsDebug)
-            filePath = "./src/main/java/settings.json";
+        String filePath = m_IsDebug ? "./src/main/java/settings.json" : "./settings.json";
 
         try {
-            jsonString = readFile(filePath);
+            settingsStr = readFile(filePath);
 
-            if (jsonString == null) {
-                System.out.println("Cant read json string from file");
+            if (settingsStr == null) {
+                logException(new Exception("Cant read json string from file"));
+                m_isRunning = false;
                 return;
             }
-            appSettings = AppSettings.deserialize(jsonString);
+            appSettings = AppSettings.deserialize(settingsStr);
         } catch (IOException e) {
             logException(e);
             m_isRunning = false;
             return;
-        } // Replace with your reading method
+        }
 
         DEFAULT_ANIMATION_DURATION = appSettings.DefaultAnimationDuration;
         DEFAULT_SLEEP_DURATION = appSettings.DelayBetweenImages;
         DEFAULT_MAX_FPS = appSettings.DefaultMaxFPS;
-        // Create and set up the back panel
+        try {
+            photos = loadPhotos();
+            if (photos.isEmpty()) {
+                logException(new Exception("Photos list is empty"));
+                m_isRunning = false;
+                return;
+            }
+        }catch (IOException ioe)
+        {
+            logException(ioe);
+        }
+        startPhotoLoop();
+    }
+
+    private void frameShow()
+    {
         backPanel = new JPanel();
         SpringLayout springLayout = new SpringLayout();
         backPanel.setLayout(springLayout);
+        backPanel.setBackground(Color.BLACK);
 
         Color foregroundColor = Color.decode(appSettings.colorHex);
         String fontName = appSettings.FontName;
@@ -114,7 +154,7 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
 
         // Create and set up the time label
         timeLabel = new JLabel();
-        timeLabel.setFont(new Font(fontName, Font.BOLD, 120));
+        timeLabel.setFont(new Font(fontName, Font.BOLD, 100));
         timeLabel.setForeground(foregroundColor);
 
         // Position the time label in the bottom-left corner
@@ -124,7 +164,7 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
 
         // Create and set up the date label
         dateLabel = new JLabel();
-        dateLabel.setFont(new Font(fontName, Font.BOLD, 60));
+        dateLabel.setFont(new Font(fontName, Font.BOLD, 50));
         dateLabel.setForeground(foregroundColor);
 
         // Position the date label in the bottom-left corner
@@ -140,24 +180,7 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
 
         add(backPanel, BorderLayout.CENTER); // Add back panel to frame
 
-        // Add window listener to handle fullscreen mode
-        addWindowListener(new WindowAdapter() {
-            @Override
-            public void windowOpened(WindowEvent e) {
-                setUndecorated(true); // Remove window decorations
-                // setAlwaysOnTop(true); // Keep the window on top of other applications
-                backPanel.setSize(getWidth(), getHeight());
-                getRootPane().setWindowDecorationStyle(JRootPane.NONE); // Remove window borders
-                pack();
-            }
-        });
 
-        photos = loadPhotos();
-        if (photos.isEmpty())
-            return;
-
-        startPhotoLoop();
-        startDateTimeUpdater();
     }
 
     private void startDateTimeUpdater() {
@@ -293,10 +316,9 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
 
     private void startPhotoLoop() {
         new Thread(() -> {
-            BufferedImage resizedSourceImage = null;
-            BufferedImage resizedDestinationImage = null;
             BufferedImage currentImage = null;
             BufferedImage nextImage = null;
+            int size = photos.size();
 
             try {
                 currentImage = ImageIO.read(new File(photos.get( getRandInt(photos.size() - 1))));
@@ -306,45 +328,42 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
             }
 
             while (m_isRunning) {
-                int currentImageIdx = getRandInt(photos.size() - 1);
-                int nextImageIdx = getRandInt(photos.size() - 1);
+
+                int currentImageIdx = getRandInt(size - 1) % size;
+                int nextImageIdx = getRandInt(size - 1) % size;
 
                 while (currentImageIdx == nextImageIdx) {
-                    // Make sure not to show the same image twice, also if there are not lot of
-                    // images,
-                    // skip this loop. this is a very rare occasion with large image libraries.
-                    if (photos.size() < 10)
+                    if(size <= 10)
                         break;
-                    nextImageIdx = getRandInt(photos.size() - 1);
+                    nextImageIdx =getRandInt(size - 1) % size;
                 }
 
                 try {
-                    //currentImage = ImageIO.read(new File(photos.get(currentImageIdx)));
                     nextImage = ImageIO.read(new File(photos.get(nextImageIdx % photos.size())));
-                    // Check if image is vertical and needs special handling
 
-                    if(isImageVertical(currentImage))
-                        currentImage = processVerticalImage(currentImage);
+                    currentImage = resizeImage(currentImage);
+                    nextImage = resizeImage(nextImage);
 
-                    if (isImageVertical(nextImage)) {
-                        nextImage = processVerticalImage(nextImage);
-                    } else {
-                        nextImage = resizeImage(nextImage, screenWidth, screenHeight);
+                    setSegue(currentImage, nextImage);
+                    currentSegue.start();
+
+                    if (currentImage != null) {
+                        currentImage.flush();
                     }
 
-                    resizedSourceImage = resizeImage(currentImage, screenWidth, screenHeight);
-
-                    setSegue(resizedSourceImage, nextImage);
-                    currentSegue.start();
-                    currentImage= nextImage;
+                    currentImage = nextImage;
 
                     Thread.sleep(DEFAULT_SLEEP_DURATION);
+
+                    if (!m_isRunning) {
+                        m_isRunning = true;
+                    }
                 } catch (IOException e) {
                     logException(e);
-                    continue;
                 } catch (InterruptedException e) {
                     logException(e);
                     m_isRunning = false;
+                    Thread.currentThread().interrupt();
                     break;
                 }
             }
@@ -353,6 +372,48 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
 
     private boolean isImageVertical(BufferedImage image) {
         return image.getHeight() > image.getWidth();
+    }
+
+    public BufferedImage resizeImage(BufferedImage image) {
+        int imageWidth = image.getWidth();
+        int imageHeight = image.getHeight();
+
+        int targetWidth;
+        int targetHeight;
+
+        if (isImageVertical(image)) {
+            // Resize vertical image to fit inside screen while keeping it vertical
+            targetHeight = screenHeight;
+            targetWidth = (int) ((double) targetHeight / imageHeight * imageWidth);
+            if (targetWidth > screenWidth) {
+                targetWidth = screenWidth;
+                targetHeight = (int) ((double) targetWidth / imageWidth * imageHeight);
+            }
+        } else {
+            // Resize non-vertical image to fit the entire screen while maintaining aspect ratio
+            double screenAspectRatio = (double) screenWidth / screenHeight;
+            double imageAspectRatio = (double) imageWidth / imageHeight;
+
+            if (imageAspectRatio > screenAspectRatio) {
+                // Image is wider than the screen aspect ratio
+                targetWidth = screenWidth;
+                targetHeight = (int) (screenWidth / imageAspectRatio);
+            } else {
+                // Image is taller than the screen aspect ratio
+                targetHeight = screenHeight;
+                targetWidth = (int) (screenHeight * imageAspectRatio);
+            }
+        }
+
+        BufferedImage resizedImage = new BufferedImage(screenWidth, screenHeight, BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g2d = resizedImage.createGraphics();
+        int x = (screenWidth - targetWidth) / 2;
+        int y = (screenHeight - targetHeight) / 2;
+        g2d.drawImage(image, x, y, targetWidth, targetHeight, null);
+        g2d.dispose();
+
+        image.flush();
+        return resizedImage;
     }
 
     private BufferedImage processVerticalImage(BufferedImage image) {
@@ -426,68 +487,70 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
         return finalImage;
     }
 
-    private List<String> loadPhotos() {
+    public List<String> loadPhotos() throws IOException {
         List<String> paths = new ArrayList<>();
         try {
-            String path = appSettings.ImagesPath;
-            if (path == null) {
-                path = "./resources";
-
-                if (m_IsDebug)
-                    path = "./src/main/resources";
-            }
+            String path = Optional.ofNullable(appSettings.ImagesPath)
+                    .orElse(m_IsDebug ? "./src/main/resources" : "./resources");
 
             Path directoryPath = Paths.get(path);
+
             if (!Files.exists(directoryPath)) {
                 Files.createDirectories(directoryPath);
-                throw new Exception(
-                        "Created new Directory \"resources\". please add some photos and restart the app.");
+                Exception e = new Exception("Created new directory \"resources\". Please add photos and restart the app.");
+                logException(e);
+                return null;
             }
 
-            // Use Stream API and Path API
             paths = Files.list(directoryPath)
-                    .filter(file -> file.toFile().isFile() &&
-                            (file.toString().toLowerCase().endsWith(".jpg") ||
-                                    file.toString().toLowerCase().endsWith(".png") ||
-                                    file.toString().toLowerCase().endsWith(".jpeg") ||
-                                    file.toString().toLowerCase().endsWith(".heic") ||
-                                    file.toString().toLowerCase().endsWith(".heif")))
-                    .map(Path::toString)
-                    .collect(Collectors.toList());
+            .filter(this::isSupportedImageFile)
+            .map(Path::toString)
+            .collect(Collectors.toList());
         } catch (Exception e) {
             logException(e);
+            return null;
         }
         return paths;
     }
 
-    private BufferedImage resizeImage(BufferedImage image, int targetWidth, int targetHeight) {
-//        BufferedImage resizedImage = new BufferedImage(targetWidth, targetHeight, BufferedImage.TYPE_INT_ARGB);
-////        Graphics2D g2d = resizedImage.createGraphics();
-////        g2d.drawImage(image, 0, 0, targetWidth, targetHeight, null);
-////        g2d.dispose();
-////        return resizedImage;
-
-        // Calculate the ratio to maintain aspect ratio
-        double ratioX = (double) targetWidth / image.getWidth();
-        double ratioY = (double) targetHeight / image.getHeight();
-        double ratio = Math.min(ratioX, ratioY);
-
-        // Calculate the new image dimensions to fit the screen
-        int newWidth = (int) (image.getWidth() * ratio);
-        int newHeight = (int) (image.getHeight() * ratio);
-
-        // Create a new resized image
-        BufferedImage resizedImage = new BufferedImage(newWidth, newHeight, image.getType());
-        resizedImage.getGraphics().drawImage(image.getScaledInstance(newWidth, newHeight, java.awt.Image.SCALE_SMOOTH), 0, 0, null);
-
-        return resizedImage;
-
-
+    private boolean isSupportedImageFile(Path file) {
+        String fileName = file.getFileName().toString().toLowerCase();
+        return Files.isRegularFile(file) && SUPPORTED_EXTENSIONS.stream().anyMatch(fileName::endsWith);
     }
+
+//    private BufferedImage resizeImage(BufferedImage image, int targetWidth, int targetHeight) {
+//        BufferedImage resizedImage = new BufferedImage(targetWidth, targetHeight, BufferedImage.TYPE_INT_ARGB);
+//        Graphics2D g2d = resizedImage.createGraphics();
+//        g2d.drawImage(image, 0, 0, targetWidth, targetHeight, null);
+//        g2d.dispose();
+//        return resizedImage;
+//
+////        // Calculate the ratio to maintain aspect ratio
+////        double ratioX = (double) targetWidth / image.getWidth();
+////        double ratioY = (double) targetHeight / image.getHeight();
+////        double ratio = Math.min(ratioX, ratioY);
+////
+////        // Calculate the new image dimensions to fit the screen
+////        int newWidth = (int) (image.getWidth() * ratio);
+////        int newHeight = (int) (image.getHeight() * ratio);
+////
+////        // Create a new resized image
+////        BufferedImage resizedImage = new BufferedImage(newWidth, newHeight, image.getType());
+////        resizedImage.getGraphics().drawImage(image.getScaledInstance(newWidth, newHeight, java.awt.Image.SCALE_SMOOTH), 0, 0, null);
+////
+////        return resizedImage;
+//
+//
+//    }
 
     @Override
     public void onFrameRendered(AnimatedSegue segue, BufferedImage image) {
-        photoLabel.setIcon(new ImageIcon(image));
+       try{
+           photoLabel.setIcon(new ImageIcon(image));
+       }
+       catch (Exception e){
+           logException(e);
+       }
     }
 
     private void updateDateTimeLabel() {
@@ -498,27 +561,34 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
     }
 
     public static int getRandInt(int max) {
-        Random random = new Random();
-        return random.nextInt(max) + 1;
+        return (int) (Math.random() * max);
     }
 
     public static String readFile(String filePath) throws IOException {
 
-        StringBuilder content = new StringBuilder();
-        try (BufferedReader reader = new BufferedReader(new FileReader(filePath))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                content.append(line).append("\n");
+       try{
+           if (filePath == null) {
+               Exception e = new IllegalArgumentException("File path cannot be null");
+               logException(e);
+                throw e;
             }
+
+            return Files.readString(Paths.get(filePath), StandardCharsets.UTF_8).trim();
         } catch (Exception e) {
             logException(e);
             return null;
         }
-        return content.toString().trim();
     }
 
     public static void main(String[] args) {
-        PhotoFrame frame = new PhotoFrame();
-        frame.setVisible(true);
+       try{
+           PhotoFrame frame = new PhotoFrame();
+
+           frame.setVisible(true);
+       }
+       catch  (Exception e)
+       {
+            logException(e);
+       }
     }
 }

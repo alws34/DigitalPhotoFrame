@@ -1,0 +1,2 @@
+23:38:25 **ERROR** ::java.nio.file.NoSuchFileException: .\settings.json
+23:38:25 **ERROR** ::java.lang.Exception: Cant read json string from file
