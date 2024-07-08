@@ -67,8 +67,11 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
     AppSettings appSettings = new AppSettings();
     private boolean m_isRunning = true;
     private javax.swing.Timer timer = null;
-
+    private javax.swing.Timer photosTimer = null;
     private static final Set<String> SUPPORTED_EXTENSIONS = Set.of(".jpg", ".png", ".jpeg", ".heic", ".heif");
+
+    BufferedImage currentImage = null;
+    BufferedImage nextImage = null;
 
     public PhotoFrame() {
         super("Photo Frame");
@@ -87,6 +90,7 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
         // Set the blank cursor to the JFrame.
         this.getContentPane().setCursor(blankCursor);
 
+
         addWindowListener(new WindowAdapter() {
             @Override
             public void windowOpened(WindowEvent e) {
@@ -100,7 +104,6 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
         });
 
 
-        startDateTimeUpdater();
         String settingsStr;
 
         if (m_IsDebug)
@@ -138,6 +141,7 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
             logException(ioe);
         }
         startPhotoLoop();
+        startTimers();
     }
 
     private void frameShow()
@@ -179,13 +183,13 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
         backPanel.add(photoLabel);
 
         add(backPanel, BorderLayout.CENTER); // Add back panel to frame
-
-
     }
 
-    private void startDateTimeUpdater() {
+    private void startTimers() {
         timer = new javax.swing.Timer(1000, e -> updateDateTimeLabel());
         timer.start();
+        photosTimer = new javax.swing.Timer(DEFAULT_SLEEP_DURATION, e -> startPhotoLoop());
+        photosTimer.start();
     }
 
     // region Animations
@@ -314,58 +318,76 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
         setSize(screenSize.width, screenSize.height);
     }
 
+
+    private void ChangePhoto(){
+        int size = photos.size() - 1;
+
+        int currentImageIdx = getRandInt(size);
+        int nextImageIdx = getRandInt(size);
+
+        while (currentImageIdx == nextImageIdx) {
+            if(size <= 10)
+                break;
+            nextImageIdx =getRandInt(size);
+        }
+
+        try {
+            currentImage = ImageIO.read(new File(photos.get(currentImageIdx)));
+            nextImage = ImageIO.read(new File(photos.get(nextImageIdx)));
+
+            currentImage = resizeImage(currentImage);
+            nextImage = resizeImage(nextImage);
+
+            setSegue(currentImage, nextImage);
+            currentSegue.start();
+            Thread.sleep(7000);
+            currentImage = nextImage;
+        } catch (IOException e) {
+            logException(e);
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+    }
+    boolean isFirst = true;
     private void startPhotoLoop() {
         new Thread(() -> {
-            BufferedImage currentImage = null;
-            BufferedImage nextImage = null;
-            int size = photos.size();
+            int size = photos.size() - 1;
+            int currentImageIdx = getRandInt(size);
+            int nextImageIdx = getRandInt(size);
 
-            try {
-                currentImage = ImageIO.read(new File(photos.get( getRandInt(photos.size() - 1))));
-            } catch (IOException e) {
-                logException(e);
-                return;
+
+
+
+            while (currentImageIdx == nextImageIdx) {
+                if(size <= 10)
+                    break;
+                nextImageIdx =getRandInt(size);
             }
 
-            while (m_isRunning) {
-
-                int currentImageIdx = getRandInt(size - 1) % size;
-                int nextImageIdx = getRandInt(size - 1) % size;
-
-                while (currentImageIdx == nextImageIdx) {
-                    if(size <= 10)
-                        break;
-                    nextImageIdx =getRandInt(size - 1) % size;
-                }
-
-                try {
-                    nextImage = ImageIO.read(new File(photos.get(nextImageIdx % photos.size())));
-
+            try {
+                if(isFirst) {
+                    currentImage = ImageIO.read(new File(photos.get(currentImageIdx)));
                     currentImage = resizeImage(currentImage);
-                    nextImage = resizeImage(nextImage);
-
-                    setSegue(currentImage, nextImage);
-                    currentSegue.start();
-
-                    if (currentImage != null) {
-                        currentImage.flush();
-                    }
-
-                    currentImage = nextImage;
-
-                    Thread.sleep(DEFAULT_SLEEP_DURATION);
-
-                    if (!m_isRunning) {
-                        m_isRunning = true;
-                    }
-                } catch (IOException e) {
-                    logException(e);
-                } catch (InterruptedException e) {
-                    logException(e);
-                    m_isRunning = false;
-                    Thread.currentThread().interrupt();
-                    break;
+                    isFirst = false;
                 }
+                nextImage = ImageIO.read(new File(photos.get(nextImageIdx)));
+
+                nextImage = resizeImage(nextImage);
+
+                setSegue(currentImage, nextImage);
+                currentSegue.start();
+
+                if (currentImage != null) {
+                    currentImage.flush();
+                }
+                Thread.sleep(DEFAULT_SLEEP_DURATION / 3);
+
+                currentImage = nextImage;
+
+            } catch (IOException e) {
+                logException(e);
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
             }
         }).start();
     }
@@ -503,9 +525,9 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
             }
 
             paths = Files.list(directoryPath)
-            .filter(this::isSupportedImageFile)
-            .map(Path::toString)
-            .collect(Collectors.toList());
+                    .filter(this::isSupportedImageFile)
+                    .map(Path::toString)
+                    .collect(Collectors.toList());
         } catch (Exception e) {
             logException(e);
             return null;
@@ -518,58 +540,45 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
         return Files.isRegularFile(file) && SUPPORTED_EXTENSIONS.stream().anyMatch(fileName::endsWith);
     }
 
-//    private BufferedImage resizeImage(BufferedImage image, int targetWidth, int targetHeight) {
-//        BufferedImage resizedImage = new BufferedImage(targetWidth, targetHeight, BufferedImage.TYPE_INT_ARGB);
-//        Graphics2D g2d = resizedImage.createGraphics();
-//        g2d.drawImage(image, 0, 0, targetWidth, targetHeight, null);
-//        g2d.dispose();
-//        return resizedImage;
-//
-////        // Calculate the ratio to maintain aspect ratio
-////        double ratioX = (double) targetWidth / image.getWidth();
-////        double ratioY = (double) targetHeight / image.getHeight();
-////        double ratio = Math.min(ratioX, ratioY);
-////
-////        // Calculate the new image dimensions to fit the screen
-////        int newWidth = (int) (image.getWidth() * ratio);
-////        int newHeight = (int) (image.getHeight() * ratio);
-////
-////        // Create a new resized image
-////        BufferedImage resizedImage = new BufferedImage(newWidth, newHeight, image.getType());
-////        resizedImage.getGraphics().drawImage(image.getScaledInstance(newWidth, newHeight, java.awt.Image.SCALE_SMOOTH), 0, 0, null);
-////
-////        return resizedImage;
-//
-//
-//    }
-
     @Override
     public void onFrameRendered(AnimatedSegue segue, BufferedImage image) {
-       try{
-           photoLabel.setIcon(new ImageIcon(image));
-       }
-       catch (Exception e){
-           logException(e);
-       }
+        try{
+            photoLabel.setIcon(new ImageIcon(image));
+        }
+        catch (Exception e){
+            logException(e);
+        }
     }
 
     private void updateDateTimeLabel() {
+        //setScreenSize();
+
+        // Create and set up the time label
+        //timeLabel = new JLabel();
+        timeLabel.setFont(new Font(appSettings.FontName, Font.BOLD, 100));
+        timeLabel.setForeground(Color.decode(appSettings.colorHex));
+
+        dateLabel.setFont(new Font(appSettings.FontName, Font.BOLD, 50));
+        dateLabel.setForeground(Color.decode(appSettings.colorHex));
+
         String date = new SimpleDateFormat(appSettings.DateFormat).format(new Date());
         String time = new SimpleDateFormat(appSettings.TimeFormat).format(new Date());
+
         timeLabel.setText(time);
         dateLabel.setText(date);
     }
 
     public static int getRandInt(int max) {
-        return (int) (Math.random() * max);
+        Random rand = new Random();
+        return rand.nextInt(max);
     }
 
     public static String readFile(String filePath) throws IOException {
 
-       try{
-           if (filePath == null) {
-               Exception e = new IllegalArgumentException("File path cannot be null");
-               logException(e);
+        try{
+            if (filePath == null) {
+                Exception e = new IllegalArgumentException("File path cannot be null");
+                logException(e);
                 throw e;
             }
 
@@ -581,14 +590,14 @@ public class PhotoFrame extends JFrame implements SegueAnimationObserver {
     }
 
     public static void main(String[] args) {
-       try{
-           PhotoFrame frame = new PhotoFrame();
+        try{
+            PhotoFrame frame = new PhotoFrame();
 
-           frame.setVisible(true);
-       }
-       catch  (Exception e)
-       {
+            frame.setVisible(true);
+        }
+        catch  (Exception e)
+        {
             logException(e);
-       }
+        }
     }
 }
