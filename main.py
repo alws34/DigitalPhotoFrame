@@ -1,3 +1,4 @@
+import json
 import threading
 import time
 import tkinter as tk
@@ -8,7 +9,7 @@ import os
 from enum import Enum
 import numpy as np
 
-# Importing Effects
+#region Importing Effects
 from Effects.CheckerboardEffect import CheckerboardEffect
 from Effects.AlphaDissolveEffect import AlphaDissolveEffect
 from Effects.PixelDissolveEffect import PixelDissolveEffect
@@ -24,13 +25,17 @@ from Effects.BarnDoorCloseEffect import BarnDoorCloseEffect
 from Effects.ShrinkEffect import ShrinkEffect
 from Effects.StretchEffect import StretchEffect
 from Effects.PlainEffect import PlainEffect
+#endregion Importing Effects
 
 class AnimationStatus(Enum):
     ANIMATION_FINISHED = 1
     ANIMATION_ERROR = 2
 
 class PhotoFrame:
-    def __init__(self, wait_time=30):
+    def __init__(self):
+        with open("settings.json", 'r') as file:
+            self.settings = json.load(file)
+        
         self.effects = {}
         self.images = self.get_images_from_directory()
         self.shuffled_images = list(self.images)
@@ -43,8 +48,9 @@ class PhotoFrame:
         self.current_image = None
         self.screen_width = None
         self.screen_height = None
-        self.wait_time = wait_time  # Wait time between transitions in seconds
-
+        self.wait_time = self.settings["delay_between_images"]  # Wait time between transitions in seconds
+        
+        
         self.effects = {
             0: AlphaDissolveEffect,
             1: PixelDissolveEffect,
@@ -115,9 +121,10 @@ class PhotoFrame:
             print(f"Error during frame update: {e}")
             return AnimationStatus.ANIMATION_ERROR
 
+#region DateTime
     def add_time_date_to_frame(self, frame):
         """
-        Adds the current time and date to the frame using the Arial font.
+        Adds the current time and date to the frame using the settings from the JSON file.
 
         Args:
             frame: The image frame to modify.
@@ -129,14 +136,17 @@ class PhotoFrame:
         current_time = time.strftime("%H:%M:%S")
         current_date = time.strftime("%d/%m/%y")
 
-        # Desired text heights
-        desired_time_height = 80
-        desired_date_height = 50
+        # Load font settings
+        font_path = self.settings['font_name']
+        time_font_size = self.settings['time_font_size']
+        date_font_size = self.settings['date_font_size']
+        margin_left = self.settings['margin_left']
+        margin_bottom = self.settings['margin_bottom']
+        spacing_between = self.settings['spacing_between']
 
-        # Load Arial font
-        arial_font_path = "arial.ttf"  # Ensure this path is correct
-        time_font = ImageFont.truetype(arial_font_path, desired_time_height)
-        date_font = ImageFont.truetype(arial_font_path, desired_date_height)
+        # Load the fonts
+        time_font = ImageFont.truetype(font_path, time_font_size)
+        date_font = ImageFont.truetype(font_path, date_font_size)
 
         # Convert frame to PIL Image
         pil_image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
@@ -149,11 +159,11 @@ class PhotoFrame:
         time_text_size = (time_bbox[2] - time_bbox[0], time_bbox[3] - time_bbox[1])
         date_text_size = (date_bbox[2] - date_bbox[0], date_bbox[3] - date_bbox[1])
 
-        # Calculate positions
-        x_date = 80  # Left margin
+        # Calculate positions based on settings
+        x_date = margin_left
         x_time = x_date + (date_text_size[0] - time_text_size[0]) // 2
-        y_date = self.screen_height - 80  # 50 pixels from bottom
-        y_time = y_date - date_text_size[1] - 60  # 50 pixels between time and date
+        y_date = self.screen_height - margin_bottom
+        y_time = y_date - date_text_size[1] - spacing_between
 
         # Set font color
         font_color = (255, 255, 255)  # White color
@@ -166,7 +176,6 @@ class PhotoFrame:
         frame = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
 
         return frame
-    
 
     def display_image_with_time(self, image, duration):
         """
@@ -187,10 +196,7 @@ class PhotoFrame:
             # Convert OpenCV image to PIL ImageTk format
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             image_pil = Image.fromarray(frame_rgb)
-            try:
-                image_tk = ImageTk.PhotoImage(image_pil)
-            except:
-                exit(1)
+            image_tk = ImageTk.PhotoImage(image_pil)
 
             # Update the label with the new image
             self.label.config(image=image_tk)
@@ -202,6 +208,7 @@ class PhotoFrame:
 
             # Sleep for a short time to update every second
             time.sleep(1)
+#endregion DateTime
 
     def get_random_image(self):
         '''Returns a different image path each time.'''
@@ -294,14 +301,15 @@ class PhotoFrame:
         # Start the Tkinter main loop
         self.root.mainloop()
 
+    
     def run(self):
         while True:
             # Start the transition with a random image pair
-            self.start_transition(None, None, duration=15)
+            self.start_transition(None, None, duration=self.settings["animation_duration"])
 
             # Display the current image with time and date during the wait time
             self.display_image_with_time(self.current_image, self.wait_time)
 
 if __name__ == "__main__":
-    frame = PhotoFrame(wait_time=30)  # Set wait time between transitions to 30 seconds
+    frame = PhotoFrame()  # Set wait time between transitions to 30 seconds
     frame.main()
