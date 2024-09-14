@@ -1,7 +1,7 @@
 import threading
 import time
 import tkinter as tk
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ImageDraw, ImageFont
 import cv2
 import random as rand
 import os
@@ -117,7 +117,7 @@ class PhotoFrame:
 
     def add_time_date_to_frame(self, frame):
         """
-        Adds the current time and date to the frame.
+        Adds the current time and date to the frame using the Arial font.
 
         Args:
             frame: The image frame to modify.
@@ -129,43 +129,44 @@ class PhotoFrame:
         current_time = time.strftime("%H:%M:%S")
         current_date = time.strftime("%d/%m/%y")
 
-        # Set font parameters
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        font_color = (255, 255, 255)  # White color
-        font_thickness = 10
-
         # Desired text heights
-        desired_time_height = 60
-        desired_date_height = 30
+        desired_time_height = 80
+        desired_date_height = 50
 
-        # Calculate font scales
-        def get_font_scale(desired_height, font, font_thickness):
-            for scale in np.arange(0.1, 10.0, 0.1):
-                text_size = cv2.getTextSize("A", font, scale, font_thickness)[0]
-                if text_size[1] >= desired_height:
-                    return scale
-            return scale  # Return the last scale if not found
+        # Load Arial font
+        arial_font_path = "arial.ttf"  # Ensure this path is correct
+        time_font = ImageFont.truetype(arial_font_path, desired_time_height)
+        date_font = ImageFont.truetype(arial_font_path, desired_date_height)
 
-        time_font_scale = get_font_scale(desired_time_height, font, font_thickness)
-        date_font_scale = get_font_scale(desired_date_height, font, font_thickness)
+        # Convert frame to PIL Image
+        pil_image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        draw = ImageDraw.Draw(pil_image)
 
-        # Get text sizes
-        (time_text_width, time_text_height), _ = cv2.getTextSize(current_time, font, time_font_scale, font_thickness)
-        (date_text_width, date_text_height), _ = cv2.getTextSize(current_date, font, date_font_scale, font_thickness)
+        # Calculate text sizes
+        time_bbox = draw.textbbox((0, 0), current_time, font=time_font)
+        date_bbox = draw.textbbox((0, 0), current_date, font=date_font)
 
-        # Calculate x positions
-        x_date = 50  # Left margin
-        x_time = x_date + (date_text_width - time_text_width) // 2
+        time_text_size = (time_bbox[2] - time_bbox[0], time_bbox[3] - time_bbox[1])
+        date_text_size = (date_bbox[2] - date_bbox[0], date_bbox[3] - date_bbox[1])
 
-        # Calculate y positions
-        y_date = self.screen_height - 50  # 10 pixels from bottom
-        y_time = y_date - date_text_height - 20  # 10 pixels between time and date
+        # Calculate positions
+        x_date = 80  # Left margin
+        x_time = x_date + (date_text_size[0] - time_text_size[0]) // 2
+        y_date = self.screen_height - 80  # 50 pixels from bottom
+        y_time = y_date - date_text_size[1] - 60  # 50 pixels between time and date
 
-        # Put the time and date onto the frame
-        cv2.putText(frame, current_time, (x_time, y_time), font, time_font_scale, font_color, font_thickness, cv2.LINE_AA)
-        cv2.putText(frame, current_date, (x_date, y_date), font, date_font_scale, font_color, font_thickness, cv2.LINE_AA)
+        # Set font color
+        font_color = (255, 255, 255)  # White color
+
+        # Draw the time and date on the image
+        draw.text((x_time, y_time), current_time, font=time_font, fill=font_color)
+        draw.text((x_date, y_date), current_date, font=date_font, fill=font_color)
+
+        # Convert back to OpenCV format
+        frame = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
 
         return frame
+    
 
     def display_image_with_time(self, image, duration):
         """
