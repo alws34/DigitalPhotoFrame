@@ -189,7 +189,7 @@ class PhotoFrame:
             try:
                 image_tk = ImageTk.PhotoImage(image_pil)
             except:
-                return
+                exit(1)
 
             # Update the label with the new image
             self.label.config(image=image_tk)
