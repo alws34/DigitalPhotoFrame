@@ -34,7 +34,7 @@ class AnimationStatus(Enum):
 class PhotoFrame:
     def __init__(self):
 
-        with open("DigitalPhotoFrame2/settings.json", 'r') as file:
+        with open("settings.json", 'r') as file:
             self.settings = json.load(file)
         
         self.effects = {}
@@ -46,31 +46,32 @@ class PhotoFrame:
         self.root = None
         self.frame = None
         self.label = None
-        self.current_image = None
         self.screen_width = None
         self.screen_height = None
         self.wait_time = self.settings["delay_between_images"]  # Wait time between transitions in seconds
         self.is_running = True
         self.isFirst = True
+        self.current_image=None
+        self.next_image = None
         self.effects = {
             0: AlphaDissolveEffect,
             1: PixelDissolveEffect,
             2: CheckerboardEffect,
             3: BlindsEffect,
-            4: ScrollEffect,
+            ############## 4: ScrollEffect,
             5: WipeEffect,
             6: ZoomOutEffect,
-            7: ZoomInEffect,
+            #7: ZoomInEffect,
             8: IrisOpenEffect,
-            9: IrisCloseEffect,
-            10: BarnDoorOpenEffect,
-            11: BarnDoorCloseEffect,
-            12: ShrinkEffect,
-            13: StretchEffect,
+            #9: IrisCloseEffect,
+            # 10: BarnDoorOpenEffect,
+            # 11: BarnDoorCloseEffect,
+            # #12: ShrinkEffect,
+            # 13: StretchEffect,
             #14: PlainEffect
         }
 
-    def get_images_from_directory(self, directory_path="DigitalPhotoFrame2/Images/"):
+    def get_images_from_directory(self, directory_path="Images/"):
         """Gets all image files (as paths) from a given directory.
 
         Args:
@@ -118,6 +119,7 @@ class PhotoFrame:
                 # Update the GUI
                 self.root.update_idletasks()
                 self.root.update()
+            return AnimationStatus.ANIMATION_FINISHED
         except Exception as e:
             print(f"Error during frame update: {e}")
             return AnimationStatus.ANIMATION_ERROR
@@ -138,7 +140,7 @@ class PhotoFrame:
         current_date = time.strftime("%d/%m/%y")
 
         # Load font settings
-        font_path = "DigitalPhotoFrame2/arial.ttf" #self.settings['font_name']
+        font_path = "arial.ttf" #self.settings['font_name']
         time_font_size = self.settings['time_font_size']
         date_font_size = self.settings['date_font_size']
         margin_left = self.settings['margin_left']
@@ -305,25 +307,20 @@ class PhotoFrame:
         # Ensure the current image is set
         if self.current_image is None:
             # First run or no current image, get a random image
-            self.current_image = cv2.imread(self.get_random_image())
-            self.current_image = self.resize_image_with_background(self.current_image, self.screen_width, self.screen_height)
-        
-        # Use the current image as image1
-        image1 = self.current_image
+            self.current_image= cv2.imread(self.get_random_image())
+            self.current_image= self.resize_image_with_background(self.current_image, self.screen_width, self.screen_height)
 
         # Select a new image for image2
         if image2_path is None:
             image2_path = self.get_random_image()
-        image2 = cv2.imread(image2_path)
-        image2 = self.resize_image_with_background(image2, self.screen_width, self.screen_height)
+        
+        self.next_image = cv2.imread(image2_path)
+        self.next_image = self.resize_image_with_background(self.next_image, self.screen_width, self.screen_height)
 
         # Create the generator using the current effect
         effect_function = self.effects[self.get_random_effect()]
-        gen = effect_function(image1, image2, duration)
-
-        # Update the current image to image2 for the next transition
-        self.current_image = image2
-
+        gen = effect_function(self.current_image , self.next_image, duration)
+        
         # Reuse the existing label, or create it if it doesn't exist
         if self.label is None:
             self.label = tk.Label(self.frame)
@@ -333,8 +330,10 @@ class PhotoFrame:
         status = self.update_frame(gen)
 
         if status == AnimationStatus.ANIMATION_FINISHED:
+            self.current_image = self.next_image
+            # Update the current image to image2 after the transition completes
             return AnimationStatus.ANIMATION_FINISHED
-
+    
     def main(self):
         self.shuffled_images = list(self.images)
         rand.shuffle(self.shuffled_images)
@@ -384,8 +383,10 @@ class PhotoFrame:
     def run(self):
         while self.is_running:
             # Start the transition with a random image pair
-            self.start_transition(None, None, duration=self.settings["animation_duration"])
-
+            self.start_transition(duration=self.settings["animation_duration"])
             # Display the current image with time and date during the wait time
-            self.display_image_with_time(self.current_image, self.wait_time)
+            self.display_image_with_time(self.current_image, 1)#self.wait_time)
 
+if __name__ == "__main__":
+    frame = PhotoFrame()
+    frame.main()
