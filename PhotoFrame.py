@@ -39,6 +39,10 @@ class PhotoFrame:
         with open("settings.json", 'r') as file:
             self.settings = json.load(file)
 
+        if not os.path.exists('Images'):
+            os.mkdir('Images')
+            return
+        
         self.effects = {}
         self.images = self.get_images_from_directory()
         self.shuffled_images = list(self.images)
@@ -56,7 +60,14 @@ class PhotoFrame:
         self.isFirst = True
         self.current_image = None
         self.next_image = None
-        self.effects = {
+
+        self.effects = self.set_effects()
+
+
+
+# region Utils
+    def set_effects(self):
+        return {
             0: AlphaDissolveEffect,
             1: PixelDissolveEffect,
             2: CheckerboardEffect,
@@ -73,7 +84,7 @@ class PhotoFrame:
             13: StretchEffect,
             # 14: PlainEffect
         }
-
+   
     def get_images_from_directory(self, directory_path="Images/"):
         """Gets all image files (as paths) from a given directory.
 
@@ -95,39 +106,29 @@ class PhotoFrame:
 
         return image_paths
 
-    def update_frame(self, generator):
-        """
-        Update the frame in the Tkinter window by fetching the next frame from the generator.
+    def get_random_image(self):
+        '''Returns a different image path each time.'''
+        if len(self.shuffled_images) == 0:
+            self.shuffled_images = list(self.images)
+            rand.shuffle(self.shuffled_images)
+        self.current_image_idx = (
+            self.current_image_idx + 1) % len(self.shuffled_images)
+        return self.shuffled_images[self.current_image_idx]
 
-        Args:
-        generator: The generator yielding transition frames.
-        """
-        if generator is None:
-            return
-        try:
-            # Iterate over frames from the generator
-            for frame in generator:
-                # Add time and date to the frame
-                frame = self.add_time_date_to_frame(frame)
+    def get_random_effect(self):
+        '''Returns a different effect each time.'''
+        if len(self.shuffled_effects) == 0:
+            self.shuffled_effects = list(self.effects.keys())
+            rand.shuffle(self.shuffled_effects)
+        self.current_effect_idx = (
+            self.current_effect_idx + 1) % len(self.shuffled_effects)
+        return self.shuffled_effects[self.current_effect_idx]
+# endregion Utils
 
-                # Convert OpenCV image to PIL ImageTk format
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                image = Image.fromarray(frame_rgb)
-                image_tk = ImageTk.PhotoImage(image)
-
-                # Update the label with the new image
-                self.label.config(image=image_tk)
-                self.label.image = image_tk
-
-                # Update the GUI
-                self.root.update_idletasks()
-                self.root.update()
-            return AnimationStatus.ANIMATION_FINISHED
-        except Exception as e:
-            print(f"Error during frame update: {e}")
-            return AnimationStatus.ANIMATION_ERROR
 
 # region DateTime
+
+
     def add_time_date_to_frame(self, frame):
         """
         Adds the current time and date to the frame using the settings from the JSON file.
@@ -220,23 +221,8 @@ class PhotoFrame:
             time.sleep(1)
 # endregion DateTime
 
-    def get_random_image(self):
-        '''Returns a different image path each time.'''
-        if len(self.shuffled_images) == 0:
-            self.shuffled_images = list(self.images)
-            rand.shuffle(self.shuffled_images)
-        self.current_image_idx = (
-            self.current_image_idx + 1) % len(self.shuffled_images)
-        return self.shuffled_images[self.current_image_idx]
 
-    def get_random_effect(self):
-        '''Returns a different effect each time.'''
-        if len(self.shuffled_effects) == 0:
-            self.shuffled_effects = list(self.effects.keys())
-            rand.shuffle(self.shuffled_effects)
-        self.current_effect_idx = (
-            self.current_effect_idx + 1) % len(self.shuffled_effects)
-        return self.shuffled_effects[self.current_effect_idx]
+# region ImageHandling
 
     def resize_image(self, image, target_width, target_height):
         # Get the original dimensions of the image
@@ -310,6 +296,50 @@ class PhotoFrame:
                    x_offset:x_offset + new_width] = resized_image
 
         return background
+# endregion ImageHandling
+
+
+# region Events
+
+    def on_closing(self):
+        """Handler for window close event."""
+        print("Closing application...")
+        self.is_running = False
+        self.root.destroy()  # Destroy the root window to close the application
+# endregion Events
+
+# region Main
+    def update_frame(self, generator):
+        """
+        Update the frame in the Tkinter window by fetching the next frame from the generator.
+
+        Args:
+        generator: The generator yielding transition frames.
+        """
+        if generator is None:
+            return
+        try:
+            # Iterate over frames from the generator
+            for frame in generator:
+                # Add time and date to the frame
+                frame = self.add_time_date_to_frame(frame)
+
+                # Convert OpenCV image to PIL ImageTk format
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                image = Image.fromarray(frame_rgb)
+                image_tk = ImageTk.PhotoImage(image)
+
+                # Update the label with the new image
+                self.label.config(image=image_tk)
+                self.label.image = image_tk
+
+                # Update the GUI
+                self.root.update_idletasks()
+                self.root.update()
+            return AnimationStatus.ANIMATION_FINISHED
+        except Exception as e:
+            print(f"Error during frame update: {e}")
+            return AnimationStatus.ANIMATION_ERROR
 
     def start_transition(self, image1_path=None, image2_path=None, duration=5):
         """
@@ -346,6 +376,14 @@ class PhotoFrame:
             self.current_image = self.next_image
             # Update the current image to image2 after the transition completes
             return AnimationStatus.ANIMATION_FINISHED
+
+    def run(self):
+        while self.is_running:
+            # Start the transition with a random image pair
+            self.start_transition(duration=self.settings["animation_duration"])
+            # Display the current image with time and date during the wait time
+            self.display_image_with_time(
+                self.current_image, self.wait_time)
 
     def main(self):
         self.shuffled_images = list(self.images)
@@ -388,19 +426,7 @@ class PhotoFrame:
             print("Keyboard interrupt received. Exiting application...")
             self.on_closing()
 
-    def on_closing(self):
-        """Handler for window close event."""
-        print("Closing application...")
-        self.is_running = False
-        self.root.destroy()  # Destroy the root window to close the application
-
-    def run(self):
-        while self.is_running:
-            # Start the transition with a random image pair
-            self.start_transition(duration=self.settings["animation_duration"])
-            # Display the current image with time and date during the wait time
-            self.display_image_with_time(
-                self.current_image, self.wait_time)
+# endregion Main
 
 
 if __name__ == "__main__":
