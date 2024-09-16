@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 import time
 
-def CheckerboardEffect(img1, img2, duration=5.0, grid_size=8):
+def CheckerboardEffect(img1, img2, duration=5.0, grid_size=16):
     """
     Create a generator for the checkerboard transition effect.
 

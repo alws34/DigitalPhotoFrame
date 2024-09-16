@@ -3,7 +3,7 @@ import numpy as np
 import time
 import random
 
-def StretchEffect(img1, img2, duration=5.0):
+def StretchEffect(img2, img1, duration=5.0):
     """
     Create a generator for the stretch transition effect.
 

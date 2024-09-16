@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 import time
 
-def IrisCloseEffect(img1, img2, duration=5.0):
+def IrisCloseEffect(img2, img1, duration=5.0):
     """
     Create a generator for the iris close transition effect.
 

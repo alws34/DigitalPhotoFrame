@@ -9,7 +9,7 @@ import os
 from enum import Enum
 import numpy as np
 
-#region Importing Effects
+# region Importing Effects
 from Effects.CheckerboardEffect import CheckerboardEffect
 from Effects.AlphaDissolveEffect import AlphaDissolveEffect
 from Effects.PixelDissolveEffect import PixelDissolveEffect
@@ -25,18 +25,20 @@ from Effects.BarnDoorCloseEffect import BarnDoorCloseEffect
 from Effects.ShrinkEffect import ShrinkEffect
 from Effects.StretchEffect import StretchEffect
 from Effects.PlainEffect import PlainEffect
-#endregion Importing Effects
+# endregion Importing Effects
+
 
 class AnimationStatus(Enum):
     ANIMATION_FINISHED = 1
     ANIMATION_ERROR = 2
+
 
 class PhotoFrame:
     def __init__(self):
 
         with open("settings.json", 'r') as file:
             self.settings = json.load(file)
-        
+
         self.effects = {}
         self.images = self.get_images_from_directory()
         self.shuffled_images = list(self.images)
@@ -48,27 +50,28 @@ class PhotoFrame:
         self.label = None
         self.screen_width = None
         self.screen_height = None
-        self.wait_time = self.settings["delay_between_images"]  # Wait time between transitions in seconds
+        # Wait time between transitions in seconds
+        self.wait_time = self.settings["delay_between_images"]
         self.is_running = True
         self.isFirst = True
-        self.current_image=None
+        self.current_image = None
         self.next_image = None
         self.effects = {
             0: AlphaDissolveEffect,
             1: PixelDissolveEffect,
             2: CheckerboardEffect,
             3: BlindsEffect,
-            ############## 4: ScrollEffect,
+            4: ScrollEffect,
             5: WipeEffect,
             6: ZoomOutEffect,
-            #7: ZoomInEffect,
+            7: ZoomInEffect,
             8: IrisOpenEffect,
-            #9: IrisCloseEffect,
-            # 10: BarnDoorOpenEffect,
-            # 11: BarnDoorCloseEffect,
-            # #12: ShrinkEffect,
-            # 13: StretchEffect,
-            #14: PlainEffect
+            9: IrisCloseEffect,
+            10: BarnDoorOpenEffect,
+            11: BarnDoorCloseEffect,
+            12: ShrinkEffect,
+            13: StretchEffect,
+            # 14: PlainEffect
         }
 
     def get_images_from_directory(self, directory_path="Images/"):
@@ -124,7 +127,7 @@ class PhotoFrame:
             print(f"Error during frame update: {e}")
             return AnimationStatus.ANIMATION_ERROR
 
-#region DateTime
+# region DateTime
     def add_time_date_to_frame(self, frame):
         """
         Adds the current time and date to the frame using the settings from the JSON file.
@@ -140,7 +143,7 @@ class PhotoFrame:
         current_date = time.strftime("%d/%m/%y")
 
         # Load font settings
-        font_path = "arial.ttf" #self.settings['font_name']
+        font_path = self.settings['font_name']
         time_font_size = self.settings['time_font_size']
         date_font_size = self.settings['date_font_size']
         margin_left = self.settings['margin_left']
@@ -159,8 +162,10 @@ class PhotoFrame:
         time_bbox = draw.textbbox((0, 0), current_time, font=time_font)
         date_bbox = draw.textbbox((0, 0), current_date, font=date_font)
 
-        time_text_size = (time_bbox[2] - time_bbox[0], time_bbox[3] - time_bbox[1])
-        date_text_size = (date_bbox[2] - date_bbox[0], date_bbox[3] - date_bbox[1])
+        time_text_size = (time_bbox[2] - time_bbox[0],
+                          time_bbox[3] - time_bbox[1])
+        date_text_size = (date_bbox[2] - date_bbox[0],
+                          date_bbox[3] - date_bbox[1])
 
         # Calculate positions based on settings
         x_date = margin_left
@@ -172,8 +177,10 @@ class PhotoFrame:
         font_color = (255, 255, 255)  # White color
 
         # Draw the time and date on the image
-        draw.text((x_time, y_time), current_time, font=time_font, fill=font_color)
-        draw.text((x_date, y_date), current_date, font=date_font, fill=font_color)
+        draw.text((x_time, y_time), current_time,
+                  font=time_font, fill=font_color)
+        draw.text((x_date, y_date), current_date,
+                  font=date_font, fill=font_color)
 
         # Convert back to OpenCV format
         frame = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
@@ -211,7 +218,7 @@ class PhotoFrame:
 
             # Sleep for a short time to update every second
             time.sleep(1)
-#endregion DateTime
+# endregion DateTime
 
     def get_random_image(self):
         '''Returns a different image path each time.'''
@@ -230,7 +237,7 @@ class PhotoFrame:
         self.current_effect_idx = (
             self.current_effect_idx + 1) % len(self.shuffled_effects)
         return self.shuffled_effects[self.current_effect_idx]
-    
+
     def resize_image(self, image, target_width, target_height):
         # Get the original dimensions of the image
         original_height, original_width = image.shape[:2]
@@ -248,17 +255,19 @@ class PhotoFrame:
 
         # Resize the image
         resized_image = cv2.resize(image, (new_width, new_height))
-        
+
         # Create a black background with target dimensions
-        final_image = np.zeros((target_height, target_width, 3), dtype=np.uint8)
+        final_image = np.zeros(
+            (target_height, target_width, 3), dtype=np.uint8)
 
         # Center the resized image on the background
         y_offset = (target_height - new_height) // 2
         x_offset = (target_width - new_width) // 2
-        final_image[y_offset:y_offset + new_height, x_offset:x_offset + new_width] = resized_image
+        final_image[y_offset:y_offset + new_height,
+                    x_offset:x_offset + new_width] = resized_image
 
         return final_image
-    
+
     def create_translucent_background(self, image, target_width, target_height, alpha=1.0):
         # Resize the image to fill the screen, ignoring the aspect ratio
         background = cv2.resize(image, (target_width, target_height))
@@ -291,15 +300,17 @@ class PhotoFrame:
         resized_image = cv2.resize(image, (new_width, new_height))
 
         # Create a fit-to-screen translucent background of the image
-        background = self.create_translucent_background(image, target_width, target_height)
+        background = self.create_translucent_background(
+            image, target_width, target_height)
 
         # Overlay the resized image onto the background
         y_offset = (target_height - new_height) // 2
         x_offset = (target_width - new_width) // 2
-        background[y_offset:y_offset + new_height, x_offset:x_offset + new_width] = resized_image
+        background[y_offset:y_offset + new_height,
+                   x_offset:x_offset + new_width] = resized_image
 
         return background
-    
+
     def start_transition(self, image1_path=None, image2_path=None, duration=5):
         """
         Start the image transition inside a Tkinter frame.
@@ -307,20 +318,22 @@ class PhotoFrame:
         # Ensure the current image is set
         if self.current_image is None:
             # First run or no current image, get a random image
-            self.current_image= cv2.imread(self.get_random_image())
-            self.current_image= self.resize_image_with_background(self.current_image, self.screen_width, self.screen_height)
+            self.current_image = cv2.imread(self.get_random_image())
+            self.current_image = self.resize_image_with_background(
+                self.current_image, self.screen_width, self.screen_height)
 
         # Select a new image for image2
         if image2_path is None:
             image2_path = self.get_random_image()
-        
+
         self.next_image = cv2.imread(image2_path)
-        self.next_image = self.resize_image_with_background(self.next_image, self.screen_width, self.screen_height)
+        self.next_image = self.resize_image_with_background(
+            self.next_image, self.screen_width, self.screen_height)
 
         # Create the generator using the current effect
         effect_function = self.effects[self.get_random_effect()]
-        gen = effect_function(self.current_image , self.next_image, duration)
-        
+        gen = effect_function(self.current_image, self.next_image, duration)
+
         # Reuse the existing label, or create it if it doesn't exist
         if self.label is None:
             self.label = tk.Label(self.frame)
@@ -333,7 +346,7 @@ class PhotoFrame:
             self.current_image = self.next_image
             # Update the current image to image2 after the transition completes
             return AnimationStatus.ANIMATION_FINISHED
-    
+
     def main(self):
         self.shuffled_images = list(self.images)
         rand.shuffle(self.shuffled_images)
@@ -354,7 +367,8 @@ class PhotoFrame:
         self.screen_height = self.root.winfo_screenheight()
 
         # Create a full-screen frame
-        self.frame = tk.Frame(self.root, width=self.screen_width, height=self.screen_height)
+        self.frame = tk.Frame(
+            self.root, width=self.screen_width, height=self.screen_height)
         self.frame.pack()
 
         # Bind the close event (Alt+F4)
@@ -362,7 +376,7 @@ class PhotoFrame:
 
         # Bind Ctrl+C to terminate the application
         self.root.bind_all('<Control-c>', lambda e: self.on_closing())
-        
+
         # Start the transition thread
         transition_thread = threading.Thread(target=self.run)
         transition_thread.start()
@@ -379,13 +393,15 @@ class PhotoFrame:
         print("Closing application...")
         self.is_running = False
         self.root.destroy()  # Destroy the root window to close the application
-    
+
     def run(self):
         while self.is_running:
             # Start the transition with a random image pair
             self.start_transition(duration=self.settings["animation_duration"])
             # Display the current image with time and date during the wait time
-            self.display_image_with_time(self.current_image, 1)#self.wait_time)
+            self.display_image_with_time(
+                self.current_image, self.wait_time)
+
 
 if __name__ == "__main__":
     frame = PhotoFrame()

@@ -3,7 +3,7 @@ import numpy as np
 import time
 import random
 
-def ScrollEffect(img1, img2, duration=5.0):
+def ScrollEffect(img2, img1, duration=5.0):
     """
     Create a generator for the scroll transition effect.
 

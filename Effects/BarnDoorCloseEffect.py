@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 import time
 
-def BarnDoorCloseEffect(img1, img2, duration=5.0):
+def BarnDoorCloseEffect(img2, img1, duration=5.0):
     """
     Create a generator for the barn door close transition effect.
 

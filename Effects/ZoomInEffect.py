@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 import time
 
-def ZoomInEffect(img1, img2, duration=5.0):
+def ZoomInEffect(img2, img1, duration=5.0):
     """
     Create a generator for the zoom-in transition effect.
 

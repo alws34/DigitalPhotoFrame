@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 import time
 
-def BlindsEffect(img1, img2, duration=5.0, num_strips=16):
+def BlindsEffect(img1, img2, duration=5.0, num_strips=32):
     """
     Create a generator for the blinds transition effect.
 
