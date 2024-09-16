@@ -43,7 +43,6 @@ class PhotoFrame:
             os.mkdir('Images')
             return
         
-        self.effects = {}
         self.images = self.get_images_from_directory()
         self.shuffled_images = list(self.images)
         self.shuffled_effects = list(self.effects.keys())
@@ -54,12 +53,11 @@ class PhotoFrame:
         self.label = None
         self.screen_width = None
         self.screen_height = None
-        # Wait time between transitions in seconds
-        self.wait_time = self.settings["delay_between_images"]
-        self.is_running = True
-        self.isFirst = True
         self.current_image = None
         self.next_image = None
+
+        self.wait_time = self.settings["delay_between_images"]
+        self.is_running = True
 
         self.effects = self.set_effects()
 
