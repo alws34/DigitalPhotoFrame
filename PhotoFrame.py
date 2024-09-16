@@ -8,6 +8,8 @@ import random as rand
 import os
 from enum import Enum
 import numpy as np
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler
 
 # region Importing Effects
 from Effects.CheckerboardEffect import CheckerboardEffect
@@ -32,10 +34,27 @@ class AnimationStatus(Enum):
     ANIMATION_FINISHED = 1
     ANIMATION_ERROR = 2
 
+class ImageChangeHandler(FileSystemEventHandler):
+    def __init__(self, photoframe_instance):
+        self.photoframe_instance = photoframe_instance
+
+    def on_created(self, event):
+        """Triggered when a file or directory is created."""
+        print(f"File created: {event.src_path}. Reloading images...")
+        self.photoframe_instance.reload_images()
+
+    def on_deleted(self, event):
+        """Triggered when a file or directory is deleted."""
+        print(f"File deleted: {event.src_path}. Reloading images...")
+        self.photoframe_instance.reload_images()
+
+    def on_moved(self, event):
+        """Triggered when a file or directory is renamed or moved."""
+        print(f"File moved or renamed from {event.src_path} to {event.dest_path}. Reloading images...")
+        self.photoframe_instance.reload_images()
 
 class PhotoFrame:
     def __init__(self):
-
         with open("settings.json", 'r') as file:
             self.settings = json.load(file)
 
@@ -43,6 +62,8 @@ class PhotoFrame:
             os.mkdir('Images')
             return
         
+        self.effects = self.set_effects()
+
         self.images = self.get_images_from_directory()
         self.shuffled_images = list(self.images)
         self.shuffled_effects = list(self.effects.keys())
@@ -59,9 +80,26 @@ class PhotoFrame:
         self.wait_time = self.settings["delay_between_images"]
         self.is_running = True
 
-        self.effects = self.set_effects()
 
+        # Start the directory observer
+        self.start_observer()
 
+    def start_observer(self):
+        """Starts the directory observer to watch for changes in the Images directory."""
+        event_handler = ImageChangeHandler(self)
+        self.observer = Observer()
+        self.observer.schedule(event_handler, "Images", recursive=True)
+        self.observer.start()
+
+    def stop_observer(self):
+        """Stops the directory observer."""
+        self.observer.stop()
+        self.observer.join()
+
+    def reload_images(self):
+        """Reloads images from the directory, stops the current frame, and restarts the transition."""
+        self.images = self.get_images_from_directory()
+        print("Done.")
 
 # region Utils
     def set_effects(self):
@@ -195,7 +233,7 @@ class PhotoFrame:
             duration: The duration to display the image in seconds.
         """
         start_time = time.time()
-        while time.time() - start_time < duration:
+        while time.time() - start_time < duration and self.is_running:
             # Copy the image to avoid modifying the original
             frame = image.copy()
 
@@ -303,7 +341,9 @@ class PhotoFrame:
         """Handler for window close event."""
         print("Closing application...")
         self.is_running = False
+        self.stop_observer()  # Stop the observer before closing
         self.root.destroy()  # Destroy the root window to close the application
+
 # endregion Events
 
 # region Main
@@ -368,9 +408,9 @@ class PhotoFrame:
             self.label.pack()
 
         # Start updating the frame using the generator
-        status = self.update_frame(gen)
+        self.status = self.update_frame(gen)
 
-        if status == AnimationStatus.ANIMATION_FINISHED:
+        if self.status == AnimationStatus.ANIMATION_FINISHED:
             self.current_image = self.next_image
             # Update the current image to image2 after the transition completes
             return AnimationStatus.ANIMATION_FINISHED
