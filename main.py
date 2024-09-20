@@ -68,18 +68,22 @@ def signup():
 
     return render_template_string('''
     <!doctype html>
-    <title>Signup</title>
+    <html>
+    <head><title>Signup</title></head>
+    <body style="background-color: #1e1e1e; color: #ffffff;">
     <h1>Signup</h1>
     <form method="post">
         <label for="email">Email:</label><br>
-        <input type="email" id="email" name="email" required><br><br>
+        <input type="email" id="email" name="email" required style="color:#000;"><br><br>
         <label for="username">Username:</label><br>
-        <input type="text" id="username" name="username" required><br><br>
+        <input type="text" id="username" name="username" required style="color:#000;"><br><br>
         <label for="password">Password:</label><br>
-        <input type="password" id="password" name="password" required><br><br>
-        <input type="submit" value="Signup">
+        <input type="password" id="password" name="password" required style="color:#000;"><br><br>
+        <input type="submit" value="Signup" style="background-color:#333;color:white;">
     </form>
-    <p>Already have an account? <a href="{{ url_for('login') }}">Login here</a>.</p>
+    <p>Already have an account? <a href="{{ url_for('login') }}" style="color:#00ffcc;">Login here</a>.</p>
+    </body>
+    </html>
     ''')
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -102,16 +106,20 @@ def login():
 
     return render_template_string('''
     <!doctype html>
-    <title>Login</title>
+    <html>
+    <head><title>Login</title></head>
+    <body style="background-color: #1e1e1e; color: #ffffff;">
     <h1>Login</h1>
     <form method="post">
         <label for="email_or_username">Email or Username:</label><br>
-        <input type="text" id="email_or_username" name="email_or_username" required><br><br>
+        <input type="text" id="email_or_username" name="email_or_username" required style="color:#000;"><br><br>
         <label for="password">Password:</label><br>
-        <input type="password" id="password" name="password" required><br><br>
-        <input type="submit" value="Login">
+        <input type="password" id="password" name="password" required style="color:#000;"><br><br>
+        <input type="submit" value="Login" style="background-color:#333;color:white;">
     </form>
-    <p>Don't have an account? <a href="{{ url_for('signup') }}">Sign up here</a>.</p>
+    <p>Don't have an account? <a href="{{ url_for('signup') }}" style="color:#00ffcc;">Sign up here</a>.</p>
+    </body>
+    </html>
     ''')
 
 @app.route('/logout')
@@ -129,31 +137,33 @@ def index():
     image_count = len(images)
     return render_template_string('''
     <!doctype html>
-    <title>Image Gallery</title>
+    <html>
+    <head><title>Image Gallery</title></head>
+    <body style="background-color: #2e2e2e; color: #ffffff;">
     <h1 style="display: inline-block;">Image Gallery</h1>
     <span style="float: right; font-size: 18px;">Images Count: {{ image_count }}</span>
     <span style="float: right; font-size: 18px; margin-right: 20px;">
         <a href="{{ url_for('logout') }}" style="text-decoration:none; color:black;">
-            <button type="button">Sign Out</button>
+            <button type="button" style="background-color:#333;color:white;">Sign Out</button>
         </a>
     </span>
     <form method="post" action="/upload" enctype="multipart/form-data" style="margin-bottom: 20px; clear: both;">
         <input type="file" name="file[]" multiple>
-        <input type="submit" value="Upload">
+        <input type="submit" value="Upload" style="background-color:#333;color:white;">
     </form>
     <form id="multiActionForm" method="post">
-        <button type="submit" formaction="/delete_selected" formmethod="post" style="margin-right: 10px;">Delete Selected</button>
-        <button type="submit" formaction="/download_selected" formmethod="post" style="margin-right: 10px;">Download Selected</button>
+        <button type="submit" formaction="/delete_selected" formmethod="post" style="margin-right: 10px;background-color:#333;color:white;">Delete Selected</button>
+        <button type="submit" formaction="/download_selected" formmethod="post" style="margin-right: 10px;background-color:#333;color:white;">Download Selected</button>
         <div>
         {% for image in images %}
-            <div style="display:inline-block; margin:10px; text-align:center; padding: 10px; border: 2px solid transparent;" id="div_{{ image }}">
-                <img src="{{ url_for('serve_image', filename=image) }}" alt="{{ image }}" loading="lazy" style="max-width:200px; transition: transform 0.2s; cursor:pointer;" onclick="openModal('{{ url_for('serve_image', filename=image) }}')" onmouseover="this.style.transform='scale(1.1)'" onmouseout="this.style.transform='scale(1)'" />
+            <div style="display:inline-block; margin:10px; text-align:center; padding: 10px; border: 2px solid transparent; width: 300px; height: 350px;" id="div_{{ image }}">
+                <img src="{{ url_for('serve_image', filename=image) }}" alt="{{ image }}" loading="lazy" style="width:300px; height:300px; transition: transform 0.2s; cursor:pointer;" onclick="openModal('{{ url_for('serve_image', filename=image) }}')" onmouseover="this.style.transform='scale(1.1)'" onmouseout="this.style.transform='scale(1)'" />
                 <br>
                 <input type="checkbox" name="selected_files" value="{{ image }}" onclick="toggleSelection(this, '{{ image }}')"> Select
                 <br>
-                <button type="button" onclick="confirmDelete('{{ image }}')">Delete</button>
+                <button type="button" style="background-color:#333;color:white;" onclick="confirmDelete('{{ image }}')">Delete</button>
                 <a href="{{ url_for('download_image', filename=image) }}">
-                    <button type="button">Download</button>
+                    <button type="button" style="background-color:#333;color:white;">Download</button>
                 </a>
             </div>
         {% endfor %}
@@ -197,11 +207,13 @@ def index():
             modalImg.src = imageSrc;
         }
 
-                function closeModal() {
+        function closeModal() {
             var modal = document.getElementById('imageModal');
             modal.style.display = "none";
         }
     </script>
+    </body>
+    </html>
     ''', images=images, image_count=image_count, SELECTED_COLOR=SELECTED_COLOR)
 
 @app.route('/images/<filename>')
