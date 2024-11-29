@@ -1,3 +1,4 @@
+import logging
 import json
 import threading
 import time
@@ -10,6 +11,22 @@ from enum import Enum
 import numpy as np
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
+
+# region Logging Setup
+log_file_path = os.path.join(os.path.dirname(__file__), "PhotoFrame.log")
+logging.basicConfig(
+    filename=log_file_path,
+    level=logging.INFO,  # Exclude DEBUG messages
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)  # Exclude DEBUG messages from console
+console_formatter = logging.Formatter("%(levelname)s - %(message)s")
+console_handler.setFormatter(console_formatter)
+logging.getLogger().addHandler(console_handler)
+logging.info("PhotoFrame application starting...")
+# endregion Logging Setup
 
 # region Importing Effects
 from Effects.CheckerboardEffect import CheckerboardEffect
@@ -55,15 +72,21 @@ class ImageChangeHandler(FileSystemEventHandler):
 
 class PhotoFrame:
     def __init__(self):
-        with open("settings.json", 'r') as file:
-            self.settings = json.load(file)
+        logging.debug("Initializing PhotoFrame...")
+        try:
+            with open("settings.json", 'r') as file:
+                self.settings = json.load(file)
+            logging.info("Loaded settings from settings.json.")
+        except FileNotFoundError:
+            logging.error("settings.json not found. Exiting.")
+            raise
 
         if not os.path.exists('Images'):
             os.mkdir('Images')
+            logging.warning("'Images' directory not found. Created a new one.")
             return
-        
-        self.effects = self.set_effects()
 
+        self.effects = self.set_effects()
         self.images = self.get_images_from_directory()
         self.shuffled_images = list(self.images)
         self.shuffled_effects = list(self.effects.keys())
@@ -80,28 +103,37 @@ class PhotoFrame:
         self.wait_time = self.settings["delay_between_images"]
         self.is_running = True
 
-
         # Start the directory observer
         self.start_observer()
-
+        
     def start_observer(self):
         """Starts the directory observer to watch for changes in the Images directory."""
+        logging.debug("Starting directory observer...")
         event_handler = ImageChangeHandler(self)
         self.observer = Observer()
         self.observer.schedule(event_handler, "Images", recursive=True)
         self.observer.start()
+        logging.info("Directory observer started.")
 
     def stop_observer(self):
         """Stops the directory observer."""
+        logging.debug("Stopping directory observer...")
         self.observer.stop()
         self.observer.join()
+        logging.info("Directory observer stopped.")
 
     def reload_images(self):
         """Reloads images from the directory, stops the current frame, and restarts the transition."""
+        logging.info("Reloading images from 'Images' directory...")
         self.images = self.get_images_from_directory()
-        print("Done.")
+        logging.info(f"Found {len(self.images)} images.")
 
 # region Utils
+
+    def on_touch_event(self, event):
+        """Handler for touchscreen events. Does nothing."""
+        logging.info(f"Touch event detected: {event}. Ignored.")
+        
     def set_effects(self):
         return {
             0: AlphaDissolveEffect,
@@ -339,7 +371,7 @@ class PhotoFrame:
 
     def on_closing(self):
         """Handler for window close event."""
-        print("Closing application...")
+        logging.info("Closing application...")
         self.is_running = False
         self.stop_observer()  # Stop the observer before closing
         self.root.destroy()  # Destroy the root window to close the application
@@ -424,6 +456,7 @@ class PhotoFrame:
                 self.current_image, self.wait_time)
 
     def main(self):
+        logging.info("Starting main application...")
         self.shuffled_images = list(self.images)
         rand.shuffle(self.shuffled_images)
         self.shuffled_effects = list(self.effects.keys())
@@ -431,12 +464,17 @@ class PhotoFrame:
 
         # Create the Tkinter root window and frame
         self.root = tk.Tk()
-        self.root.config(cursor="none")
-        self.root.title("Digital Phot Frame V2.0")
+        self.root.title("Digital Photo Frame V2.0")
 
         # Make the window full-screen and borderless
+        self.root.geometry(f"{self.root.winfo_screenwidth()}x{self.root.winfo_screenheight()}+0+0")
         self.root.attributes("-fullscreen", True)
+        self.root.wm_attributes("-topmost", True)  # Ensure it's always on top
         self.root.configure(bg='black')
+
+        # Hide the mouse cursor
+        self.root.config(cursor="none")
+        self.root.option_add('*Cursor', 'none')
 
         # Get screen dimensions
         self.screen_width = self.root.winfo_screenwidth()
@@ -444,8 +482,8 @@ class PhotoFrame:
 
         # Create a full-screen frame
         self.frame = tk.Frame(
-            self.root, width=self.screen_width, height=self.screen_height)
-        self.frame.pack()
+            self.root, width=self.screen_width, height=self.screen_height, bg='black')
+        self.frame.pack(fill="both", expand=True)
 
         # Bind the close event (Alt+F4)
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -454,19 +492,26 @@ class PhotoFrame:
         self.root.bind_all('<Control-c>', lambda e: self.on_closing())
 
         # Start the transition thread
+        logging.info("Starting transition thread...")
         transition_thread = threading.Thread(target=self.run)
         transition_thread.start()
 
         try:
             # Start the Tkinter main loop
+            logging.info("Entering Tkinter main loop.")
             self.root.mainloop()
         except KeyboardInterrupt:
-            print("Keyboard interrupt received. Exiting application...")
+            logging.warning("Keyboard interrupt received. Exiting application...")
             self.on_closing()
+
 
 # endregion Main
 
 
 if __name__ == "__main__":
-    frame = PhotoFrame()
-    frame.main()
+    try:
+        frame = PhotoFrame()
+        frame.main()
+    except Exception as e:
+        logging.critical(f"Unhandled exception occurred: {e}")
+        raise
