@@ -11,6 +11,8 @@ from enum import Enum
 import numpy as np
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
+from flask import Flask, Response
+
 
 # region Logging Setup
 log_file_path = os.path.join(os.path.dirname(__file__), "PhotoFrame.log")
@@ -103,6 +105,9 @@ class PhotoFrame:
         self.wait_time = self.settings["delay_between_images"]
         self.is_running = True
 
+        self.mjpeg_server_thread = None
+        self.is_running = True
+
         # Start the directory observer
         self.start_observer()
         
@@ -127,6 +132,55 @@ class PhotoFrame:
         logging.info("Reloading images from 'Images' directory...")
         self.images = self.get_images_from_directory()
         logging.info(f"Found {len(self.images)} images.")
+
+#region mjpeg stream
+    def generate_frame(self):
+        """
+        Generator to serve MJPEG frames from the live frame.
+        Streams the live frame directly without resizing.
+        """
+        while self.is_running:
+            if hasattr(self, 'live_frame') and self.live_frame is not None:
+                try:
+                    # Ensure the frame is a valid NumPy array
+                    if isinstance(self.live_frame, np.ndarray) and self.live_frame.size > 0:
+                        # Ensure the frame has the correct type and format
+                        if self.live_frame.dtype != np.uint8:
+                            self.live_frame = self.live_frame.astype(np.uint8)
+
+                        # Encode the frame as JPEG
+                        _, jpeg = cv2.imencode('.jpg', self.live_frame)
+                        frame = jpeg.tobytes()
+
+                        # Yield the MJPEG frame
+                        yield (b'--frame\r\n'
+                            b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+                    else:
+                        logging.warning("Invalid live_frame: Not a proper image array")
+                except Exception as e:
+                    logging.error(f"Error encoding frame: {e}")
+            else:
+                logging.warning("No live frame available to stream.")
+
+            time.sleep(1/10)  # Maintain ~30 FPS
+
+
+    def start_mjpeg_server(self):
+        """
+        Starts an MJPEG server using Flask.
+        """
+        app = Flask(__name__)
+
+        @app.route('/video_feed')
+        def video_feed():
+            return Response(self.generate_frame(),
+                            mimetype='multipart/x-mixed-replace; boundary=frame')
+
+        # Run the Flask app in a separate thread
+        self.mjpeg_server_thread = threading.Thread(target=lambda: app.run(
+            host='0.0.0.0', port=5001, debug=False, use_reloader=False))
+        self.mjpeg_server_thread.start()
+#endregion mjpeg stream
 
 # region Utils
 
@@ -271,7 +325,7 @@ class PhotoFrame:
 
             # Add time and date to the frame
             frame = self.add_time_date_to_frame(frame)
-
+            self.live_frame = frame 
             # Convert OpenCV image to PIL ImageTk format
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             image_pil = Image.fromarray(frame_rgb)
@@ -393,6 +447,8 @@ class PhotoFrame:
             for frame in generator:
                 # Add time and date to the frame
                 frame = self.add_time_date_to_frame(frame)
+                #for frame in gen:
+                self.live_frame = frame  # Update live frame for streaming
 
                 # Convert OpenCV image to PIL ImageTk format
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -402,7 +458,8 @@ class PhotoFrame:
                 # Update the label with the new image
                 self.label.config(image=image_tk)
                 self.label.image = image_tk
-
+                # Update the live frame during the transition
+                
                 # Update the GUI
                 self.root.update_idletasks()
                 self.root.update()
@@ -442,6 +499,10 @@ class PhotoFrame:
         # Start updating the frame using the generator
         self.status = self.update_frame(gen)
 
+        # Update the live frame during the transition
+        #for frame in gen:
+        #self.live_frame = frame  # Update live frame for streaming
+
         if self.status == AnimationStatus.ANIMATION_FINISHED:
             self.current_image = self.next_image
             # Update the current image to image2 after the transition completes
@@ -454,6 +515,8 @@ class PhotoFrame:
             # Display the current image with time and date during the wait time
             self.display_image_with_time(
                 self.current_image, self.wait_time)
+            self.live_frame = frame
+            time.sleep(1)
 
     def main(self):
         logging.info("Starting main application...")
@@ -490,6 +553,9 @@ class PhotoFrame:
 
         # Bind Ctrl+C to terminate the application
         self.root.bind_all('<Control-c>', lambda e: self.on_closing())
+
+        # Start the MJPEG server
+        self.start_mjpeg_server()
 
         # Start the transition thread
         logging.info("Starting transition thread...")
