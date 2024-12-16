@@ -4,6 +4,7 @@ import threading
 import time
 import tkinter as tk
 from PIL import Image, ImageTk, ImageDraw, ImageFont
+import requests
 import cv2
 import random as rand
 import os
@@ -107,7 +108,15 @@ class PhotoFrame:
 
         self.mjpeg_server_thread = None
         self.is_running = True
-
+        
+        # Weather data initialization
+        self.weather_data = None
+        self.weather_icon = None
+        self.update_weather_thread = None
+        logging.info("Fetching weather data at startup.")
+        self.fetch_weather_data()
+        time.sleep(10)
+        self.initialize_weather_updates()
         # Start the directory observer
         self.start_observer()
         
@@ -133,7 +142,152 @@ class PhotoFrame:
         self.images = self.get_images_from_directory()
         logging.info(f"Found {len(self.images)} images.")
 
-#region mjpeg stream
+#region Weather
+    def fetch_weather_data(self):
+        """Fetch current weather data from AccuWeather API."""
+        try:
+            logging.info("Fetching weather data...")
+
+            # Retrieve API key and location key from settings
+            api_key = self.settings.get("weather_api_key", "")
+            location_key = self.settings.get("location_key", "")
+
+            if not api_key or not location_key:
+                logging.error("AccuWeather API key or location key is missing.")
+                return
+
+            # Build the API URL
+            url = f"http://dataservice.accuweather.com/currentconditions/v1/{location_key}?apikey={api_key}"
+            logging.info(f"Making request to AccuWeather: {url}")
+
+            # Perform the API call
+            response = requests.get(url)
+            response.raise_for_status()
+            logging.info(f"Weather API response: {response.text}")
+
+            # Parse the JSON response
+            data = response.json()
+            if not data or len(data) == 0:
+                logging.error("Weather API response is empty or invalid.")
+                return
+
+            # Extract weather details
+            data = data[0]
+            self.weather_data = {
+                "temp": round(data["Temperature"]["Metric"]["Value"]),
+                "unit": data["Temperature"]["Metric"]["Unit"],
+                "description": data["WeatherText"],
+                "icon": data["WeatherIcon"]
+            }
+            logging.info(f"Parsed weather data: {self.weather_data}")
+
+            # Fetch the weather icon
+            try:
+                icon_url = f"https://developer.accuweather.com/sites/default/files/{self.weather_data['icon']:02d}-s.png"
+                logging.info(f"Fetching weather icon from: {icon_url}")
+                icon_response = requests.get(icon_url, stream=True)
+                icon_response.raise_for_status()
+                self.weather_icon = Image.open(icon_response.raw)
+                logging.info("Weather icon successfully fetched.")
+            except Exception as e:
+                logging.warning(f"Weather icon could not be fetched: {e}. Falling back to text-only rendering.")
+                self.weather_icon = None
+
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Error fetching weather data: {e}")
+        except Exception as e:
+            logging.error(f"Unexpected error: {e}", exc_info=True)
+
+    def initialize_weather_updates(self):
+        """Fetch weather data immediately and then set up periodic updates."""
+        def update_weather_periodically():
+            # Fetch weather data immediately when the app starts
+            self.fetch_weather_data()
+
+            while not self.stop_event.is_set():
+                # Wait for 1 hour or until the event is set
+                self.stop_event.wait(3600)
+                self.fetch_weather_data()
+
+        self.stop_event = threading.Event()
+        weather_thread = threading.Thread(target=update_weather_periodically, daemon=True)
+        weather_thread.start()
+    
+    def add_weather_to_frame(self, frame):
+        """
+        Adds weather information (temperature, description, icon) to the bottom-right of the frame.
+
+        Args:
+            frame: The image frame to modify.
+
+        Returns:
+            The modified frame with weather information added.
+        """
+        if not self.weather_data or not self.weather_icon:
+            logging.warning("Weather data or icon unavailable. Skipping weather rendering.")
+            return frame
+
+        try:
+            # Load font settings
+            font_path = self.settings['font_name']
+            time_font_size = self.settings['time_font_size']  # Same as time font
+            date_font_size = self.settings['date_font_size']  # Same as date font
+            margin_bottom = self.settings['margin_bottom']
+            margin_right = self.settings['margin_right']
+            spacing_between = self.settings['spacing_between']
+            font_color = (255, 255, 255)  # White color
+
+            # Load fonts
+            temperature_font = ImageFont.truetype(font_path, time_font_size)
+            description_font = ImageFont.truetype(font_path, date_font_size)
+
+            # Prepare weather texts
+            temperature_text = f"{self.weather_data['temp']}°{self.weather_data['unit']}"
+            description_text = self.weather_data['description']
+
+            # Convert frame to PIL Image
+            pil_image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            draw = ImageDraw.Draw(pil_image)
+
+            # Calculate text sizes
+            temp_bbox = draw.textbbox((0, 0), temperature_text, font=temperature_font)
+            desc_bbox = draw.textbbox((0, 0), description_text, font=description_font)
+
+            temp_text_width = temp_bbox[2] - temp_bbox[0]
+            temp_text_height = temp_bbox[3] - temp_bbox[1]
+            desc_text_width = desc_bbox[2] - desc_bbox[0]
+            desc_text_height = desc_bbox[3] - desc_bbox[1]
+
+            # Icon size and position
+            icon_size = 100
+            x_icon = self.screen_width - margin_right - icon_size
+            y_icon = self.screen_height - margin_bottom - icon_size
+
+            # Calculate positions for temperature and description
+            x_temp = x_icon - spacing_between - temp_text_width
+            y_temp = y_icon + (icon_size - temp_text_height) // 2  # Center temperature vertically with icon
+
+            x_desc = x_temp
+            y_desc = y_temp + temp_text_height + 10  # Below the temperature text
+
+            # Draw weather icon
+            weather_icon_resized = self.weather_icon.resize((icon_size, icon_size), Image.Resampling.LANCZOS)
+            pil_image.paste(weather_icon_resized, (x_icon, y_icon), weather_icon_resized)
+
+            # Draw temperature and description
+            draw.text((x_temp, y_temp), temperature_text, font=temperature_font, fill=font_color)
+            draw.text((x_desc, y_desc), description_text, font=description_font, fill=font_color)
+
+            # Convert back to OpenCV format
+            return cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+
+        except Exception as e:
+            logging.error(f"Error during weather rendering: {e}", exc_info=True)
+            return frame
+
+    #endregion Weather
+
+    #region mjpeg stream
     def generate_frame(self):
         """
         Generator to serve MJPEG frames from the live frame.
@@ -156,11 +310,16 @@ class PhotoFrame:
                         yield (b'--frame\r\n'
                             b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
                     else:
-                        logging.warning("Invalid live_frame: Not a proper image array")
+                        continue
+                        #logging.warning("Invalid live_frame: Not a proper image array")
                 except Exception as e:
                     logging.error(f"Error encoding frame: {e}")
             else:
-                logging.warning("No live frame available to stream.")
+                # Log a warning only once every few seconds
+                if not hasattr(self, 'last_log_time') or time.time() - self.last_log_time > 5:
+                    logging.warning("No live frame available to stream.")
+                    self.last_log_time = time.time()
+                time.sleep(0.1)  # Maintain loop frequency
 
             time.sleep(1/10)  # Maintain ~30 FPS
 
@@ -180,9 +339,9 @@ class PhotoFrame:
         self.mjpeg_server_thread = threading.Thread(target=lambda: app.run(
             host='0.0.0.0', port=5001, debug=False, use_reloader=False))
         self.mjpeg_server_thread.start()
-#endregion mjpeg stream
+    #endregion mjpeg stream
 
-# region Utils
+    # region Utils
 
     def on_touch_event(self, event):
         """Handler for touchscreen events. Does nothing."""
@@ -206,7 +365,7 @@ class PhotoFrame:
             13: StretchEffect,
             # 14: PlainEffect
         }
-   
+
     def get_images_from_directory(self, directory_path="Images/"):
         """Gets all image files (as paths) from a given directory.
 
@@ -253,13 +412,13 @@ class PhotoFrame:
 
     def add_time_date_to_frame(self, frame):
         """
-        Adds the current time and date to the frame using the settings from the JSON file.
+        Adds the current time, date, and weather to the frame using the settings from the JSON file.
 
         Args:
             frame: The image frame to modify.
 
         Returns:
-            The modified frame with time and date added.
+            The modified frame with time, date, and weather added.
         """
         # Get current time and date
         current_time = time.strftime("%H:%M:%S")
@@ -285,10 +444,8 @@ class PhotoFrame:
         time_bbox = draw.textbbox((0, 0), current_time, font=time_font)
         date_bbox = draw.textbbox((0, 0), current_date, font=date_font)
 
-        time_text_size = (time_bbox[2] - time_bbox[0],
-                          time_bbox[3] - time_bbox[1])
-        date_text_size = (date_bbox[2] - date_bbox[0],
-                          date_bbox[3] - date_bbox[1])
+        time_text_size = (time_bbox[2] - time_bbox[0], time_bbox[3] - time_bbox[1])
+        date_text_size = (date_bbox[2] - date_bbox[0], date_bbox[3] - date_bbox[1])
 
         # Calculate positions based on settings
         x_date = margin_left
@@ -300,16 +457,14 @@ class PhotoFrame:
         font_color = (255, 255, 255)  # White color
 
         # Draw the time and date on the image
-        draw.text((x_time, y_time), current_time,
-                  font=time_font, fill=font_color)
-        draw.text((x_date, y_date), current_date,
-                  font=date_font, fill=font_color)
+        draw.text((x_time, y_time), current_time, font=time_font, fill=font_color)
+        draw.text((x_date, y_date), current_date, font=date_font, fill=font_color)
 
-        # Convert back to OpenCV format
+        # Add weather to the frame
         frame = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+        return self.add_weather_to_frame(frame)
 
-        return frame
-
+    
     def display_image_with_time(self, image, duration):
         """
         Displays the image and updates the time and date labels during the specified duration.
@@ -318,29 +473,41 @@ class PhotoFrame:
             image: The image to display.
             duration: The duration to display the image in seconds.
         """
+        logging.info("Starting to display image with time and weather.")
         start_time = time.time()
+
         while time.time() - start_time < duration and self.is_running:
-            # Copy the image to avoid modifying the original
-            frame = image.copy()
+            try:
+                # Copy the image to avoid modifying the original
+                frame = image.copy()
 
-            # Add time and date to the frame
-            frame = self.add_time_date_to_frame(frame)
-            self.live_frame = frame 
-            # Convert OpenCV image to PIL ImageTk format
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            image_pil = Image.fromarray(frame_rgb)
-            image_tk = ImageTk.PhotoImage(image_pil)
+                # Add time, date, and weather to the frame
+                frame = self.add_time_date_to_frame(frame)
 
-            # Update the label with the new image
-            self.label.config(image=image_tk)
-            self.label.image = image_tk
+                # Convert OpenCV image to PIL ImageTk format
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                image_pil = Image.fromarray(frame_rgb)
+                image_tk = ImageTk.PhotoImage(image_pil)
 
-            # Update the GUI
-            self.root.update_idletasks()
-            self.root.update()
+                # Update the label with the new image
+                self.label.config(image=image_tk)
+                self.label.image = image_tk
+
+                # Log successful frame update
+                logging.debug("Updated frame displayed.")
+
+                # Update the GUI
+                self.root.update_idletasks()
+                self.root.update()
+
+            except Exception as e:
+                logging.error(f"Error during image display: {e}", exc_info=True)
 
             # Sleep for a short time to update every second
             time.sleep(1)
+
+        logging.info("Completed displaying image with time and weather.")
+
 # endregion DateTime
 
 
@@ -415,7 +582,7 @@ class PhotoFrame:
         y_offset = (target_height - new_height) // 2
         x_offset = (target_width - new_width) // 2
         background[y_offset:y_offset + new_height,
-                   x_offset:x_offset + new_width] = resized_image
+                x_offset:x_offset + new_width] = resized_image
 
         return background
 # endregion ImageHandling
@@ -426,10 +593,10 @@ class PhotoFrame:
     def on_closing(self):
         """Handler for window close event."""
         logging.info("Closing application...")
+        self.stop_event.set()  # Stop the weather thread
         self.is_running = False
-        self.stop_observer()  # Stop the observer before closing
-        self.root.destroy()  # Destroy the root window to close the application
-
+        self.stop_observer()
+        self.root.destroy()
 # endregion Events
 
 # region Main
@@ -445,10 +612,10 @@ class PhotoFrame:
         try:
             # Iterate over frames from the generator
             for frame in generator:
+                self.live_frame = frame  # Update live frame for streaming
                 # Add time and date to the frame
                 frame = self.add_time_date_to_frame(frame)
-                #for frame in gen:
-                self.live_frame = frame  # Update live frame for streaming
+                frame = self.add_weather_to_frame(frame)
 
                 # Convert OpenCV image to PIL ImageTk format
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -501,7 +668,7 @@ class PhotoFrame:
 
         # Update the live frame during the transition
         #for frame in gen:
-        #self.live_frame = frame  # Update live frame for streaming
+        self.live_frame = frame  # Update live frame for streaming
 
         if self.status == AnimationStatus.ANIMATION_FINISHED:
             self.current_image = self.next_image
@@ -515,7 +682,6 @@ class PhotoFrame:
             # Display the current image with time and date during the wait time
             self.display_image_with_time(
                 self.current_image, self.wait_time)
-            self.live_frame = frame
             time.sleep(1)
 
     def main(self):
@@ -571,7 +737,7 @@ class PhotoFrame:
             self.on_closing()
 
 
-# endregion Main
+        # endregion Main
 
 
 if __name__ == "__main__":

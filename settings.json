@@ -4,7 +4,10 @@
     "date_font_size": 30,
     "margin_left": 80,
     "margin_bottom": 50,
+    "margin_right": 50,
     "spacing_between": 50,
     "animation_duration": 10,
-    "delay_between_images": 30 
+    "delay_between_images": 30,
+    "weather_api_key": "",
+    "location_key": ""
 }
