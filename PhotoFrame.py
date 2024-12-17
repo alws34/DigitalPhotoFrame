@@ -143,9 +143,16 @@ class PhotoFrame:
         logging.info(f"Found {len(self.images)} images.")
 
 #region Weather
+# region Weather
     def fetch_weather_data(self):
-        """Fetch current weather data from AccuWeather API."""
+        """Fetch current weather data from AccuWeather API, limited to once per hour."""
         try:
+            # Check if enough time has passed to make a new API call
+            current_time = time.time()
+            if hasattr(self, 'next_weather_update') and current_time < self.next_weather_update:
+                #logging.info("Weather update skipped: waiting for next allowed time.")
+                return
+            
             logging.info("Fetching weather data...")
 
             # Retrieve API key and location key from settings
@@ -193,10 +200,29 @@ class PhotoFrame:
                 logging.warning(f"Weather icon could not be fetched: {e}. Falling back to text-only rendering.")
                 self.weather_icon = None
 
+            # Set the next allowable update time (1 hour later)
+            self.next_weather_update = current_time + 3600  # 1 hour = 3600 seconds
+
         except requests.exceptions.RequestException as e:
             logging.error(f"Error fetching weather data: {e}")
         except Exception as e:
             logging.error(f"Unexpected error: {e}", exc_info=True)
+
+    def initialize_weather_updates(self):
+        """Initialize periodic weather updates every hour."""
+        def update_weather_periodically():
+            # Fetch weather data immediately on startup
+            self.fetch_weather_data()
+
+            while not self.stop_event.is_set():
+                # Wait for 1 hour or until stop event
+                self.stop_event.wait(3600)
+                self.fetch_weather_data()
+
+        self.stop_event = threading.Event()
+        weather_thread = threading.Thread(target=update_weather_periodically, daemon=True)
+        weather_thread.start()
+# endregion Weather
 
     def initialize_weather_updates(self):
         """Fetch weather data immediately and then set up periodic updates."""
@@ -473,17 +499,17 @@ class PhotoFrame:
             image: The image to display.
             duration: The duration to display the image in seconds.
         """
-        logging.info("Starting to display image with time and weather.")
+        #logging.info("Starting to display image with time and weather.")
         start_time = time.time()
 
         while time.time() - start_time < duration and self.is_running:
             try:
                 # Copy the image to avoid modifying the original
                 frame = image.copy()
-
+                self.live_frame = frame
                 # Add time, date, and weather to the frame
                 frame = self.add_time_date_to_frame(frame)
-
+                frame = self.add_weather_to_frame(frame)
                 # Convert OpenCV image to PIL ImageTk format
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 image_pil = Image.fromarray(frame_rgb)
@@ -494,7 +520,7 @@ class PhotoFrame:
                 self.label.image = image_tk
 
                 # Log successful frame update
-                logging.debug("Updated frame displayed.")
+                #logging.debug("Updated frame displayed.")
 
                 # Update the GUI
                 self.root.update_idletasks()
@@ -506,7 +532,7 @@ class PhotoFrame:
             # Sleep for a short time to update every second
             time.sleep(1)
 
-        logging.info("Completed displaying image with time and weather.")
+        #logging.info("Completed displaying image with time and weather.")
 
 # endregion DateTime
 
