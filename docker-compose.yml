@@ -1,0 +1,27 @@
+version: "3.9"
+
+services:
+  photoframe_app:
+    build: .
+    container_name: photoframe_app
+    command: python PhotoFrame.py
+    volumes:
+      - ./Images:/app/Images
+      - ./settings.json:/app/settings.json
+      - /tmp/.X11-unix:/tmp/.X11-unix # For GUI applications
+    devices:
+      - "/dev/fb0:/dev/fb0" # For accessing Raspberry Pi screen
+    ports:
+      - "5001:5001" # MJPEG stream
+    environment:
+      - DISPLAY=:0 # For GUI applications
+
+
+  photoframe_flaskserver:
+    build: .
+    container_name: photoframe_flask_server
+    command: python main.py
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./Images:/app/Images
