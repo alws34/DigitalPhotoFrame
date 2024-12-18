@@ -5,3 +5,4 @@ __pycache__/PhotoFrame.cpython-311.pyc
 env/*
 users.json
 PhotoFrame.log
+*__pycache__/*
