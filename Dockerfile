@@ -13,6 +13,7 @@ RUN apt-get update && apt-get install -y \
     libjpeg-dev \
     libz-dev \
     libopencv-dev \
+    x11-apps \
     && apt-get clean
 
 # Set working directory
@@ -26,6 +27,9 @@ RUN pip install --no-cache-dir -r Requirments.txt
 
 # Expose necessary ports
 EXPOSE 5000 5001
+
+# Export DISPLAY variable dynamically
+ENV DISPLAY=:0
 
 # Default command (to be overridden in docker-compose.yml)
 CMD ["bash"]
