@@ -75,16 +75,23 @@ Create a settings.json file in the root directory with the required configuratio
 * Example Configuration:
 ```  
 {
-  "delay_between_images": 10,
-  "animation_duration": 5,
-  "font_name": "Arial.ttf",
-  "time_font_size": 40,
-  "date_font_size": 20,
-  "margin_left": 20,
-  "margin_bottom": 20,
-  "spacing_between": 10,
-  "weather_api_key": "<YOUR_API_KEY>",  //Accuweather API
-  "location_key": "<YOUR_LOCATION_KEY>" //Accuweather API
+    "font_name": "arial.ttf",
+    "time_font_size": 60,
+    "date_font_size": 30,
+    "margin_left": 80,
+    "margin_bottom": 50,
+    "margin_right": 50,
+    "spacing_between": 50,
+    "animation_duration": 10,
+    "delay_between_images": 30,
+    "allow_translucent_background": true,
+    "weather_api_key": "<YOUR_API_KEY>",  //Accuweather API
+    "location_key": "<YOUR_LOCATION_KEY>" //Accuweather API
+    "mjpeg_server":{
+        "allow_mjpeg_server": true,
+        "server_port": 5001,
+        "host": "0.0.0.0"
+    }
 }
 ```
 
