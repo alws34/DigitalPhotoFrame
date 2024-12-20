@@ -10,7 +10,7 @@
     "delay_between_images": 30,
     "allow_translucent_background": true,
     "weather_api_key": "",
-    "location_key": ""
+    "location_key": "",
     "mjpeg_server":{
         "allow_mjpeg_server": true,
         "server_port": 5001,
