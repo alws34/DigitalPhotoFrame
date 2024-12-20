@@ -93,6 +93,18 @@ Create a settings.json file in the root directory with the required configuratio
 
 `docker-compose up --build`
 
+If the container doesnt work (getting error: `_tkinter.TclError: couldn't connect to display ":0"`)
+run the following commands: 
+`sudo nano ~/.bashrc`
+Add at the END of the file: 
+`xhost +local:`
+`export DISPLAY=:0`
+Run: 
+`source ~/.bashrc`
+`xhost`
+`sudo reboot`
+
+
 ## Usage
 Access the photo frame interface directly on the Raspberry Pi or through the web server at:
 

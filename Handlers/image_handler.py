@@ -1,9 +1,9 @@
-from cv2 import resize, GaussianBlur, addWeighted
-from numpy import zeros, uint8
+import cv2
+import numpy as np
 
 class Image_Utils():
-    def __init__(self):
-        pass
+    def __init__(self, settings: dict):
+        self.settings = settings
 
     def resize_image(self, image, target_width, target_height):
         # Get the original dimensions of the image
@@ -21,11 +21,11 @@ class Image_Utils():
             new_height = int(new_width / aspect_ratio)
 
         # Resize the image
-        resized_image = resize(image, (new_width, new_height))
+        resized_image = cv2.resize(image, (new_width, new_height))
 
         # Create a black background with target dimensions
-        final_image = zeros(
-            (target_height, target_width, 3), dtype=uint8)
+        final_image = np.zeros(
+            (target_height, target_width, 3), dtype=np.uint8)
 
         # Center the resized image on the background
         y_offset = (target_height - new_height) // 2
@@ -37,14 +37,14 @@ class Image_Utils():
 
     def create_translucent_background(self, image, target_width, target_height, alpha=1.0):
         # Resize the image to fill the screen, ignoring the aspect ratio
-        background = resize(image, (target_width, target_height))
+        background = cv2.resize(image, (target_width, target_height))
 
         # Apply a blur to the background image
-        blurred_background = GaussianBlur(background, (21, 21), 0)
+        blurred_background = cv2.GaussianBlur(background, (21, 21), 0)
 
         # Adjust the opacity (alpha) of the blurred background
         overlay = blurred_background.copy()
-        addWeighted(overlay, alpha, background, 1 - alpha, 0, background)
+        cv2.addWeighted(overlay, alpha, background, 1 - alpha, 0, background)
 
         return background
 
@@ -64,16 +64,16 @@ class Image_Utils():
             new_height = int(new_width / aspect_ratio)
 
         # Resize the main image to maintain aspect ratio
-        resized_image = resize(image, (new_width, new_height))
+        resized_image = cv2.resize(image, (new_width, new_height))
 
-        # Create a fit-to-screen translucent background of the image
-        background = self.create_translucent_background(
-            image, target_width, target_height)
+        background = np.zeros((target_height, target_width, 3), dtype=np.uint8)
+       
+        if self.settings.get('allow_translucent_background', True):
+            background = self.create_translucent_background(image, target_width, target_height)
 
         # Overlay the resized image onto the background
         y_offset = (target_height - new_height) // 2
         x_offset = (target_width - new_width) // 2
-        background[y_offset:y_offset + new_height,
-                x_offset:x_offset + new_width] = resized_image
+        background[y_offset:y_offset + new_height, x_offset:x_offset + new_width] = resized_image
 
         return background

@@ -10,6 +10,8 @@ services:
       - ./Images:/app/Images
       - ./settings.json:/app/settings.json
       - /tmp/.X11-unix:/tmp/.X11-unix # For GUI applications
+      - /etc/localtime:/etc/localtime:ro # Link host timezone
+      - /etc/timezone:/etc/timezone:ro # Link host timezone
     devices:
       - "/dev/fb0:/dev/fb0" # For accessing Raspberry Pi screen
     ports:

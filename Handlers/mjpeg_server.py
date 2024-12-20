@@ -1,3 +1,4 @@
+import logging
 from flask import Flask, Response 
 import time
 import threading
@@ -6,8 +7,9 @@ from numpy import ndarray, uint8
 
 
 class mjpeg_server():
-    def __init__(self, i_photoframe ):
-        self.PhotoFrame = i_photoframe 
+    from iFrame import iFrame
+    def __init__(self, frame:iFrame ):
+        self.Frame = frame 
         self.is_running = True
         
     def update_live_frame(self, frame):
@@ -38,21 +40,30 @@ class mjpeg_server():
                         continue
                         #logging.warning("Invalid live_frame: Not a proper image array")
                 except Exception as e:
-                    self.PhotoFrame.logger.error(f"Error encoding frame: {e}")
+                    self.Frame.logger.error(f"Error encoding frame: {e}")
             else:
                 # Log a warning only once every few seconds
                 if not hasattr(self, 'last_log_time') or time.time() - self.last_log_time > 5:
-                    self.PhotoFrame.logger.warning("No live frame available to stream.")
+                    self.Frame.logger.warning("No live frame available to stream.")
                     self.last_log_time = time.time()
                 time.sleep(0.1)  # Maintain loop frequency
 
             time.sleep(1/10)  # Maintain ~30 FPS
 
 
-    def start_mjpeg_server(self):
+    def start_mjpeg_server(self, settings):
         """
-        Starts an MJPEG server using Flask.
+        Starts an MJPEG server using Flask if allowed in the settings.
+        Args:
+            settings (dict): MJPEG server settings containing:
+                            - allow_mjpeg_server (bool)
+                            - server_port (int)
+                            - host (str)
         """
+        if not settings.get("allow_mjpeg_server", False):
+            self.Frame.send_log_message("MJPEG server is disabled in settings.",logging.info)
+            return
+
         app = Flask(__name__)
 
         @app.route('/video_feed')
@@ -60,7 +71,12 @@ class mjpeg_server():
             return Response(self.generate_frame(),
                             mimetype='multipart/x-mixed-replace; boundary=frame')
 
+        host = settings.get("host", "0.0.0.0")
+        port = settings.get("server_port", 5001)
+        self.Frame.send_log_message(f"Starting MJPEG server on {host}:{port}...",logging.info)
+
         # Run the Flask app in a separate thread
         self.mjpeg_server_thread = threading.Thread(target=lambda: app.run(
-            host='0.0.0.0', port=5001, debug=False, use_reloader=False))
+            host=host, port=port, debug=False, use_reloader=False))
+        self.mjpeg_server_thread.daemon = True  # Ensures thread stops with main program
         self.mjpeg_server_thread.start()

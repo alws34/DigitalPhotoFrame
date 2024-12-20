@@ -10,23 +10,13 @@ import random as rand
 import os
 from enum import Enum
 import numpy as np
+from abc import ABC, abstractmethod
 
-# region Logging Setup
-log_file_path = os.path.join(os.path.dirname(__file__), "PhotoFrame.log")
-logging.basicConfig(
-    filename=log_file_path,
-    level=logging.INFO,  # Exclude DEBUG messages
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S"
-)
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.INFO)  # Exclude DEBUG messages from console
-console_formatter = logging.Formatter("%(levelname)s - %(message)s")
-console_handler.setFormatter(console_formatter)
-logging.getLogger().addHandler(console_handler)
-logging.info("PhotoFrame application starting...")
-# endregion Logging Setup
-
+from Handlers.image_handler import Image_Utils
+from Handlers.mjpeg_server import mjpeg_server
+from Handlers.weather_handler import weather_handler
+from Handlers.observer import ImagesObserver
+from iFrame import iFrame
 # region Importing Effects
 from Effects.CheckerboardEffect import CheckerboardEffect
 from Effects.AlphaDissolveEffect import AlphaDissolveEffect
@@ -45,16 +35,28 @@ from Effects.StretchEffect import StretchEffect
 from Effects.PlainEffect import PlainEffect
 # endregion Importing Effects
 
-from Handlers.image_handler import Image_Utils
-from Handlers.mjpeg_server import mjpeg_server
-from Handlers.weather_handler import weather_handler
-from Handlers.observer import ImagesObserver
+# region Logging Setup
+log_file_path = os.path.join(os.path.dirname(__file__), "PhotoFrame.log")
+logging.basicConfig(
+    filename=log_file_path,
+    level=logging.INFO,  # Exclude DEBUG messages
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)  # Exclude DEBUG messages from console
+console_formatter = logging.Formatter("%(levelname)s - %(message)s")
+console_handler.setFormatter(console_formatter)
+logging.getLogger().addHandler(console_handler)
+logging.info("PhotoFrame application starting...")
+# endregion Logging Setup
+
 
 class AnimationStatus(Enum):
     ANIMATION_FINISHED = 1
     ANIMATION_ERROR = 2
 
-class PhotoFrame():
+class PhotoFrame(iFrame):
     def __init__(self):
         logging.debug("Initializing PhotoFrame...")
         try:
@@ -89,10 +91,11 @@ class PhotoFrame():
         self.wait_time = self.settings["delay_between_images"]
         self.is_running = True
         
-        self.image_handler = Image_Utils()
-        self.mjpeg_server = mjpeg_server(i_photoframe = self)
-        self.weather_handler = weather_handler(i_photoframe = self, settings  =self.settings)
-        self.Observer = ImagesObserver(i_photoframe = self) 
+        self.image_handler = Image_Utils(settings = self.settings)
+        self.mjpeg_server = mjpeg_server(frame = self)
+        self.Observer = ImagesObserver(frame = self) 
+        self.weather_handler = weather_handler(frame = self, settings = self.settings)
+ 
         
         self.weather_handler.fetch_weather_data()
         self.weather_handler.initialize_weather_updates()
@@ -100,6 +103,9 @@ class PhotoFrame():
         
     # region Utils
 
+    def send_log_message(self, msg, logger: logging):
+        logger(msg)
+        
     def on_touch_event(self, event):
         """Handler for touchscreen events. Does nothing."""
         logging.info(f"Touch event detected: {event}. Ignored.")
@@ -471,7 +477,7 @@ class PhotoFrame():
         self.set_window_properties()
 
         # Start the MJPEG server
-        self.mjpeg_server.start_mjpeg_server()
+        self.mjpeg_server.start_mjpeg_server(settings = self.settings["mjpeg_server"])
 
         # Start the transition thread
         logging.info("Starting transition thread...")
