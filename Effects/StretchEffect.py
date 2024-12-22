@@ -21,7 +21,7 @@ def StretchEffect(img2, img1, duration=5.0):
     # Randomly select a direction
     directions = ['top', 'bottom', 'left', 'right']
     direction = random.choice(directions)
-    print(f"Stretch direction: {direction}")
+    #print(f"Stretch direction: {direction}")
 
     while True:
         elapsed_time = time.time() - start_time

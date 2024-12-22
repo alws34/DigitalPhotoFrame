@@ -97,7 +97,7 @@ class PhotoFrame(iFrame):
         self.weather_handler = weather_handler(frame = self, settings = self.settings)
  
         
-        self.weather_handler.fetch_weather_data()
+        #self.weather_handler.fetch_weather_data()
         self.weather_handler.initialize_weather_updates()
         self.Observer.start_observer()
         
@@ -279,7 +279,6 @@ class PhotoFrame(iFrame):
             The modified frame with weather information added.
         """
         if not self.weather_handler.get_weather_data() or not self.weather_handler.get_weather_icon():
-            logging.warning("Weather data or icon unavailable. Skipping weather rendering.")
             return frame
 
         try:

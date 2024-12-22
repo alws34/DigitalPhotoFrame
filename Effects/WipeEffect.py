@@ -21,7 +21,7 @@ def WipeEffect(img1, img2, duration=5.0):
     # Randomly select a direction
     directions = ['left', 'right', 'up', 'down']
     direction = random.choice(directions)
-    print(f"Wipe direction: {direction}")
+    #print(f"Wipe direction: {direction}")
 
     while True:
         elapsed_time = time.time() - start_time
