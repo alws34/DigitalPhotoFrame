@@ -15,6 +15,20 @@ class weather_handler():
         self.settings = settings
         self.cache_file = "weather_cache.json"
 
+    def fetch_weather_icon(self, icon_type):
+        try:
+            icon_url = f"https://developer.accuweather.com/sites/default/files/{icon_type:02d}-s.png"
+            self.Frame.send_log_message(f"Fetching weather icon from: {icon_url}", logging.info)
+            icon_response = requests.get(icon_url, stream=True)
+            icon_response.raise_for_status()
+            self.weather_icon = Image.open(icon_response.raw)
+            self.Frame.send_log_message("Weather icon successfully fetched.", logging.info)
+        except Exception as e:
+            self.Frame.send_log_message(f"Weather icon could not be fetched: {e}. Falling back to text-only rendering.", logging.warning)
+            self.weather_icon = None
+        if not self.weather_icon:
+            logging.warning("Weather icon unavailable. Skipping weather icon rendering.")
+        
     def fetch_weather_data(self):
         """Fetch current weather data from AccuWeather API, limited to once per hour."""
         try:
@@ -25,8 +39,13 @@ class weather_handler():
                     cache_time = datetime.fromisoformat(cached_data.get("timestamp", ""))
                     if cache_time + timedelta(hours=1) > datetime.now():
                         self.weather_data = cached_data.get("weather_data", {})
-                        self.Frame.send_log_message("Using cached weather data.", logging.info)
+                        if not self.weather_data:
+                            self.Frame.send_log_message("Cached weather data is empty.", logging.error)
+                            return
+                        self.fetch_weather_icon(icon_type=self.weather_data['icon'])
+                        self.Frame.send_log_message(f"Using cached weather data: {self.weather_data}", logging.info)
                         return
+
             
             self.Frame.send_log_message("Fetching weather data...", logging.info)
 
@@ -40,7 +59,7 @@ class weather_handler():
 
             # Build the API URL
             url = f"http://dataservice.accuweather.com/currentconditions/v1/{location_key}?apikey={api_key}"
-            self.Frame.send_log_message(f"Making request to AccuWeather: {url}", logging.info)
+            #self.Frame.send_log_message(f"Making request to AccuWeather: {url}", logging.info)
 
             # Perform the API call
             response = requests.get(url)
@@ -71,18 +90,7 @@ class weather_handler():
                 self.Frame.send_log_message("Weather data cached successfully.", logging.info)
 
             # Fetch the weather icon
-            try:
-                icon_url = f"https://developer.accuweather.com/sites/default/files/{self.weather_data['icon']:02d}-s.png"
-                self.Frame.send_log_message(f"Fetching weather icon from: {icon_url}", logging.info)
-                icon_response = requests.get(icon_url, stream=True)
-                icon_response.raise_for_status()
-                self.weather_icon = Image.open(icon_response.raw)
-                self.Frame.send_log_message("Weather icon successfully fetched.", logging.info)
-            except Exception as e:
-                self.Frame.send_log_message(f"Weather icon could not be fetched: {e}. Falling back to text-only rendering.", logging.warning)
-                self.weather_icon = None
-            if not self.weather_icon:
-                logging.warning("Weather icon unavailable. Skipping weather icon rendering.")
+            self.fetch_weather_icon(icon_type=self.weather_data['icon'])
         except requests.exceptions.RequestException as e:
             self.Frame.send_log_message(f"Error fetching weather data: {e}", logging.error)
         except Exception as e:

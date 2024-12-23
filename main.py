@@ -1,4 +1,5 @@
-from flask import Flask, request, redirect, url_for, send_from_directory, render_template_string, flash, session
+import time
+from flask import Flask, Response, jsonify, request, redirect, url_for, send_from_directory, render_template_string, flash, session
 import os
 import json
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -19,6 +20,17 @@ SELECTED_COLOR = '#ffcccc'  # Light red, adjust as needed
 # Path to the JSON file for storing user data
 USER_DATA_FILE = 'users.json'
 
+SETTINGS_FILE = 'settings.json'
+LOG_FILE_PATH = "PhotoFrame.log"
+
+def load_settings():
+    with open(SETTINGS_FILE, 'r') as file:
+        return json.load(file)
+
+def save_settings(data):
+    with open(SETTINGS_FILE, 'w') as file:
+        json.dump(data, file, indent=4)
+        
 # Ensure user data file exists
 if not os.path.exists(USER_DATA_FILE):
     with open(USER_DATA_FILE, 'w') as file:
@@ -135,86 +147,289 @@ def index():
 
     images = get_images_from_directory(IMAGE_DIR)
     image_count = len(images)
+    settings = load_settings()  # Load settings for the modal
+
     return render_template_string('''
     <!doctype html>
     <html>
-    <head><title>Image Gallery</title></head>
-    <body style="background-color: #2e2e2e; color: #ffffff;">
-    <h1 style="display: inline-block;">Image Gallery</h1>
-    <span style="float: right; font-size: 18px;">Images Count: {{ image_count }}</span>
-    <span style="float: right; font-size: 18px; margin-right: 20px;">
-        <a href="{{ url_for('logout') }}" style="text-decoration:none; color:black;">
-            <button type="button" style="background-color:#333;color:white;">Sign Out</button>
-        </a>
-    </span>
-    <form method="post" action="/upload" enctype="multipart/form-data" style="margin-bottom: 20px; clear: both;">
-        <input type="file" name="file[]" multiple>
-        <input type="submit" value="Upload" style="background-color:#333;color:white;">
-    </form>
-    <form id="multiActionForm" method="post">
-        <button type="submit" formaction="/delete_selected" formmethod="post" style="margin-right: 10px;background-color:#333;color:white;">Delete Selected</button>
-        <button type="submit" formaction="/download_selected" formmethod="post" style="margin-right: 10px;background-color:#333;color:white;">Download Selected</button>
-        <div>
-        {% for image in images %}
-            <div style="display:inline-block; margin:10px; text-align:center; padding: 10px; border: 2px solid transparent; width: 300px; height: 350px;" id="div_{{ image }}">
-                <img src="{{ url_for('serve_image', filename=image) }}" alt="{{ image }}" loading="lazy" style="width:300px; height:300px; transition: transform 0.2s; cursor:pointer;" onclick="openModal('{{ url_for('serve_image', filename=image) }}')" onmouseover="this.style.transform='scale(1.1)'" onmouseout="this.style.transform='scale(1)'" />
-                <br>
-                <input type="checkbox" name="selected_files" value="{{ image }}" onclick="toggleSelection(this, '{{ image }}')"> Select
-                <br>
-                <button type="button" style="background-color:#333;color:white;" onclick="confirmDelete('{{ image }}')">Delete</button>
-                <a href="{{ url_for('download_image', filename=image) }}">
-                    <button type="button" style="background-color:#333;color:white;">Download</button>
-                </a>
-            </div>
-        {% endfor %}
-        </div>
-    </form>
-
-    <!-- Modal structure -->
-    <div id="imageModal" style="display:none; position:fixed; z-index:1000; left:0; top:0; width:100%; height:100%; background-color:rgba(0,0,0,0.9);">
-        <span style="position:absolute; top:20px; right:35px; color:#f1f1f1; font-size:40px; font-weight:bold; cursor:pointer;" onclick="closeModal()">&times;</span>
-        <img id="modalImage" style="margin:auto; display:block; width:80%; max-width:700px;">
-    </div>
-
-    <script>
-        function toggleSelection(checkbox, imageName) {
-            var div = document.getElementById('div_' + imageName);
-            if (checkbox.checked) {
-                div.style.backgroundColor = '{{ SELECTED_COLOR }}';
-            } else {
-                div.style.backgroundColor = '';
+    <head>
+        <title>Image Gallery</title>
+        <style>
+            body {
+                background-color: #2e2e2e;
+                color: #ffffff;
+                font-family: Arial, sans-serif;
             }
-        }
+            .top-right-table {
+                position: absolute;
+                top: 10px;
+                right: 10px;
+                background-color: rgba(0, 0, 0, 0.5);
+                border-radius: 10px;
+                padding: 10px;
+                display: table;
+            }
+            .top-right-table button {
+                background-color: #333;
+                color: white;
+                border: none;
+                border-radius: 5px;
+                padding: 10px 15px;
+                margin: 5px;
+                cursor: pointer;
+            }
+            .top-right-table button:hover {
+                background-color: #444;
+            }
+            .modal {
+                display: none;
+                position: fixed;
+                z-index: 1000;
+                left: 0;
+                top: 0;
+                width: 100%;
+                height: 100%;
+                background-color: rgba(0, 0, 0, 0.9);
+                overflow: auto;
+                padding-top: 60px;
+            }
+            .modal-content {
+                background-color: #2e2e2e;
+                margin: auto;
+                padding: 20px;
+                border: 1px solid #888;
+                width: 70%;
+                color: white;
+                border-radius: 10px;
+            }
+            .close {
+                color: #aaa;
+                float: right;
+                font-size: 28px;
+                font-weight: bold;
+            }
+            .close:hover, .close:focus {
+                color: white;
+                text-decoration: none;
+                cursor: pointer;
+            }
+            .log-content {
+                max-height: 300px;
+                overflow-y: auto;
+                white-space: pre-wrap;
+                font-family: monospace;
+                background-color: #1e1e1e;
+                padding: 10px;
+                border-radius: 5px;
+                border: 1px solid #555;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>Image Gallery</h1>
+        <div class="top-right-table">
+            <button onclick="logout()">Sign Out</button>
+            <button onclick="openLogsModal()">Logs</button>
+            <button onclick="openSettingsModal()">Edit Settings</button>
+            <span style="padding: 10px; color: white;">Images Count: {{ image_count }}</span>
+        </div>
 
-        function confirmDelete(imageName) {
-            if (confirm('Are you sure you want to delete this image?')) {
-                fetch('/delete/' + imageName, {
-                    method: 'POST'
-                }).then(response => {
+        <!-- Logs Modal -->
+        <div id="logsModal" class="modal">
+            <div class="modal-content">
+                <span class="close" onclick="closeLogsModal()">&times;</span>
+                <h2>Live Logs</h2>
+                <div id="logStream" class="log-content"></div>
+                <div style="text-align: center; margin-top: 20px;">
+                    <button onclick="clearLogs()" style="background-color: #00ffcc; color: black; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer;">Clear Logs</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Settings Modal -->
+        <div id="settingsModal" class="modal">
+            <div class="modal-content" style="max-width: 600px;">
+                <span class="close" onclick="closeSettingsModal()" style="font-size: 28px; font-weight: bold; cursor: pointer; color: white;">&times;</span>
+                <h2 style="text-align: center; color: white;">Edit Settings</h2>
+                <form method="POST" action="{{ url_for('save_settings_route') }}" style="display: flex; flex-direction: column; gap: 20px; padding: 20px;">
+                    {% for key, value in settings.items() %}
+                        <div style="display: flex; flex-direction: column; gap: 10px;">
+                            {% if value is mapping %}
+                                <!-- Section Header for Nested JSON -->
+                                <h3 style="color: #00ffcc; margin-bottom: 5px;">{{ key.replace('_', ' ') }}</h3>
+                                {% for subkey, subvalue in value.items() %}
+                                    <label for="{{ key }}_{{ subkey }}" style="color: white;">{{ subkey.replace('_', ' ') }}</label>
+                                    {% if subvalue in [true, false] or subvalue|string|lower in ['on', 'off', 'true', 'false'] %}
+                                        <input type="checkbox" id="{{ key }}_{{ subkey }}" name="{{ key }}[{{ subkey }}]" {% if subvalue in [true, 'true', 'on'] %}checked{% endif %}>
+                                    {% else %}
+                                        <input type="text" id="{{ key }}_{{ subkey }}" name="{{ key }}[{{ subkey }}]" value="{{ subvalue }}" style="width: 100%; padding: 10px; border-radius: 5px; border: 1px solid #555; background-color: #1e1e1e; color: white;">
+                                    {% endif %}
+                                {% endfor %}
+                            {% else %}
+                                <label for="{{ key }}" style="color: white;">{{ key.replace('_', ' ') }}</label>
+                                {% if value in [true, false] or value|string|lower in ['on', 'off', 'true', 'false'] %}
+                                    <input type="checkbox" id="{{ key }}" name="{{ key }}" {% if value in [true, 'true', 'on'] %}checked{% endif %}>
+                                {% else %}
+                                    <input type="text" id="{{ key }}" name="{{ key }}" value="{{ value }}" style="width: 100%; padding: 10px; border-radius: 5px; border: 1px solid #555; background-color: #1e1e1e; color: white;">
+                                {% endif %}
+                            {% endif %}
+                        </div>
+                    {% endfor %}
+                    <div style="text-align: center; margin-top: 20px;">
+                        <button type="submit" style="background-color: #00ffcc; color: black; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer;">Save</button>
+                        <button type="button" onclick="closeSettingsModal()" style="background-color: #333; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer;">Cancel</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+
+        <!-- Main Content -->
+       <div>
+            <form method="post" action="/upload" enctype="multipart/form-data">
+                <input type="file" name="file[]" multiple>
+                <input type="submit" value="Upload" style="background-color:#333;color:white;">
+            </form>
+            <form method="post">
+                <button type="submit" formaction="/delete_selected" style="margin-right: 10px;background-color:#333;color:white;">Delete Selected</button>
+                <button type="submit" formaction="/download_selected" style="margin-right: 10px;background-color:#333;color:white;">Download Selected</button>
+                <div style="display: flex; flex-wrap: wrap; gap: 20px; justify-content: center;">
+                    {% for image in images %}
+                        <div style="border: 1px solid #444; border-radius: 10px; padding: 10px; text-align: center; background-color: rgba(0, 0, 0, 0.7);">
+                            <img src="{{ url_for('serve_image', filename=image) }}" 
+                                alt="{{ image }}" 
+                                style="width: 200px; height: 200px; object-fit: cover; border-radius: 10px; margin-bottom: 10px; transition: transform 0.3s;" 
+                                onmouseover="this.style.transform='scale(1.1)'" 
+                                onmouseout="this.style.transform='scale(1)'" 
+                                onclick="openImageModal('{{ url_for('serve_image', filename=image) }}')">
+                            <br>
+                            <input type="checkbox" name="selected_files" value="{{ image }}" style="margin-bottom: 10px;"> Select
+                            <br>
+                            <button type="button" style="background-color:#333;color:white;" onclick="confirmDelete('{{ image }}')">Delete</button>
+                            <a href="{{ url_for('download_image', filename=image) }}">
+                                <button type="button" style="background-color:#333;color:white;">Download</button>
+                            </a>
+                        </div>
+                    {% endfor %}
+                </div>
+            </form>
+        </div>
+
+        <!-- Image Modal -->
+        <div id="imageModal" style="display:none; position:fixed; z-index:1000; left:0; top:0; width:100%; height:100%; background-color:rgba(0,0,0,0.9);">
+            <span style="position:absolute; top:20px; right:35px; color:#f1f1f1; font-size:40px; font-weight:bold; cursor:pointer;" onclick="closeImageModal()">&times;</span>
+            <img id="modalImage" style="margin:auto; display:block; width:80%; max-width:700px;">
+        </div>
+
+        <script>
+            function openImageModal(imageSrc) {
+                const modal = document.getElementById('imageModal');
+                const modalImg = document.getElementById('modalImage');
+                modal.style.display = "block";
+                modalImg.src = imageSrc;
+            }
+
+            function closeImageModal() {
+                const modal = document.getElementById('imageModal');
+                modal.style.display = "none";
+            }
+        </script>
+
+        <script>
+            function logout() {
+                window.location.href = "{{ url_for('logout') }}";
+            }
+
+            function openSettingsModal() {
+                document.getElementById('settingsModal').style.display = 'block';
+            }
+
+            function closeSettingsModal() {
+                document.getElementById('settingsModal').style.display = 'none';
+            }
+
+            function openLogsModal() {
+                document.getElementById('logsModal').style.display = 'block';
+                const logStream = document.getElementById('logStream');
+                logStream.innerHTML = ''; // Clear previous logs
+                const eventSource = new EventSource("{{ url_for('stream_logs') }}");
+                eventSource.onmessage = function (event) {
+                    logStream.innerHTML += event.data + '<br>';
+                    logStream.scrollTop = logStream.scrollHeight; // Auto-scroll to the bottom
+                };
+                eventSource.onerror = function () {
+                    eventSource.close();
+                };
+            }
+
+            function closeLogsModal() {
+                document.getElementById('logsModal').style.display = 'none';
+            }
+        </script>
+        <script>
+            function clearLogs() {
+                fetch('/clear_logs', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                })
+                .then(response => {
                     if (response.ok) {
-                        window.location.reload();
+                        document.getElementById('logStream').innerHTML = ''; // Clear logs in the modal
+                        alert('Log file cleared successfully.');
                     } else {
-                        alert('Failed to delete the image.');
+                        alert('Failed to clear logs.');
                     }
+                })
+                .catch(error => {
+                    console.error('Error clearing logs:', error);
+                    alert('An error occurred while clearing logs.');
                 });
             }
-        }
-
-        function openModal(imageSrc) {
-            var modal = document.getElementById('imageModal');
-            var modalImg = document.getElementById('modalImage');
-            modal.style.display = "block";
-            modalImg.src = imageSrc;
-        }
-
-        function closeModal() {
-            var modal = document.getElementById('imageModal');
-            modal.style.display = "none";
-        }
-    </script>
+        </script>
     </body>
     </html>
-    ''', images=images, image_count=image_count, SELECTED_COLOR=SELECTED_COLOR)
+    ''', images=images, image_count=image_count, settings=settings)
+
+
+@app.route('/save_settings', methods=['POST'])
+def save_settings_route():
+    try:
+        new_settings = {}
+        form_data = request.form.to_dict(flat=True)
+
+        for key, value in form_data.items():
+            # Handle nested keys (e.g., "mjpeg_server[allow_mjpeg_server]")
+            if '[' in key and ']' in key:
+                parent_key, sub_key = key.split('[', 1)
+                sub_key = sub_key.rstrip(']')
+                if parent_key not in new_settings:
+                    new_settings[parent_key] = {}
+                # Convert "on"/"off" or empty strings to boolean or appropriate types
+                if value.lower() in ['true', 'on']:
+                    value = True
+                elif value.lower() in ['false', 'off']:
+                    value = False
+                elif value.isdigit():
+                    value = int(value)
+                new_settings[parent_key][sub_key] = value
+            else:
+                # Convert "on"/"off" or empty strings to boolean or appropriate types
+                if value.lower() in ['true', 'on']:
+                    value = True
+                elif value.lower() in ['false', 'off']:
+                    value = False
+                elif value.isdigit():
+                    value = int(value)
+                new_settings[key] = value
+
+        # Save the reconstructed settings JSON
+        save_settings(new_settings)
+        flash('Settings updated successfully.')
+    except Exception as e:
+        flash(f'Failed to update settings: {e}')
+    return redirect(url_for('index'))
 
 @app.route('/images/<filename>')
 def serve_image(filename):
@@ -283,5 +498,44 @@ def download_selected():
     flash('No files selected for download.')
     return redirect(url_for('index'))
 
+@app.route("/logs", methods=["GET"])
+def get_logs():
+    try:
+        with open(LOG_FILE_PATH, "r") as log_file:
+            logs = log_file.readlines()
+        return jsonify({"logs": logs}), 200
+    except FileNotFoundError:
+        return jsonify({"error": "Log file not found"}), 404
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/stream_logs")
+def stream_logs():
+    def generate_logs():
+        with open(LOG_FILE_PATH, "r") as log_file:
+            # Read all existing content first
+            log_file.seek(0)  # Go to the beginning of the file
+            for line in log_file:
+                yield f"data: {line}\n\n"
+
+            # Continue streaming new content as it is added
+            log_file.seek(0, os.SEEK_END)  # Move to the end for live updates
+            while True:
+                line = log_file.readline()
+                if line:
+                    yield f"data: {line}\n\n"
+                time.sleep(1)
+
+    return Response(generate_logs(), content_type="text/event-stream")
+
+@app.route('/clear_logs', methods=['POST'])
+def clear_logs():
+    try:
+        with open(LOG_FILE_PATH, 'w') as log_file:
+            log_file.truncate(0)  # Clear the file
+        return jsonify({"message": "Log file cleared successfully."}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0')
+    app.run(debug=False, host='0.0.0.0')
