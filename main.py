@@ -1,9 +1,11 @@
 import time
-from flask import Flask, Response, jsonify, request, redirect, url_for, send_from_directory, render_template_string, flash, session
+from flask import Flask, Response, jsonify, request, redirect, url_for, send_from_directory, render_template_string, flash, session, send_file
 import os
 import json
 from werkzeug.security import generate_password_hash, check_password_hash
 from pathlib import Path
+import io
+import zipfile
 
 app = Flask(__name__)
 app.secret_key = 'supersecretkey'  # Needed for session management and flash messages
@@ -366,6 +368,20 @@ def index():
                 document.getElementById('logsModal').style.display = 'none';
             }
         </script>
+        
+        <script>
+            function confirmDelete(filename) {
+                if (confirm("Are you sure you want to delete " + filename + "?")) {
+                    // Construct a POST request to your /delete/<filename> route.
+                    const form = document.createElement('form');
+                    form.method = 'POST';
+                    form.action = '/delete/' + filename;
+                    document.body.appendChild(form);
+                    form.submit();
+                }
+            }
+        </script>
+        
         <script>
             function clearLogs() {
                 fetch('/clear_logs', {
@@ -492,12 +508,31 @@ def download_selected():
         return redirect(url_for('login'))
 
     selected_files = request.form.getlist('selected_files')
-    # For simplicity, we'll just download the first selected file. You might want to handle multiple file downloads differently.
-    if selected_files:
-        return send_from_directory(IMAGE_DIR, selected_files[0], as_attachment=True)
-    flash('No files selected for download.')
-    return redirect(url_for('index'))
+    if not selected_files:
+        flash('No files selected for download.')
+        return redirect(url_for('index'))
 
+    # Create an in-memory BytesIO buffer to write our ZIP archive into.
+    zip_buffer = io.BytesIO()
+    
+    # Create a new zip file in the BytesIO buffer
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        for filename in selected_files:
+            # Build the full path; add the file to the zip if it exists
+            filepath = os.path.join(IMAGE_DIR, filename)
+            if os.path.isfile(filepath):
+                # The `arcname` is how the file is named in the ZIP
+                zipf.write(filepath, arcname=filename)
+
+    # Important: move to the beginning of the BytesIO buffer so `send_file` can read it
+    zip_buffer.seek(0)
+
+    # Send file to user
+    return send_file(
+        zip_buffer,
+        download_name='selected_images.zip',  # name of the zip download
+        as_attachment=True
+    )
 @app.route("/logs", methods=["GET"])
 def get_logs():
     try:

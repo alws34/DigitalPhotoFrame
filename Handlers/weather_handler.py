@@ -14,7 +14,8 @@ class weather_handler():
         self.weather_icon = None
         self.settings = settings
         self.cache_file = "weather_cache.json"
-
+        self.no_weather = False
+        
     def fetch_weather_icon(self, icon_type):
         try:
             icon_url = f"https://developer.accuweather.com/sites/default/files/{icon_type:02d}-s.png"
@@ -31,6 +32,9 @@ class weather_handler():
         
     def fetch_weather_data(self):
         """Fetch current weather data from AccuWeather API, limited to once per hour."""
+        if self.no_weather:
+            return
+        
         try:
             # Check if a valid cached weather file exists
             if os.path.exists(self.cache_file):
@@ -55,6 +59,7 @@ class weather_handler():
 
             if not api_key or not location_key:
                 self.Frame.send_log_message("AccuWeather API key or location key is missing.", logging.error)
+                self.no_weather = True
                 return
 
             # Build the API URL
