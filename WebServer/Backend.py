@@ -1,5 +1,5 @@
 import time
-from flask import Flask, Response, jsonify, request, redirect, url_for, send_from_directory, render_template_string, flash, session, send_file
+from flask import Flask, Response, jsonify, request, redirect, url_for, send_from_directory, render_template, flash, session, send_file
 import os
 import json
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -11,7 +11,7 @@ app = Flask(__name__)
 app.secret_key = 'supersecretkey'  # Needed for session management and flash messages
 
 # Directory where images are stored
-IMAGE_DIR = 'Images'
+IMAGE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../Images"))
 
 # Allowed image extensions
 ALLOWED_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.webp'}
@@ -20,9 +20,9 @@ ALLOWED_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.webp'}
 SELECTED_COLOR = '#ffcccc'  # Light red, adjust as needed
 
 # Path to the JSON file for storing user data
-USER_DATA_FILE = 'users.json'
+USER_DATA_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), '../DesktopApp/users.json'))
+SETTINGS_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), '../DesktopApp/settings.json'))
 
-SETTINGS_FILE = 'settings.json'
 LOG_FILE_PATH = "PhotoFrame.log"
 
 def load_settings():
@@ -80,7 +80,7 @@ def signup():
         flash('Signup successful. Please log in.')
         return redirect(url_for('login'))
 
-    return render_template_string("./templates/signup.html")
+    return render_template("signup.html")
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -100,7 +100,7 @@ def login():
             flash('Invalid credentials. Please try again.')
             return redirect(url_for('login'))
 
-    return render_template_string("./templates/login.html")
+    return render_template("login.html")
 
 @app.route('/logout')
 def logout():
@@ -117,7 +117,7 @@ def index():
     image_count = len(images)
     settings = load_settings()  # Load settings for the modal
 
-    return render_template_string("./templates/index.html", images=images, image_count=image_count, settings=settings)
+    return render_template("index.html", images=images, image_count=image_count, settings=settings)
 
 
 @app.route('/save_settings', methods=['POST'])

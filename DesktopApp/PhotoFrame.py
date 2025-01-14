@@ -11,6 +11,8 @@ import os
 from enum import Enum
 import numpy as np
 from abc import ABC, abstractmethod
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from Handlers.image_handler import Image_Utils
 from Handlers.mjpeg_server import mjpeg_server
@@ -39,12 +41,12 @@ from Effects.PlainEffect import PlainEffect
 log_file_path = os.path.join(os.path.dirname(__file__), "PhotoFrame.log")
 logging.basicConfig(
     filename=log_file_path,
-    level=logging.INFO,  # Exclude DEBUG messages
+    level=logging.INFO, 
     format="%(asctime)s - %(levelname)s - %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S"
 )
 console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.INFO)  # Exclude DEBUG messages from console
+console_handler.setLevel(logging.INFO) 
 console_formatter = logging.Formatter("%(levelname)s - %(message)s")
 console_handler.setFormatter(console_formatter)
 logging.getLogger().addHandler(console_handler)
@@ -129,7 +131,7 @@ class PhotoFrame(iFrame):
             # 14: PlainEffect
         }
 
-    def get_images_from_directory(self, directory_path="Images/"):
+    def get_images_from_directory(self, directory_path="../Images/"):
         """Gets all image files (as paths) from a given directory.
 
         Args:
@@ -155,8 +157,7 @@ class PhotoFrame(iFrame):
         if len(self.shuffled_images) == 0:
             self.shuffled_images = list(self.images)
             rand.shuffle(self.shuffled_images)
-        self.current_image_idx = (
-            self.current_image_idx + 1) % len(self.shuffled_images)
+        self.current_image_idx = (self.current_image_idx + 1) % len(self.shuffled_images)
         return self.shuffled_images[self.current_image_idx]
 
     def get_random_effect(self):
