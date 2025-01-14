@@ -7,7 +7,7 @@ from PIL import Image
 import requests
 
 class weather_handler():
-    from iFrame import iFrame
+    from DesktopApp.iFrame import iFrame
     def __init__(self, frame: iFrame, settings: dict):
         self.Frame = frame
         self.weather_data = {}

@@ -16,7 +16,7 @@ from Handlers.image_handler import Image_Utils
 from Handlers.mjpeg_server import mjpeg_server
 from Handlers.weather_handler import weather_handler
 from Handlers.observer import ImagesObserver
-from iFrame import iFrame
+from DesktopApp.iFrame import iFrame
 # region Importing Effects
 from Effects.CheckerboardEffect import CheckerboardEffect
 from Effects.AlphaDissolveEffect import AlphaDissolveEffect
