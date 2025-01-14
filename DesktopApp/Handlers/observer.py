@@ -36,7 +36,7 @@ class ImageChangeHandler(FileSystemEventHandler):
 
 
 class ImagesObserver(iBoserver):
-    from iFrame import iFrame
+    from DesktopApp.iFrame import iFrame
     def __init__(self, frame: iFrame):
         self.frame = frame 
     

@@ -7,7 +7,7 @@ from numpy import ndarray, uint8
 
 
 class mjpeg_server():
-    from iFrame import iFrame
+    from DesktopApp.iFrame import iFrame
     def __init__(self, frame:iFrame ):
         self.Frame = frame 
         self.is_running = True

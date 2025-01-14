@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Login</title>
+  </head>
+  <body style="background-color: #1e1e1e; color: #ffffff">
+    <h1>Login</h1>
+    <form method="post">
+      <label for="email_or_username">Email or Username:</label><br />
+      <input
+        type="text"
+        id="email_or_username"
+        name="email_or_username"
+        required
+        style="color: #000"
+      /><br /><br />
+      <label for="password">Password:</label><br />
+      <input
+        type="password"
+        id="password"
+        name="password"
+        required
+        style="color: #000"
+      /><br /><br />
+      <input
+        type="submit"
+        value="Login"
+        style="background-color: #333; color: white"
+      />
+    </form>
+    <p>
+      Don't have an account?
+      <a href="{{ url_for('signup') }}" style="color: #00ffcc">Sign up here</a>.
+    </p>
+  </body>
+</html>
