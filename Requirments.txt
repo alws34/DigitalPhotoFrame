@@ -6,3 +6,4 @@ flask
 watchdog
 requests
 paho.mqtt
+pyheif
