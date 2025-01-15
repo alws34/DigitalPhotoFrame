@@ -2,6 +2,8 @@ from abc import ABC, abstractmethod
 import logging
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
+from DesktopApp.iFrame import iFrame
+import os
 
 class iBoserver(ABC):
     @abstractmethod
@@ -18,25 +20,29 @@ class iBoserver(ABC):
 class ImageChangeHandler(FileSystemEventHandler):
     def __init__(self, observer: iBoserver):
         self.observer = observer
-
+        self.old_image_count = self.observer.reload_images()
+        
     def on_created(self, event):
         """Triggered when a file or directory is created."""
-        print(f"File created: {event.src_path}. Reloading images...")
-        self.observer.reload_images()
+        message = f"Added {self.observer.reload_images() - self.old_image_count} Image\s"
+        self.old_image_count = len(self.observer.images)
+        self.observer.frame.notification_manager.create_notification(message)
 
     def on_deleted(self, event):
         """Triggered when a file or directory is deleted."""
-        print(f"File deleted: {event.src_path}. Reloading images...")
-        self.observer.reload_images()
+        message = f"Removed {self.old_image_count - self.observer.reload_images()} Image\s"
+        self.old_image_count = len(self.observer.images)
+        self.observer.frame.notification_manager.create_notification(message)
 
     def on_moved(self, event):
         """Triggered when a file or directory is renamed or moved."""
-        print(f"File moved or renamed from {event.src_path} to {event.dest_path}. Reloading images...")
-        self.observer.reload_images()
+        message = f"moved/renamed {self.observer.reload_images()} Image\s"
+        self.old_image_count = len(self.observer.images)
+        self.observer.frame.notification_manager.create_notification(message)
 
 
 class ImagesObserver(iBoserver):
-    from DesktopApp.iFrame import iFrame
+    
     def __init__(self, frame: iFrame):
         self.frame = frame 
     
@@ -46,7 +52,7 @@ class ImagesObserver(iBoserver):
         self.frame.send_log_message("Starting directory observer...", logging.debug)
         event_handler = ImageChangeHandler(self)
         self.observer = Observer()
-        self.observer.schedule(event_handler, "Images", recursive=True)
+        self.observer.schedule(event_handler, "../Images", recursive=True)
         self.observer.start()
         self.frame.send_log_message("Directory observer started.", logging.info)
     
@@ -57,8 +63,21 @@ class ImagesObserver(iBoserver):
         self.observer.join()
         self.frame.send_log_message("Directory observer stopped.", logging.info)
    
-    def reload_images(self):
+    def reload_images(self)->int:
         """Reloads images from the directory, stops the current frame, and restarts the transition."""
         self.frame.send_log_message("Reloading images from 'Images' directory...", logging.info)
         self.images = self.get_images_from_directory()
-        self.frame.send_log_message(f"Found {len(self.images)} images.", logging.info)
+        self.frame.send_log_message(f"Found {len(self.images)} images to reload.", logging.info)
+        return len(self.images)
+        
+        
+    def get_images_from_directory(self) -> list:
+        """Fetch all image file paths from the directory."""
+        images_path = os.path.abspath("../Images")  # Resolve absolute path
+        valid_extensions = ('.jpg', '.jpeg', '.png', '.gif', '.bmp')
+        images = []
+        for root, dirs, files in os.walk(images_path):
+            for file in files:
+                if file.lower().endswith(valid_extensions):
+                    images.append(os.path.join(root, file))
+        return images

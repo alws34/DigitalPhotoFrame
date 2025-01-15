@@ -37,6 +37,8 @@ from Effects.StretchEffect import StretchEffect
 from Effects.PlainEffect import PlainEffect
 # endregion Importing Effects
 
+from Utilities.NotificationManager import NotificationManager
+
 # region Logging Setup
 log_file_path = os.path.join(os.path.dirname(__file__), "PhotoFrame.log")
 logging.basicConfig(
@@ -103,6 +105,8 @@ class PhotoFrame(iFrame):
         self.weather_handler.initialize_weather_updates()
         self.Observer.start_observer()
         
+        self.notification_manager = None
+        
     # region Utils
 
     def send_log_message(self, msg, logger: logging):
@@ -111,6 +115,8 @@ class PhotoFrame(iFrame):
     def on_touch_event(self, event):
         """Handler for touchscreen events. Does nothing."""
         logging.info(f"Touch event detected: {event}. Ignored.")
+        if event.type == "swipe" and event.direction == "right":
+            self.notification_manager.remove_all_notifications()
         
     def set_effects(self):
         return {
@@ -459,11 +465,15 @@ class PhotoFrame(iFrame):
             self.root, width=self.screen_width, height=self.screen_height, bg='black')
         self.frame.pack(fill="both", expand=True)
 
+        self.notification_manager = NotificationManager(self.root)
+
         # Bind the close event (Alt+F4)
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 
         # Bind Ctrl+C to terminate the application
         self.root.bind_all('<Control-c>', lambda e: self.on_closing())
+        
+        
 
     def shuffle_images(self):
         self.shuffled_images = list(self.images)
