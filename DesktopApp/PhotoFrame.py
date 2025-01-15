@@ -1,3 +1,4 @@
+#region imports
 import logging
 import json
 import threading
@@ -38,6 +39,7 @@ from Effects.PlainEffect import PlainEffect
 # endregion Importing Effects
 
 from Utilities.NotificationManager import NotificationManager
+#endregion imports
 
 # region Logging Setup
 log_file_path = os.path.join(os.path.dirname(__file__), "PhotoFrame.log")
@@ -107,7 +109,7 @@ class PhotoFrame(iFrame):
         
         self.notification_manager = None
         
-    # region Utils
+# region Utils
 
     def send_log_message(self, msg, logger: logging):
         logger(msg)
@@ -175,7 +177,6 @@ class PhotoFrame(iFrame):
             self.current_effect_idx + 1) % len(self.shuffled_effects)
         return self.shuffled_effects[self.current_effect_idx]
 # endregion Utils
-
 
 # region DateTime
     def add_time_date_to_frame(self, frame):
@@ -345,6 +346,8 @@ class PhotoFrame(iFrame):
         except Exception as e:
             self.logger.error(f"Error during weather rendering: {e}", exc_info=True)
             return frame
+
+# endregion DateTime
 
 # region Events
     def on_closing(self):
