@@ -6,6 +6,8 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from pathlib import Path
 import io
 import zipfile
+import pyheif
+from PIL import Image
 
 app = Flask(__name__)
 app.secret_key = 'supersecretkey'  # Needed for session management and flash messages
@@ -14,7 +16,7 @@ app.secret_key = 'supersecretkey'  # Needed for session management and flash mes
 IMAGE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../Images"))
 
 # Allowed image extensions
-ALLOWED_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.webp'}
+ALLOWED_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.webp', '.heic', '.heif'}
 
 # Color for selected image highlight
 SELECTED_COLOR = '#ffcccc'  # Light red, adjust as needed
@@ -176,8 +178,25 @@ def upload_files():
     files = request.files.getlist('file[]')
     for file in files:
         if file and allowed_file(file.filename):
-            file.save(os.path.join(IMAGE_DIR, file.filename))
-    flash('Files successfully uploaded.')
+            file_path = os.path.join(IMAGE_DIR, file.filename)
+            file_extension = Path(file.filename).suffix.lower()
+
+            # Save the file temporarily
+            file.save(file_path)
+
+            # Convert HEIC/HEIF to JPEG
+            if file_extension in {'.heic', '.heif'}:
+                jpeg_path = os.path.splitext(file_path)[0] + '.jpeg'
+                try:
+                    convert_heic_to_jpeg(file_path, jpeg_path)
+                    os.remove(file_path)  # Remove original HEIC/HEIF file
+                    flash(f'{file.filename} converted to JPEG and uploaded successfully.')
+                except Exception as e:
+                    flash(f'Failed to convert {file.filename}: {e}')
+                    os.remove(file_path)
+            else:
+                flash(f'{file.filename} uploaded successfully.')
+
     return redirect(url_for('index'))
 
 @app.route('/delete/<filename>', methods=['POST'])
@@ -278,10 +297,18 @@ def stream_logs():
 def clear_logs():
     try:
         with open(LOG_FILE_PATH, 'w') as log_file:
-            log_file.truncate(0)  # Clear the file
+            log_file.truncate(0)
         return jsonify({"message": "Log file cleared successfully."}), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+def convert_heic_to_jpeg(heic_path, output_path):
+    heif_file = pyheif.read(heic_path)
+    image = Image.frombytes(
+        heif_file.mode, heif_file.size, heif_file.data,
+        "raw", heif_file.mode, heif_file.stride,
+    )
+    image.save(output_path, format="JPEG")  
+    
 if __name__ == '__main__':
     app.run(debug=False, host='0.0.0.0')
