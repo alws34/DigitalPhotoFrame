@@ -37,11 +37,11 @@ class NotificationManager:
         label.pack(fill="both", expand=True)
 
         self.notifications.append(notification)
-        self.fade_in(notification, x_pos, y_pos)
+        self.drop_in(notification, x_pos, y_pos)
 
-    def fade_in(self, notification, x_pos, target_y, step=5, alpha_step=0.05):
+    def drop_in(self, notification, x_pos, target_y, step=10, alpha_step=0.05):
         """
-        Animate the fade-in effect by sliding the notification into position and increasing transparency.
+        Animate the drop-in effect by sliding the notification from the top of the screen to its position.
 
         Args:
             notification (Toplevel): The notification window.
@@ -53,7 +53,7 @@ class NotificationManager:
         try:
             # Get current geometry
             geometry = notification.geometry()
-            _, _, _, current_y = map(int, geometry.replace("x", "+").split("+"))
+            width, height, current_x, current_y = map(int, geometry.replace("x", "+").split("+"))
 
             # Move downward
             current_y += step
@@ -70,12 +70,13 @@ class NotificationManager:
 
             # Continue animation until fully visible
             if current_y < target_y or alpha < 0.9:
-                self.root.after(16, lambda: self.fade_in(notification, x_pos, target_y, step, alpha_step))
+                self.root.after(16, lambda: self.drop_in(notification, x_pos, target_y, step, alpha_step))
             else:
-                # Schedule removal after fade-in completes
+                # Schedule removal after the drop-in completes
                 self.root.after(self.remove_time, lambda: self.swipe_right_effect(notification))
         except Exception as e:
-            print(f"Error during fade-in effect: {e}")
+            print(f"Error during drop-in effect: {e}")
+
 
     def swipe_right_effect(self, notification, step=20):
         """
@@ -104,10 +105,59 @@ class NotificationManager:
             print(f"Error during swipe-right effect: {e}")
 
     def remove_notification(self, notification):
-        """Remove the notification."""
+        """Remove the notification and reposition subsequent notifications."""
         if notification in self.notifications:
+            index = self.notifications.index(notification)
             self.notifications.remove(notification)
             notification.destroy()
+            self.reposition_notifications(index)
+
+    def reposition_notifications(self, start_index):
+        """
+        Reposition all notifications after the one that was removed.
+
+        Args:
+            start_index (int): The index of the notification that was removed.
+        """
+        for i in range(start_index, len(self.notifications)):
+            notification = self.notifications[i]
+            width = 400
+            height = 60
+            spacing = 10
+            x_pos = self.root.winfo_screenwidth() - width - 20
+            target_y = 20 + i * (height + spacing)
+
+            # Move notification to new position
+            self.slide_up(notification, x_pos, target_y)
+
+    def slide_up(self, notification, x_pos, target_y, step=5):
+        """
+        Animate sliding a notification upward to its new position.
+
+        Args:
+            notification (Toplevel): The notification to move.
+            x_pos (int): The horizontal position of the notification.
+            target_y (int): The final vertical position.
+            step (int): Vertical movement per frame.
+        """
+        try:
+            # Get current geometry
+            geometry = notification.geometry()
+            _, _, _, current_y = map(int, geometry.replace("x", "+").split("+"))
+
+            # Move upward
+            current_y -= step
+            if current_y < target_y:
+                current_y = target_y  # Clamp to target position
+
+            # Update position
+            notification.geometry(f"{400}x{60}+{x_pos}+{current_y}")
+
+            # Continue animation until it reaches the target position
+            if current_y > target_y:
+                self.root.after(16, lambda: self.slide_up(notification, x_pos, target_y, step))
+        except Exception as e:
+            print(f"Error during slide-up effect: {e}")
 
     def remove_all_notifications(self):
         """Remove all notifications."""
