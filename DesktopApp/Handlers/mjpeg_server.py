@@ -21,34 +21,31 @@ class mjpeg_server():
         Streams the live frame directly without resizing.
         """
         while self.is_running:
-            if hasattr(self, 'live_frame') and self.live_frame is not None:
-                try:
-                    # Ensure the frame is a valid NumPy array
-                    if isinstance(self.live_frame, ndarray) and self.live_frame.size > 0:
-                        # Ensure the frame has the correct type and format
-                        if self.live_frame.dtype != uint8:
-                            self.live_frame = self.live_frame.astype(uint8)
-
-                        # Encode the frame as JPEG
-                        _, jpeg = imencode('.jpg', self.live_frame)
-                        frame = jpeg.tobytes()
-
-                        # Yield the MJPEG frame
-                        yield (b'--frame\r\n'
-                            b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-                    else:
-                        continue
-                        #logging.warning("Invalid live_frame: Not a proper image array")
-                except Exception as e:
-                    self.Frame.logger.error(f"Error encoding frame: {e}")
-            else:
-                # Log a warning only once every few seconds
+            if not hasattr(self, 'live_frame') or self.live_frame is None:
                 if not hasattr(self, 'last_log_time') or time.time() - self.last_log_time > 5:
                     self.Frame.logger.warning("No live frame available to stream.")
                     self.last_log_time = time.time()
-                time.sleep(0.1)  # Maintain loop frequency
+                time.sleep(0.1)
+                continue
 
-            time.sleep(1/10)  # Maintain ~30 FPS
+            try:
+                if not isinstance(self.live_frame, ndarray) or self.live_frame.size == 0:
+                    continue
+
+                if self.live_frame.dtype != uint8:
+                    self.live_frame = self.live_frame.astype(uint8)
+
+                _, jpeg = imencode('.jpg', self.live_frame)
+                frame = jpeg.tobytes()
+
+                # Yield the MJPEG frame
+                yield (b'--frame\r\n'
+                    b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+
+            except Exception as e:
+                self.Frame.logger.error(f"Error encoding frame: {e}")
+
+            time.sleep(1 / 10)  # Maintain ~30 FPS
 
 
     def start_mjpeg_server(self, settings):

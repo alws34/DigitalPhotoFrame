@@ -39,18 +39,19 @@ def LinearEffect(img1, img2, duration=5.0, num_blinds=16, direction='vertical'):
         for i in range(num_blinds):
             if direction == 'vertical':
                 x_start = i * blind_size
-                x_end = x_start + blind_size if i != num_blinds - 1 else cols  # Handle any remainder
+                x_end = x_start + blind_size if i != num_blinds - 1 else cols
 
                 # Fill the mask for this blind
                 y_end = current_size
                 mask[0:y_end, x_start:x_end] = 1
-            else:  # horizontal blinds
-                y_start = i * blind_size
-                y_end = y_start + blind_size if i != num_blinds - 1 else rows  # Handle any remainder
+                continue
+            # horizontal blinds
+            y_start = i * blind_size
+            y_end = y_start + blind_size if i != num_blinds - 1 else rows 
 
-                # Fill the mask for this blind
-                x_end = current_size
-                mask[y_start:y_end, 0:x_end] = 1
+            # Fill the mask for this blind
+            x_end = current_size
+            mask[y_start:y_end, 0:x_end] = 1
 
         # Apply the mask to blend the two images
         mask_3ch = np.dstack([mask]*3)

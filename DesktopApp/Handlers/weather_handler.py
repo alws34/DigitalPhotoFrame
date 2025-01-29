@@ -36,7 +36,6 @@ class weather_handler():
             return
         
         try:
-            # Check if a valid cached weather file exists
             if os.path.exists(self.cache_file):
                 with open(self.cache_file, "r") as file:
                     cached_data = json.load(file)
@@ -53,7 +52,6 @@ class weather_handler():
             
             self.Frame.send_log_message("Fetching weather data...", logging.info)
 
-            # Retrieve API key and location key from settings
             api_key = self.settings.get("weather_api_key", "")
             location_key = self.settings.get("location_key", "")
 
@@ -62,22 +60,17 @@ class weather_handler():
                 self.no_weather = True
                 return
 
-            # Build the API URL
             url = f"http://dataservice.accuweather.com/currentconditions/v1/{location_key}?apikey={api_key}"
-            #self.Frame.send_log_message(f"Making request to AccuWeather: {url}", logging.info)
 
-            # Perform the API call
             response = requests.get(url)
             response.raise_for_status()
             self.Frame.send_log_message(f"Weather API response: {response.text}", logging.info)
 
-            # Parse the JSON response
             data = response.json()
             if not data or len(data) == 0:
                 self.Frame.send_log_message("Weather API response is empty or invalid.", logging.error)
                 return
 
-            # Extract weather details
             data = data[0]
             self.weather_data = {
                 "temp": round(data["Temperature"]["Metric"]["Value"]),
@@ -94,7 +87,6 @@ class weather_handler():
                 json.dump({"timestamp": datetime.now().isoformat(), "weather_data": self.weather_data}, file)
                 self.Frame.send_log_message("Weather data cached successfully.", logging.info)
 
-            # Fetch the weather icon
             self.fetch_weather_icon(icon_type=self.weather_data['icon'])
         except requests.exceptions.RequestException as e:
             self.Frame.send_log_message(f"Error fetching weather data: {e}", logging.error)

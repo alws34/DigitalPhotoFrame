@@ -57,29 +57,3 @@ def PixelDissolveEffect(img1, img2, duration=30.0, block_size=10):
         # Stop when the transition is complete
         if elapsed_time >= duration:
             break
-
-# Example usage
-def main():
-    # Load the images
-    img1 = cv2.imread('images/image1.jpg')
-    img2 = cv2.imread('images/image2.jpg')
-    
-    # Resize images to the same size (e.g., 500x500)
-    img1 = cv2.resize(img1, (500, 500))
-    img2 = cv2.resize(img2, (500, 500))
-    
-    # Create a generator for the PixelDissolveEffect with larger pixel blocks
-    dissolve_effect = PixelDissolveEffect(img1, img2, duration=5.0, block_size=20)
-    
-    # Display the transition
-    for frame in dissolve_effect:
-        cv2.imshow('Pixel Dissolve Effect', frame)
-        
-        # Exit if 'q' is pressed
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
-
-    cv2.destroyAllWindows()
-
-if __name__ == "__main__":
-    main()

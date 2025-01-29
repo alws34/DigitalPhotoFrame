@@ -360,24 +360,18 @@ class PhotoFrame(iFrame):
         if generator is None:
             return
         try:
-            # Iterate over frames from the generator
             for frame in generator:
                 self.mjpeg_server.update_live_frame(frame)  # Update live frame for streaming
-                # Add time and date to the frame
                 frame = self.add_time_date_to_frame(frame)
                 frame = self.add_weather_to_frame(frame)
 
-                # Convert OpenCV image to PIL ImageTk format
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 image = Image.fromarray(frame_rgb)
                 image_tk = ImageTk.PhotoImage(image)
 
-                # Update the label with the new image
                 self.label.config(image=image_tk)
                 self.label.image = image_tk
-                # Update the live frame during the transition
                 
-                # Update the GUI
                 self.root.update_idletasks()
                 self.root.update()
             return AnimationStatus.ANIMATION_FINISHED
@@ -386,17 +380,11 @@ class PhotoFrame(iFrame):
             return AnimationStatus.ANIMATION_ERROR
 
     def start_image_transition(self, image1_path=None, image2_path=None, duration=5):
-        """
-        Start the image transition inside a Tkinter frame.
-        """
-        # Ensure the current image is set
         if self.current_image is None:
-            # First run or no current image, get a random image
             self.current_image = cv2.imread(self.get_random_image())
             self.current_image = self.image_handler.resize_image_with_background(
                 self.current_image, self.screen_width, self.screen_height)
 
-        # Select a new image for image2
         if image2_path is None:
             image2_path = self.get_random_image()
 
@@ -404,56 +392,42 @@ class PhotoFrame(iFrame):
         self.next_image = self.image_handler.resize_image_with_background(
             self.next_image, self.screen_width, self.screen_height)
 
-        # Create the generator using the current effect
         effect_function = self.effects[self.get_random_effect()]
         gen = effect_function(self.current_image, self.next_image, duration)
 
-        # Reuse the existing label, or create it if it doesn't exist
         if self.label is None:
             self.label = tk.Label(self.frame)
             self.label.pack()
 
-        # Start updating the frame using the generator
         self.status = self.update_frame(gen)
 
-        # Update the live frame during the transition
-        #for frame in gen:
-        self.mjpeg_server.update_live_frame(frame)  # Update live frame for streaming
+        self.mjpeg_server.update_live_frame(frame)
 
         if self.status == AnimationStatus.ANIMATION_FINISHED:
             self.current_image = self.next_image
-            # Update the current image to image2 after the transition completes
             return AnimationStatus.ANIMATION_FINISHED
 
     def run_photoframe(self):
         while self.is_running:
-            # Start the transition with a random image pair
             self.start_image_transition(duration=self.settings["animation_duration"])
-            # Display the current image with time and date during the wait time
             self.display_image_with_time(
                 self.current_image, self.wait_time)
             time.sleep(1)
 
     def set_window_properties(self):
-        # Create the Tkinter root window and frame
         self.root = tk.Tk()
         self.root.title("Digital Photo Frame V2.0")
-
-        # Make the window full-screen and borderless
         self.root.geometry(f"{self.root.winfo_screenwidth()}x{self.root.winfo_screenheight()}+0+0")
         self.root.attributes("-fullscreen", True)
-        self.root.wm_attributes("-topmost", True)  # Ensure it's always on top
+        self.root.wm_attributes("-topmost", True)
         self.root.configure(bg='black')
 
-        # Hide the mouse cursor
         self.root.config(cursor="none")
         self.root.option_add('*Cursor', 'none')
 
-        # Get screen dimensions
         self.screen_width = self.root.winfo_screenwidth()
         self.screen_height = self.root.winfo_screenheight()
 
-        # Create a full-screen frame
         self.frame = tk.Frame(
             self.root, width=self.screen_width, height=self.screen_height, bg='black')
         self.frame.pack(fill="both", expand=True)

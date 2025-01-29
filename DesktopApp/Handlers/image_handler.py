@@ -6,13 +6,9 @@ class Image_Utils():
         self.settings = settings
 
     def resize_image(self, image, target_width, target_height):
-        # Get the original dimensions of the image
         original_height, original_width = image.shape[:2]
-
-        # Calculate the aspect ratio of the image
         aspect_ratio = original_width / original_height
 
-        # Calculate new dimensions to maintain the aspect ratio
         if target_width / target_height > aspect_ratio:
             new_height = target_height
             new_width = int(new_height * aspect_ratio)
@@ -20,7 +16,6 @@ class Image_Utils():
             new_width = target_width
             new_height = int(new_width / aspect_ratio)
 
-        # Resize the image
         resized_image = cv2.resize(image, (new_width, new_height))
 
         # Create a black background with target dimensions
