@@ -14,6 +14,7 @@ import numpy as np
 from abc import ABC, abstractmethod
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+import psutil 
 
 from Handlers.image_handler import Image_Utils
 from Handlers.mjpeg_server import mjpeg_server
@@ -109,8 +110,24 @@ class PhotoFrame(iFrame):
         
         self.notification_manager = None
         
-# region Utils
+        self.triple_tap_count = 0  # Counter for triple tap detection
+        self.last_tap_time = 0
+       
+        # Cached system stats and update time
+        self.cached_stats = ""
+        self.last_stats_update = 0
 
+        # Start background thread to update stats every second
+        self.stats_thread = threading.Thread(target=self.update_stats_loop, daemon=True)
+        self.stats_thread.start()
+        
+# region Utils
+    def update_stats_loop(self):
+        """Runs in a separate thread to update system stats every second."""
+        while self.is_running:
+            self.cached_stats = self.get_system_stats()
+            time.sleep(1)
+            
     def send_log_message(self, msg, logger: logging):
         logger(msg)
         
@@ -232,6 +249,14 @@ class PhotoFrame(iFrame):
         # Add weather to the frame
         frame = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
         return self.add_weather_to_frame(frame)
+   
+    def add_text_to_frame(self, frame):
+        frame = self.add_time_date_to_frame(frame)
+        frame = self.add_weather_to_frame(frame)
+        frame = self.add_stats_to_frame(frame)
+        
+        return frame
+    
     
     def display_image_with_time(self, image, duration):
         """
@@ -250,8 +275,7 @@ class PhotoFrame(iFrame):
                 frame = image.copy()
                 self.mjpeg_server.update_live_frame(frame)
                 # Add time, date, and weather to the frame
-                frame = self.add_time_date_to_frame(frame)
-                frame = self.add_weather_to_frame(frame)
+                frame = self.add_text_to_frame(frame)
                 # Convert OpenCV image to PIL ImageTk format
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 image_pil = Image.fromarray(frame_rgb)
@@ -359,6 +383,79 @@ class PhotoFrame(iFrame):
         self.root.destroy()
 # endregion Events
 
+#region stats
+    def handle_triple_tap(self, event):
+        """Handles triple tap to toggle stats display."""
+        current_time = time.time()
+        if current_time - self.last_tap_time < 1.5:  # Time window for triple-tap
+            self.triple_tap_count += 1
+        else:
+            self.triple_tap_count = 1  # Reset if too much time has passed
+
+        self.last_tap_time = current_time
+
+        if self.triple_tap_count == 3:  # Toggle stats on third tap
+            self.settings["stats"]["show"] = not self.settings["stats"]["show"]
+            self.triple_tap_count = 0  # Reset counter
+            logging.info(f"Stats display toggled to {self.settings['stats']['show']}")
+
+            # Save the updated settings
+            with open("settings.json", "w") as file:
+                json.dump(self.settings, file, indent=4)
+
+    def get_system_stats(self):
+        """Retrieves system stats (CPU usage, RAM usage, CPU temperature)."""
+        cpu_usage = psutil.cpu_percent()
+
+        # Get RAM usage
+        ram = psutil.virtual_memory()
+        ram_used = ram.used // (1024 * 1024)  # Convert to MB
+        ram_total = ram.total // (1024 * 1024)  # Convert to MB
+        ram_percent = ram.percent  # Get RAM usage percentage
+
+        # Get CPU temperature correctly
+        try:
+            cpu_temps = psutil.sensors_temperatures().get("cpu_thermal", [])
+            cpu_temp = round(cpu_temps[0].current, 1) if cpu_temps else "N/A"
+        except (IndexError, AttributeError):
+            cpu_temp = "N/A"
+
+        return f"CPU: {cpu_usage}%\nRAM: {ram_percent}% ({ram_used}/{ram_total}MB)\nCPU Temp: {cpu_temp}°C"
+
+    def add_stats_to_frame(self, frame):
+        """Adds cached system stats to the image if enabled."""
+        if not self.settings["stats"]["show"]:
+            return frame  # Skip if stats are disabled
+
+        font_path = self.settings['font_name']
+        font_size = self.settings['stats']['font_size']
+        font_color = self.settings['stats']['font_color']
+
+        color_map = {
+            "yellow": (255, 255, 0),
+            "white": (255, 255, 255),
+            "red": (255, 0, 0),
+            "green": (0, 255, 0),
+            "blue": (0, 0, 255)
+        }
+        font_color = color_map.get(font_color.lower(), (255, 255, 0))
+
+        stats_font = ImageFont.truetype(font_path, font_size)
+
+        # Use cached stats (updated once per second)
+        stats_text = self.cached_stats
+
+        pil_image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        draw = ImageDraw.Draw(pil_image)
+
+        draw.text((10, 10), stats_text, font=stats_font, fill=font_color)
+
+        return cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+
+
+#endregion stats
+
+
 # region Main
     def update_frame(self, generator):
         """
@@ -374,8 +471,7 @@ class PhotoFrame(iFrame):
             for frame in generator:
                 self.mjpeg_server.update_live_frame(frame)  # Update live frame for streaming
                 # Add time and date to the frame
-                frame = self.add_time_date_to_frame(frame)
-                frame = self.add_weather_to_frame(frame)
+                frame = self.add_text_to_frame(frame)
 
                 # Convert OpenCV image to PIL ImageTk format
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -469,7 +565,9 @@ class PhotoFrame(iFrame):
         self.frame.pack(fill="both", expand=True)
 
         self.notification_manager = NotificationManager(self.root)
-
+        
+        self.root.bind("<Button-1>", self.handle_triple_tap)  # Bind tap event to toggle stats display  
+        
         # Bind the close event (Alt+F4)
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
 

@@ -1,13 +1,13 @@
 {
     "font_name": "arial.ttf",
-    "time_font_size": 60,
-    "date_font_size": 30,
+    "time_font_size": 80,
+    "date_font_size": 50,
     "margin_left": 80,
     "margin_bottom": 50,
     "margin_right": 50,
     "spacing_between": 50,
     "animation_duration": 10,
-    "delay_between_images": 30,
+    "delay_between_images": 45,
     "allow_translucent_background": true,
     "weather_api_key": "",
     "location_key": "",
@@ -15,5 +15,10 @@
         "allow_mjpeg_server": true,
         "server_port": 5001,
         "host": "0.0.0.0"
+    },
+    "stats": {
+        "show": true,
+        "font_size": 20,
+        "font_color": "yellow"
     }
 }
