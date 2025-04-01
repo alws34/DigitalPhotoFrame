@@ -15,7 +15,9 @@ from abc import ABC, abstractmethod
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import psutil 
-
+import hashlib
+import datetime
+from ManagerBackend import ManagerBackend
 from Handlers.image_handler import Image_Utils
 from Handlers.mjpeg_server import mjpeg_server
 from Handlers.weather_handler import weather_handler
@@ -104,7 +106,9 @@ class PhotoFrame(iFrame):
         self.Observer = ImagesObserver(frame = self) 
         self.weather_handler = weather_handler(frame = self, settings = self.settings)
  
-        
+        self.manager_backend = ManagerBackend() 
+        self.manager_backend.start()
+
         #self.weather_handler.fetch_weather_data()
         self.weather_handler.initialize_weather_updates()
         self.Observer.start_observer()
@@ -119,16 +123,60 @@ class PhotoFrame(iFrame):
         self.last_stats_update = 0
 
         # Start background thread to update stats every second
-        self.stats_thread = threading.Thread(target=self.update_stats_loop, daemon=True)
-        self.stats_thread.start()
+        #self.stats_thread = threading.Thread(target=self.update_stats_loop, daemon=True)
+        #self.stats_thread.start()
         
+
+# region guestbook
+    def update_image_metadata(self, image_path):
+        image_hash = self.compute_image_hash(image_path)
+        db_file = "image_db.json"
+        try:
+            if os.path.exists(db_file):
+                with open(db_file, "r") as f:
+                    data = json.load(f)
+            else:
+                data = {}
+
+            # If the image already exists, do not update date_added.
+            if image_hash in data:
+                metadata = data[image_hash]
+            else:
+                metadata = {
+                    "hash": image_hash,
+                    "uploader": "unknown",
+                    "date_added": datetime.datetime.now().isoformat(),
+                    "caption": ""
+                }
+
+            # Save updated data back to DB
+            data[image_hash] = metadata
+            with open(db_file, "w") as f:
+                json.dump(data, f, indent=4)
+
+        except Exception as e:
+            self.logger.error(f"Error updating image DB: {e}")
+
+        # Broadcast the final metadata to ManagerBackend
+        if hasattr(self, "manager_backend"):
+            self.manager_backend.update_metadata(metadata)
+        
+# endregion guestbook
+
 # region Utils
-    def update_stats_loop(self):
-        """Runs in a separate thread to update system stats every second."""
-        while self.is_running:
-            self.cached_stats = self.get_system_stats()
-            time.sleep(1)
-            
+    def compute_image_hash(self, image_path):
+        hash_md5 = hashlib.md5()
+        with open(image_path, "rb") as f:
+            for chunk in iter(lambda: f.read(4096), b""):
+                hash_md5.update(chunk)
+        return hash_md5.hexdigest()
+        def update_stats_loop(self):
+            """Runs in a separate thread to update system stats every second."""
+            while self.is_running:
+                self.cached_stats = self.get_system_stats()
+                time.sleep(1)
+
+        
     def send_log_message(self, msg, logger: logging):
         logger(msg)
         
@@ -496,35 +544,23 @@ class PhotoFrame(iFrame):
         """
         Start the image transition inside a Tkinter frame.
         """
-        # Ensure the current image is set
         if self.current_image is None:
-            # First run or no current image, get a random image
             self.current_image = cv2.imread(self.get_random_image())
             self.current_image = self.image_handler.resize_image_with_background(
                 self.current_image, self.screen_width, self.screen_height)
 
-        # Select a new image for image2
         if image2_path is None:
             image2_path = self.get_random_image()
+
+        self.update_image_metadata(image2_path)
 
         self.next_image = cv2.imread(image2_path)
         self.next_image = self.image_handler.resize_image_with_background(
             self.next_image, self.screen_width, self.screen_height)
 
-        # Create the generator using the current effect
         effect_function = self.effects[self.get_random_effect()]
         gen = effect_function(self.current_image, self.next_image, duration)
-
-        # Reuse the existing label, or create it if it doesn't exist
-        # if self.label is None:
-        #     self.label = tk.Label(self.frame)
-        #     self.label.pack()
-
-        # Start updating the frame using the generator
         self.status = self.update_frame(gen)
-
-        # Update the live frame during the transition
-        #for frame in gen:
         self.mjpeg_server.update_live_frame(frame)  # Update live frame for streaming
 
         if self.status == AnimationStatus.ANIMATION_FINISHED:

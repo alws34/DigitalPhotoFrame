@@ -8,7 +8,8 @@ import io
 import zipfile
 import platform
 from PIL import Image
-
+import threading
+from flask_cors import CORS 
 
 if platform.system() == "Linux":
     try:
@@ -322,5 +323,65 @@ def convert_heic_to_jpeg(heic_path, output_path):
         image.save(output_path, format="JPEG")  
     return 
 
-if __name__ == '__main__':
-    app.run(debug=False, host='0.0.0.0')
+# if __name__ == '__main__':
+#     app.run(debug=False, host='0.0.0.0')
+
+
+
+class ManagerBackend:
+    def __init__(self, port=5002):
+        self.app = Flask("ManagerBackend")
+        CORS(self.app)  # Enable CORS for all routes
+        self.latest_metadata = {}
+        self.port = port
+        self.setup_routes()
+
+    def setup_routes(self):
+        @self.app.route('/image_metadata')
+        def image_metadata():
+            return jsonify(self.latest_metadata)
+
+        @self.app.route('/update_metadata', methods=['POST'])
+        def update_metadata_endpoint():
+            data = request.get_json()
+            if not data:
+                return jsonify({'error': 'Invalid JSON'}), 400
+            # Only update editable fields: uploader and caption
+            uploader = data.get('uploader', '')
+            caption = data.get('caption', '')
+            self.latest_metadata['uploader'] = uploader
+            self.latest_metadata['caption'] = caption
+
+            # Update the JSON DB
+            db_file = "image_db.json"
+            try:
+                if os.path.exists(db_file):
+                    with open(db_file, "r") as f:
+                        data_db = json.load(f)
+                else:
+                    data_db = {}
+                image_hash = self.latest_metadata.get("hash")
+                if image_hash:
+                    data_db[image_hash] = self.latest_metadata
+                    with open(db_file, "w") as f:
+                        json.dump(data_db, f, indent=4)
+            except Exception as e:
+                return jsonify({'error': 'Failed to update DB', 'details': str(e)}), 500
+            return jsonify({'message': 'Metadata updated successfully.'}), 200
+
+    def update_metadata(self, metadata):
+        self.latest_metadata = metadata
+
+    def start(self):
+        # Start the Flask app in a background thread
+        threading.Thread(
+            target=lambda: self.app.run(host="0.0.0.0", port=self.port, debug=False, use_reloader=False),
+            daemon=True
+        ).start()
+
+if __name__ == "__main__":
+    backend = ManagerBackend()
+    backend.start()
+    import time
+    while True:
+        time.sleep(10)

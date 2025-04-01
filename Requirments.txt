@@ -8,3 +8,4 @@ requests
 paho.mqtt
 pyheif
 psutil
+flask_cors
