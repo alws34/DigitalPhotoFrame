@@ -6,8 +6,18 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from pathlib import Path
 import io
 import zipfile
-import pyheif
+import platform
 from PIL import Image
+
+
+if platform.system() == "Linux":
+    try:
+        import pyheif
+        has_pyheif = True
+    except ImportError:
+        has_pyheif = False
+else:
+    has_pyheif = False
 
 app = Flask(__name__)
 app.secret_key = 'supersecretkey'  # Needed for session management and flash messages
@@ -303,12 +313,14 @@ def clear_logs():
         return jsonify({"error": str(e)}), 500
 
 def convert_heic_to_jpeg(heic_path, output_path):
-    heif_file = pyheif.read(heic_path)
-    image = Image.frombytes(
-        heif_file.mode, heif_file.size, heif_file.data,
-        "raw", heif_file.mode, heif_file.stride,
-    )
-    image.save(output_path, format="JPEG")  
-    
+    if has_pyheif:
+        heif_file = pyheif.read(heic_path)
+        image = Image.frombytes(
+            heif_file.mode, heif_file.size, heif_file.data,
+            "raw", heif_file.mode, heif_file.stride,
+        )
+        image.save(output_path, format="JPEG")  
+    return 
+
 if __name__ == '__main__':
     app.run(debug=False, host='0.0.0.0')

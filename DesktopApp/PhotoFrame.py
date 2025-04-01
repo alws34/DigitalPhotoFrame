@@ -20,7 +20,7 @@ from Handlers.image_handler import Image_Utils
 from Handlers.mjpeg_server import mjpeg_server
 from Handlers.weather_handler import weather_handler
 from Handlers.observer import ImagesObserver
-from DesktopApp.iFrame import iFrame
+from iFrame import iFrame
 # region Importing Effects
 from Effects.CheckerboardEffect import CheckerboardEffect
 from Effects.AlphaDissolveEffect import AlphaDissolveEffect
@@ -74,8 +74,9 @@ class PhotoFrame(iFrame):
             logging.error("settings.json not found. Exiting.")
             raise
 
-        if not os.path.exists('Images'):
-            os.mkdir('Images')
+        self.images_dir_full_path = self.settings["images_dir_full_path"]
+        if not os.path.exists(self.images_dir_full_path):
+            os.mkdir(self.images_dir_full_path)
             logging.warning("'Images' directory not found. Created a new one.")
             return
         
@@ -156,7 +157,7 @@ class PhotoFrame(iFrame):
             # 14: PlainEffect
         }
 
-    def get_images_from_directory(self, directory_path="../Images/"):
+    def get_images_from_directory(self):
         """Gets all image files (as paths) from a given directory.
 
         Args:
@@ -169,7 +170,7 @@ class PhotoFrame(iFrame):
                             ".gif"]  # Add more extensions if needed
         image_paths = []
 
-        for root, dirs, files in os.walk(directory_path):
+        for root, dirs, files in os.walk(self.images_dir_full_path):
             for file in files:
                 if file.lower().endswith(tuple(image_extensions)):
                     image_path = os.path.join(root, file)
@@ -277,20 +278,20 @@ class PhotoFrame(iFrame):
                 # Add time, date, and weather to the frame
                 frame = self.add_text_to_frame(frame)
                 # Convert OpenCV image to PIL ImageTk format
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                image_pil = Image.fromarray(frame_rgb)
-                image_tk = ImageTk.PhotoImage(image_pil)
+                # frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                # image_pil = Image.fromarray(frame_rgb)
+                # image_tk = ImageTk.PhotoImage(image_pil)
 
-                # Update the label with the new image
-                self.label.config(image=image_tk)
-                self.label.image = image_tk
+                # # Update the label with the new image
+                # self.label.config(image=image_tk)
+                # self.label.image = image_tk
 
                 # Log successful frame update
                 #logging.debug("Updated frame displayed.")
 
                 # Update the GUI
-                self.root.update_idletasks()
-                self.root.update()
+                # self.root.update_idletasks()
+                # self.root.update()
 
             except Exception as e:
                 logging.error(f"Error during image display: {e}", exc_info=True)
@@ -474,18 +475,18 @@ class PhotoFrame(iFrame):
                 frame = self.add_text_to_frame(frame)
 
                 # Convert OpenCV image to PIL ImageTk format
-                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                image = Image.fromarray(frame_rgb)
-                image_tk = ImageTk.PhotoImage(image)
+                #frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                #image = Image.fromarray(frame_rgb)
+                #image_tk = ImageTk.PhotoImage(image)
 
                 # Update the label with the new image
-                self.label.config(image=image_tk)
-                self.label.image = image_tk
+                # self.label.config(image=image_tk)
+                # self.label.image = image_tk
                 # Update the live frame during the transition
                 
                 # Update the GUI
-                self.root.update_idletasks()
-                self.root.update()
+                # self.root.update_idletasks()
+                # self.root.update()
             return AnimationStatus.ANIMATION_FINISHED
         except Exception as e:
             print(f"Error during frame update: {e}")
@@ -515,9 +516,9 @@ class PhotoFrame(iFrame):
         gen = effect_function(self.current_image, self.next_image, duration)
 
         # Reuse the existing label, or create it if it doesn't exist
-        if self.label is None:
-            self.label = tk.Label(self.frame)
-            self.label.pack()
+        # if self.label is None:
+        #     self.label = tk.Label(self.frame)
+        #     self.label.pack()
 
         # Start updating the frame using the generator
         self.status = self.update_frame(gen)
@@ -595,13 +596,13 @@ class PhotoFrame(iFrame):
         transition_thread = threading.Thread(target=self.run_photoframe)
         transition_thread.start()
 
-        try:
-            # Start the Tkinter main loop
-            logging.info("Entering Tkinter main loop.")
-            self.root.mainloop()
-        except KeyboardInterrupt:
-            logging.warning("Keyboard interrupt received. Exiting application...")
-            self.on_closing()
+        # try:
+        #     # Start the Tkinter main loop
+        #     #logging.info("Entering Tkinter main loop.")
+        #     #self.root.mainloop()
+        # except KeyboardInterrupt:
+        #     logging.warning("Keyboard interrupt received. Exiting application...")
+        #     self.on_closing()
 
 # endregion Main
 

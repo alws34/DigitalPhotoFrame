@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 import logging
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
-from DesktopApp.iFrame import iFrame
+from iFrame import iFrame
 import os
 
 class iBoserver(ABC):

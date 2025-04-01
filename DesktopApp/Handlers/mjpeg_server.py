@@ -4,10 +4,10 @@ import time
 import threading
 from cv2 import imencode
 from numpy import ndarray, uint8
-
+from iFrame import iFrame
 
 class mjpeg_server():
-    from DesktopApp.iFrame import iFrame
+
     def __init__(self, frame:iFrame ):
         self.Frame = frame 
         self.is_running = True
@@ -60,9 +60,9 @@ class mjpeg_server():
                             - server_port (int)
                             - host (str)
         """
-        if not settings.get("allow_mjpeg_server", False):
-            self.Frame.send_log_message("MJPEG server is disabled in settings.",logging.info)
-            return
+        # if not settings.get("allow_mjpeg_server", False):
+        #     self.Frame.send_log_message("MJPEG server is disabled in settings.",logging.info)
+        #     return
 
         app = Flask(__name__)
 

@@ -1,5 +1,6 @@
 {
     "font_name": "arial.ttf",
+    "images_dir_full_path": ".\\Images",
     "time_font_size": 80,
     "date_font_size": 50,
     "margin_left": 80,
@@ -12,7 +13,6 @@
     "weather_api_key": "",
     "location_key": "",
     "mjpeg_server":{
-        "allow_mjpeg_server": true,
         "server_port": 5001,
         "host": "0.0.0.0"
     },

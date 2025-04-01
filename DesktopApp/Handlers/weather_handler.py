@@ -5,9 +5,10 @@ from datetime import datetime, timedelta
 import threading
 from PIL import Image
 import requests
+from iFrame import iFrame
 
 class weather_handler():
-    from DesktopApp.iFrame import iFrame
+
     def __init__(self, frame: iFrame, settings: dict):
         self.Frame = frame
         self.weather_data = {}
