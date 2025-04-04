@@ -1,4 +1,4 @@
-<script>
+
 function logout() {
   window.location.href = "/logout";
 }
@@ -160,4 +160,3 @@ fetch("/live_feed").then((response) => {
 
   readChunk();
 });
-</script>
