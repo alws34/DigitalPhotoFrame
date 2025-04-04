@@ -97,16 +97,15 @@ class PhotoFrame(iFrame):
         self.screen_height = None
         self.current_image = None
         self.next_image = None
-
+        self.frame_to_stream = None
         self.wait_time = self.settings["delay_between_images"]
         self.is_running = True
         
         self.image_handler = Image_Utils(settings = self.settings)
-        self.mjpeg_server = mjpeg_server(frame = self)
         self.Observer = ImagesObserver(frame = self) 
         self.weather_handler = weather_handler(frame = self, settings = self.settings)
  
-        self.manager_backend = ManagerBackend() 
+        self.manager_backend = ManagerBackend(frame = self, settings=self.settings["backend_configs"]) 
         self.manager_backend.start()
 
         #self.weather_handler.fetch_weather_data()
@@ -129,54 +128,45 @@ class PhotoFrame(iFrame):
 
 # region guestbook
     def update_image_metadata(self, image_path):
-        image_hash = self.compute_image_hash(image_path)
-        db_file = "image_db.json"
-        try:
-            if os.path.exists(db_file):
-                with open(db_file, "r") as f:
-                    data = json.load(f)
-            else:
-                data = {}
-
-            # If the image already exists, do not update date_added.
-            if image_hash in data:
-                metadata = data[image_hash]
-            else:
-                metadata = {
-                    "hash": image_hash,
-                    "uploader": "unknown",
-                    "date_added": datetime.datetime.now().isoformat(),
-                    "caption": ""
-                }
-
-            # Save updated data back to DB
-            data[image_hash] = metadata
-            with open(db_file, "w") as f:
-                json.dump(data, f, indent=4)
-
-        except Exception as e:
-            self.logger.error(f"Error updating image DB: {e}")
-
-        # Broadcast the final metadata to ManagerBackend
+        # Use ManagerBackend's absolute metadata file and store_image_metadata method.
         if hasattr(self, "manager_backend"):
-            self.manager_backend.update_metadata(metadata)
-        
+            # This will create metadata only if it doesn't already exist.
+            self.manager_backend.update_image_metadata(image_path)
+            # Load the updated metadata and update the current metadata for polling.
+            metadata_db = self.manager_backend.load_metadata_db()
+            file_hash = self.manager_backend.compute_image_hash(image_path)
+            if file_hash in metadata_db:
+                self.manager_backend.update_current_metadata(metadata_db[file_hash])
+
+                
 # endregion guestbook
+
+#region Stream
+    def update_frame_to_stream(self, frame):
+        self.frame_to_stream = frame
+
+    def get_live_frame(self):
+        return self.frame_to_stream
+    
+#endregion Stream
 
 # region Utils
     def compute_image_hash(self, image_path):
-        hash_md5 = hashlib.md5()
+        hash_obj = hashlib.sha256()
         with open(image_path, "rb") as f:
             for chunk in iter(lambda: f.read(4096), b""):
-                hash_md5.update(chunk)
-        return hash_md5.hexdigest()
-        def update_stats_loop(self):
-            """Runs in a separate thread to update system stats every second."""
-            while self.is_running:
-                self.cached_stats = self.get_system_stats()
-                time.sleep(1)
+                hash_obj.update(chunk)
+        return hash_obj.hexdigest()
 
-        
+    def update_stats_loop(self):
+        """Runs in a separate thread to update system stats every second."""
+        while self.is_running:
+            self.cached_stats = self.get_system_stats()
+            time.sleep(1)
+
+    def get_is_running(self):
+        return self.is_running
+    
     def send_log_message(self, msg, logger: logging):
         logger(msg)
         
@@ -305,8 +295,8 @@ class PhotoFrame(iFrame):
         frame = self.add_stats_to_frame(frame)
         
         return frame
-    
-    
+
+
     def display_image_with_time(self, image, duration):
         """
         Displays the image and updates the time and date labels during the specified duration.
@@ -315,16 +305,14 @@ class PhotoFrame(iFrame):
             image: The image to display.
             duration: The duration to display the image in seconds.
         """
-        #logging.info("Starting to display image with time and weather.")
         start_time = time.time()
 
         while time.time() - start_time < duration and self.is_running:
             try:
-                # Copy the image to avoid modifying the original
                 frame = image.copy()
-                self.mjpeg_server.update_live_frame(frame)
+                self.update_frame_to_stream(frame)
                 # Add time, date, and weather to the frame
-                frame = self.add_text_to_frame(frame)
+                #frame = self.add_text_to_frame(frame)
                 # Convert OpenCV image to PIL ImageTk format
                 # frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 # image_pil = Image.fromarray(frame_rgb)
@@ -518,9 +506,9 @@ class PhotoFrame(iFrame):
         try:
             # Iterate over frames from the generator
             for frame in generator:
-                self.mjpeg_server.update_live_frame(frame)  # Update live frame for streaming
+                self.update_frame_to_stream(frame)
                 # Add time and date to the frame
-                frame = self.add_text_to_frame(frame)
+                #frame = self.add_text_to_frame(frame)
 
                 # Convert OpenCV image to PIL ImageTk format
                 #frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -561,7 +549,7 @@ class PhotoFrame(iFrame):
         effect_function = self.effects[self.get_random_effect()]
         gen = effect_function(self.current_image, self.next_image, duration)
         self.status = self.update_frame(gen)
-        self.mjpeg_server.update_live_frame(frame)  # Update live frame for streaming
+        self.update_frame_to_stream(frame)
 
         if self.status == AnimationStatus.ANIMATION_FINISHED:
             self.current_image = self.next_image
@@ -623,9 +611,6 @@ class PhotoFrame(iFrame):
         logging.info("Starting main application...")
         self.shuffle_images()
         self.set_window_properties()
-
-        # Start the MJPEG server
-        self.mjpeg_server.start_mjpeg_server(settings = self.settings["mjpeg_server"])
 
         # Start the transition thread
         logging.info("Starting transition thread...")

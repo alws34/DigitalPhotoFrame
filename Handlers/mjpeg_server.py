@@ -60,10 +60,6 @@ class mjpeg_server():
                             - server_port (int)
                             - host (str)
         """
-        # if not settings.get("allow_mjpeg_server", False):
-        #     self.Frame.send_log_message("MJPEG server is disabled in settings.",logging.info)
-        #     return
-
         app = Flask(__name__)
 
         @app.route('/video_feed')
