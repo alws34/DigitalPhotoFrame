@@ -13,3 +13,7 @@ class iFrame(ABC):
     @abstractmethod
     def get_is_running(self):
         pass
+
+    @abstractmethod
+    def update_images_list(self):
+        pass

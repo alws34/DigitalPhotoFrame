@@ -1,4 +1,3 @@
-
 function logout() {
   window.location.href = "/logout";
 }
@@ -16,9 +15,7 @@ function fetchLogs() {
   fetch("/logs")
     .then((res) => res.json())
     .then((data) => {
-      document.getElementById("logText").value = (data.logs || []).join(
-        "\n"
-      );
+      document.getElementById("logText").value = (data.logs || []).join("\n");
     });
 }
 
@@ -37,11 +34,11 @@ function clearLogs() {
 
 function toggleSettings() {
   const panel = document.getElementById("bottom-scrollable");
-  panel.style.display =
-    panel.style.display === "none" || panel.style.display === ""
-      ? "flex"
-      : "none";
+  const isHidden = panel.style.display === "none" || panel.style.display === "";
+  panel.style.display = isHidden ? "flex" : "none";
 }
+
+
 
 function openAppSettingsModal() {
   document.getElementById("appSettingsModal").style.display = "block";
@@ -160,3 +157,147 @@ fetch("/live_feed").then((response) => {
 
   readChunk();
 });
+function openUploadModal() {
+  document.getElementById("uploadModal").style.display = "block";
+}
+
+function closeUploadModal() {
+  document.getElementById("uploadModal").style.display = "none";
+}
+
+function handleDrop(event) {
+  event.preventDefault();
+  const files = event.dataTransfer.files;
+  document.getElementById("fileInput").files = files;
+  previewFiles();
+}
+
+function previewFiles() {
+  const container = document.getElementById("previewContainer");
+  container.innerHTML = "";
+  const files = document.getElementById("fileInput").files;
+
+  for (let i = 0; i < files.length; i++) {
+    const reader = new FileReader();
+    reader.onload = function (e) {
+      const div = document.createElement("div");
+      div.classList.add("image-preview");
+      div.innerHTML = `
+        <img src="${e.target.result}" style="max-width: 300px; max-height: 300px;" />
+        <table>
+          <tr><td>Uploader:</td><td><input name="uploader_${i}" required></td></tr>
+          <tr><td>Caption:</td><td><input name="caption_${i}" required></td></tr>
+        </table>
+      `;
+      container.appendChild(div);
+    };
+    reader.readAsDataURL(files[i]);
+  }
+}
+
+window.addEventListener("DOMContentLoaded", () => {
+  console.log("✅ DOM is ready");
+
+  const form = document.getElementById("uploadForm");
+  if (!form) {
+    console.error("❌ uploadForm not found in DOM");
+    return;
+  }
+
+  form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    console.log("✅ Intercepted form submission");
+
+    const files = document.getElementById("fileInput").files;
+    const previews = document.querySelectorAll("#previewContainer .image-preview");
+
+    if (!files.length) {
+      alert("No files selected.");
+      return;
+    }
+
+    const formData = new FormData();
+    for (let i = 0; i < previews.length; i++) {
+      const file = files[i];
+      const preview = previews[i];
+
+      const uploader = preview.querySelector(`input[name="uploader_${i}"]`);
+      const caption = preview.querySelector(`input[name="caption_${i}"]`);
+
+      if (!uploader || !caption || !uploader.value || !caption.value) {
+        alert(`Missing uploader or caption for image ${i + 1}`);
+        return;
+      }
+
+      formData.append("file[]", file);
+      formData.append(`uploader_${i}`, uploader.value);
+      formData.append(`caption_${i}`, caption.value);
+    }
+
+    fetch("/upload_with_metadata", {
+      method: "POST",
+      body: formData,
+    })
+      .then((res) => res.json())
+      .then((data) => {
+        console.log(data);
+        alert("Upload successful!");
+        closeUploadModal();
+        location.reload();
+      })
+      .catch((err) => {
+        alert("Upload failed.");
+        console.error(err);
+      });
+  });
+});
+
+document.getElementById("fileInput").addEventListener("change", function () {
+  document.getElementById("previewContainer").innerHTML = "";
+  handleFiles(this.files);
+});
+
+
+function handleFiles(fileList) {
+  const container = document.getElementById("previewContainer");
+  for (let i = 0; i < fileList.length; i++) {
+    const file = fileList[i];
+    const index = i;
+    const reader = new FileReader();
+
+    reader.onload = function (e) {
+      const imgCard = document.createElement("div");
+      imgCard.classList.add("image-preview"); // Important!
+      imgCard.style.margin = "10px";
+      imgCard.style.textAlign = "center";
+
+      const img = document.createElement("img");
+      img.src = e.target.result;
+      img.width = 300;
+      img.height = 300;
+      img.style.objectFit = "cover";
+
+      const uploader = document.createElement("input");
+      uploader.type = "text";
+      uploader.placeholder = "Uploader Name";
+      uploader.name = `uploader_${index}`;
+      uploader.required = true;
+
+      const caption = document.createElement("input");
+      caption.type = "text";
+      caption.placeholder = "Caption";
+      caption.name = `caption_${index}`;
+      caption.required = true;
+
+      imgCard.appendChild(img);
+      imgCard.appendChild(document.createElement("br"));
+      imgCard.appendChild(uploader);
+      imgCard.appendChild(document.createElement("br"));
+      imgCard.appendChild(caption);
+
+      container.appendChild(imgCard);
+    };
+
+    reader.readAsDataURL(file);
+  }
+}

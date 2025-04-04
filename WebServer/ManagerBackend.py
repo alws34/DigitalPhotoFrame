@@ -1,5 +1,6 @@
 import base64
 import logging
+import shutil
 import time
 import os
 import json
@@ -45,7 +46,8 @@ class ManagerBackend:
         self.METADATA_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), '../metadata.json'))
         self.LOG_FILE_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "PhotoFrame.log"))
         self.Frame = frame 
-    
+        os.makedirs(self.IMAGE_DIR, exist_ok=True)
+
         if not os.path.exists(self.USER_DATA_FILE):
             with open(self.USER_DATA_FILE, 'w') as file:
                 json.dump({}, file)
@@ -174,6 +176,68 @@ class ManagerBackend:
 
 
     def setup_routes(self):
+        @self.app.route('/upload_with_metadata', methods=['POST'])
+        def upload_with_metadata():
+            uploaded_files = request.files.getlist("file[]")
+            if not uploaded_files:
+                return jsonify({"message": "No files uploaded"}), 400
+
+            metadata_db = self.load_metadata_db()
+
+            for idx, file in enumerate(uploaded_files):
+                if file.filename == "":
+                    continue
+
+                original_filename = file.filename
+                ext = os.path.splitext(original_filename)[1].lower()
+
+                if ext not in self.ALLOWED_EXTENSIONS:
+                    continue
+
+                # Read uploader and caption
+                caption = request.form.get(f"caption_{idx}", "").strip()
+                uploader = request.form.get(f"uploader_{idx}", "").strip()
+
+                # Save temporarily to compute hash
+                temp_dir = os.path.join(self.IMAGE_DIR, "_temp")
+                os.makedirs(temp_dir, exist_ok=True)
+                temp_path = os.path.join(temp_dir, original_filename)
+                file.save(temp_path)
+
+                # Compute file hash
+                file_hash = self.compute_image_hash(temp_path)
+
+                # Final destination
+                final_path = os.path.join(self.IMAGE_DIR, original_filename)
+
+                # Move to image directory (overwrite if exists)
+                shutil.move(temp_path, final_path)
+
+                # Convert HEIC/HEIF if needed
+                if ext in ['.heic', '.heif']:
+                    jpeg_path = os.path.splitext(final_path)[0] + ".jpg"
+                    self.convert_heic_to_jpeg(final_path, jpeg_path)
+                    os.remove(final_path)
+                    final_path = jpeg_path
+                    original_filename = os.path.basename(jpeg_path)
+
+                # Save metadata (hash-keyed)
+                metadata = {
+                    "hash": file_hash,
+                    "caption": caption,
+                    "uploader": uploader,
+                    "date_added": datetime.utcnow().isoformat(),
+                    "filename": original_filename
+                }
+
+                metadata_db[file_hash] = metadata
+                self.save_metadata_db(metadata_db)
+                self.Frame.update_images_list()
+                
+            return jsonify({"message": "Upload successful"}), 200
+
+
+
         @self.app.route('/signup', methods=['GET', 'POST'])
         def signup():
             if request.method == 'POST':

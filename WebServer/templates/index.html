@@ -8,16 +8,17 @@
       type="text/css"
       href="{{ url_for('static', filename='styles.css') }}"
     />
-    <script type="text/javascript" src="../static/scripts.js"></script>
-
+    <script type="text/javascript" src="{{ url_for('static', filename='scripts.js') }}"></script>
   </head>
   <body>
     <!-- Top Right Control Panel -->
     <div id="top-right">
       <button onclick="openLogsModal()">Logs</button>
-      <button onclick="toggleSettings()">Settings</button>
+      <button onclick="toggleSettings()">Edit</button>
       <button onclick="openAppSettingsModal()">App Settings</button>
       <button onclick="logout()">Logout</button>
+      <button onclick="openUploadModal()">Upload</button>
+
     </div>
 
     <!-- Main Container -->
@@ -135,6 +136,45 @@
             <button type="button" onclick="closeAppSettingsModal()">
               Cancel
             </button>
+          </div>
+        </form>
+      </div>
+    </div>
+    <!-- Upload Modal -->
+    <div id="uploadModal" class="modal" style="display: none">
+      <div class="modal-content">
+        <span class="close" onclick="closeUploadModal()">&times;</span>
+        <h2>Upload Images</h2>
+
+        <form id="uploadForm" enctype="multipart/form-data">
+          <div
+            id="dropZone"
+            ondrop="handleDrop(event)"
+            ondragover="event.preventDefault()"
+          >
+            <p>Drag & Drop Images Here or Click to Browse</p>
+            <input
+              type="file"
+              id="fileInput"
+              name="file[]"
+              multiple
+              accept="image/*"
+              onchange="previewFiles()"
+              style="display: none"
+            />
+            <button
+              type="button"
+              onclick="document.getElementById('fileInput').click()"
+            >
+              Browse
+            </button>
+          </div>
+
+          <div id="previewContainer"></div>
+
+          <div class="form-actions">
+            <button type="submit">Upload</button>
+            <button type="button" onclick="closeUploadModal()">Cancel</button>
           </div>
         </form>
       </div>

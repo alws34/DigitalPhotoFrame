@@ -147,6 +147,10 @@ class PhotoFrame(iFrame):
         self.cached_stats = ""
         self.last_stats_update = 0        
 
+    def update_images_list(self):
+        self.images = self.get_images_from_directory()
+        self.shuffle_images()
+        
 # region guestbook
     def update_image_metadata(self, image_path):
         # Use ManagerBackend's absolute metadata file and store_image_metadata method.
