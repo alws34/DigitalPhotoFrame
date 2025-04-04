@@ -1,12 +1,5 @@
 {
-    "font_name": "arial.ttf",
     "images_dir_full_path": ".\\Images",
-    "time_font_size": 80,
-    "date_font_size": 50,
-    "margin_left": 80,
-    "margin_bottom": 50,
-    "margin_right": 50,
-    "spacing_between": 50,
     "animation_duration": 10,
     "delay_between_images": 1,
     "allow_translucent_background": true,
@@ -15,10 +8,5 @@
     "backend_configs": {
         "server_port": 5001,
         "host": "0.0.0.0"
-    },
-    "stats": {
-        "show": false,
-        "font_size": 20,
-        "font_color": "yellow"
     }
 }

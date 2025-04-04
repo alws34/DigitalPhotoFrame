@@ -142,7 +142,7 @@ class ManagerBackend:
 
         self.update_current_metadata(entry)
 
-    def generate_frame(self):
+    def stream_frame(self):
         """
         Generator to serve MJPEG frames from the live frame.
         Streams the live frame directly without resizing.
@@ -157,12 +157,15 @@ class ManagerBackend:
                     # Encode the frame as JPEG
                     _, jpeg = imencode('.jpg', frame)
                     frame = jpeg.tobytes()
+                   
                     jpeg_b64 = base64.b64encode(frame).decode('utf-8')
                     metadata = self.latest_metadata
+                    
                     json_payload = json.dumps({
                         "image": jpeg_b64,
                         "metadata": metadata
                     })
+
                     yield json_payload + "\n"
                 time.sleep(1 / 30)  # ~10 FPS
             except Exception as e:
@@ -237,17 +240,14 @@ class ManagerBackend:
         @self.app.route('/live_feed')
         def live_feed():
             if not self.is_authenticated():
-                return redirect(url_for('login'))
+                client_ip = request.remote_addr
+                if not (client_ip.startswith("192.168.") or client_ip == "127.0.0.1"):
+                    return redirect(url_for('login'))
+            
             return Response(
-                stream_with_context(self.generate_frame()),
+                stream_with_context(self.stream_frame()),
                 mimetype='application/json'
             )
-            # # Use our generator instead of returning just one image
-            # return Response(
-            #     self.generate_frame(), 
-            #     mimetype='multipart/x-mixed-replace; boundary=frame'
-            # )
-
 
 
         @self.app.route('/save_settings', methods=['POST'])

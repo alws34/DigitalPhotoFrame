@@ -4,25 +4,22 @@ import json
 import threading
 import time
 import tkinter as tk
-from PIL import Image, ImageTk, ImageDraw, ImageFont
-import requests
+from PIL import Image, ImageDraw, ImageFont
 import cv2
 import random as rand
 import os
 from enum import Enum
 import numpy as np
-from abc import ABC, abstractmethod
 import sys
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import psutil 
 import hashlib
-import datetime
 from ManagerBackend import ManagerBackend
 from Handlers.image_handler import Image_Utils
-from Handlers.mjpeg_server import mjpeg_server
 from Handlers.weather_handler import weather_handler
 from Handlers.observer import ImagesObserver
 from iFrame import iFrame
+
 # region Importing Effects
 from Effects.CheckerboardEffect import CheckerboardEffect
 from Effects.AlphaDissolveEffect import AlphaDissolveEffect
@@ -65,12 +62,42 @@ class AnimationStatus(Enum):
     ANIMATION_FINISHED = 1
     ANIMATION_ERROR = 2
 
+class DynamicSettings:
+    def __init__(self, path):
+        self.path = path
+        self._lock = threading.Lock()
+
+    def _load(self):
+        try:
+            with self._lock:
+                with open(self.path, 'r') as f:
+                    return json.load(f)
+        except Exception as e:
+            logging.warning(f"Could not reload settings from {self.path}: {e}")
+            return {}
+
+    def __getitem__(self, key):
+        data = self._load()
+        return data[key]
+
+    def get(self, key, default=None):
+        data = self._load()
+        return data.get(key, default)
+
+    def save(self, data: dict):
+        with self._lock:
+            with open(self.path, "w") as f:
+                json.dump(data, f, indent=4)
+
+
 class PhotoFrame(iFrame):
     def __init__(self):
         logging.debug("Initializing PhotoFrame...")
         try:
-            with open("settings.json", 'r') as file:
-                self.settings = json.load(file)
+            # with open("settings.json", 'r') as file:
+            #     self.settings = json.load(file)
+            self.settings = DynamicSettings("settings.json")
+
             logging.info("Loaded settings from settings.json.")
         except FileNotFoundError:
             logging.error("settings.json not found. Exiting.")
@@ -98,7 +125,6 @@ class PhotoFrame(iFrame):
         self.current_image = None
         self.next_image = None
         self.frame_to_stream = None
-        self.wait_time = self.settings["delay_between_images"]
         self.is_running = True
         
         self.image_handler = Image_Utils(settings = self.settings)
@@ -119,12 +145,7 @@ class PhotoFrame(iFrame):
        
         # Cached system stats and update time
         self.cached_stats = ""
-        self.last_stats_update = 0
-
-        # Start background thread to update stats every second
-        #self.stats_thread = threading.Thread(target=self.update_stats_loop, daemon=True)
-        #self.stats_thread.start()
-        
+        self.last_stats_update = 0        
 
 # region guestbook
     def update_image_metadata(self, image_path):
@@ -234,187 +255,11 @@ class PhotoFrame(iFrame):
         return self.shuffled_effects[self.current_effect_idx]
 # endregion Utils
 
-# region DateTime
-    def add_time_date_to_frame(self, frame):
-        """
-        Adds the current time, date, and weather to the frame using the settings from the JSON file.
-
-        Args:
-            frame: The image frame to modify.
-
-        Returns:
-            The modified frame with time, date, and weather added.
-        """
-        # Get current time and date
-        current_time = time.strftime("%H:%M:%S")
-        current_date = time.strftime("%d/%m/%y")
-
-        # Load font settings
-        font_path = self.settings['font_name']
-        time_font_size = self.settings['time_font_size']
-        date_font_size = self.settings['date_font_size']
-        margin_left = self.settings['margin_left']
-        margin_bottom = self.settings['margin_bottom']
-        spacing_between = self.settings['spacing_between']
-
-        # Load the fonts
-        time_font = ImageFont.truetype(font_path, time_font_size)
-        date_font = ImageFont.truetype(font_path, date_font_size)
-
-        # Convert frame to PIL Image
-        pil_image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-        draw = ImageDraw.Draw(pil_image)
-
-        # Calculate text sizes
-        time_bbox = draw.textbbox((0, 0), current_time, font=time_font)
-        date_bbox = draw.textbbox((0, 0), current_date, font=date_font)
-
-        time_text_size = (time_bbox[2] - time_bbox[0], time_bbox[3] - time_bbox[1])
-        date_text_size = (date_bbox[2] - date_bbox[0], date_bbox[3] - date_bbox[1])
-
-        # Calculate positions based on settings
-        x_date = margin_left
-        x_time = x_date + (date_text_size[0] - time_text_size[0]) // 2
-        y_date = self.screen_height - margin_bottom
-        y_time = y_date - date_text_size[1] - spacing_between
-
-        # Set font color
-        font_color = (255, 255, 255)  # White color
-
-        # Draw the time and date on the image
-        draw.text((x_time, y_time), current_time, font=time_font, fill=font_color)
-        draw.text((x_date, y_date), current_date, font=date_font, fill=font_color)
-
-        # Add weather to the frame
-        frame = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
-        return self.add_weather_to_frame(frame)
-   
-    def add_text_to_frame(self, frame):
-        frame = self.add_time_date_to_frame(frame)
-        frame = self.add_weather_to_frame(frame)
-        frame = self.add_stats_to_frame(frame)
-        
-        return frame
-
-
-    def display_image_with_time(self, image, duration):
-        """
-        Displays the image and updates the time and date labels during the specified duration.
-
-        Args:
-            image: The image to display.
-            duration: The duration to display the image in seconds.
-        """
-        start_time = time.time()
-
-        while time.time() - start_time < duration and self.is_running:
-            try:
-                frame = image.copy()
-                self.update_frame_to_stream(frame)
-                # Add time, date, and weather to the frame
-                #frame = self.add_text_to_frame(frame)
-                # Convert OpenCV image to PIL ImageTk format
-                # frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                # image_pil = Image.fromarray(frame_rgb)
-                # image_tk = ImageTk.PhotoImage(image_pil)
-
-                # # Update the label with the new image
-                # self.label.config(image=image_tk)
-                # self.label.image = image_tk
-
-                # Log successful frame update
-                #logging.debug("Updated frame displayed.")
-
-                # Update the GUI
-                # self.root.update_idletasks()
-                # self.root.update()
-
-            except Exception as e:
-                logging.error(f"Error during image display: {e}", exc_info=True)
-
-            # Sleep for a short time to update every second
-            time.sleep(1)
-
-        #logging.info("Completed displaying image with time and weather.")
-
-    def add_weather_to_frame(self, frame):
-        """
-        Adds weather information (temperature, description, icon) to the bottom-right of the frame.
-
-        Args:
-            frame: The image frame to modify.
-
-        Returns:
-            The modified frame with weather information added.
-        """
-        if not self.weather_handler.get_weather_data() or not self.weather_handler.get_weather_icon():
-            return frame
-
-        try:
-            # Load font settings
-            font_path = self.settings['font_name']
-            time_font_size = self.settings['time_font_size']  # Same as time font
-            date_font_size = self.settings['date_font_size']  # Same as date font
-            margin_bottom = self.settings['margin_bottom']
-            margin_right = self.settings['margin_right']
-            spacing_between = self.settings['spacing_between']
-            font_color = (255, 255, 255)  # White color
-
-            # Load fonts
-            temperature_font = ImageFont.truetype(font_path, time_font_size)
-            description_font = ImageFont.truetype(font_path, date_font_size)
-
-            # Prepare weather texts
-            temperature_text = f"{self.weather_handler.get_weather_data()['temp']}°{self.weather_handler.get_weather_data()['unit']}"
-            description_text = self.weather_handler.get_weather_data()['description']
-
-            # Convert frame to PIL Image
-            pil_image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-            draw = ImageDraw.Draw(pil_image)
-
-            # Calculate text sizes
-            temp_bbox = draw.textbbox((0, 0), temperature_text, font=temperature_font)
-            desc_bbox = draw.textbbox((0, 0), description_text, font=description_font)
-
-            temp_text_width = temp_bbox[2] - temp_bbox[0]
-            temp_text_height = temp_bbox[3] - temp_bbox[1]
-            desc_text_width = desc_bbox[2] - desc_bbox[0]
-            desc_text_height = desc_bbox[3] - desc_bbox[1]
-
-            # Icon size and position
-            icon_size = 100
-            x_icon = self.screen_width - margin_right - icon_size
-            y_icon = self.screen_height - margin_bottom - icon_size
-
-            # Calculate positions for temperature and description
-            x_temp = x_icon - spacing_between - temp_text_width
-            y_temp = y_icon + (icon_size - temp_text_height) // 2  # Center temperature vertically with icon
-
-            x_desc = x_temp
-            y_desc = y_temp + temp_text_height + 10  # Below the temperature text
-
-            # Draw weather icon
-            weather_icon_resized = self.weather_handler.get_weather_icon().resize((icon_size, icon_size), Image.Resampling.LANCZOS)
-            pil_image.paste(weather_icon_resized, (x_icon, y_icon), weather_icon_resized)
-
-            # Draw temperature and description
-            draw.text((x_temp, y_temp), temperature_text, font=temperature_font, fill=font_color)
-            draw.text((x_desc, y_desc), description_text, font=description_font, fill=font_color)
-
-            # Convert back to OpenCV format
-            return cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
-
-        except Exception as e:
-            self.logger.error(f"Error during weather rendering: {e}", exc_info=True)
-            return frame
-
-# endregion DateTime
-
 # region Events
     def on_closing(self):
         """Handler for window close event."""
         logging.info("Closing application...")
-        self.stop_event.set()  # Stop the weather thread
+        self.stop_event.set() 
         self.is_running = False
         self.stop_observer()
         self.root.destroy()
@@ -504,25 +349,8 @@ class PhotoFrame(iFrame):
         if generator is None:
             return
         try:
-            # Iterate over frames from the generator
             for frame in generator:
                 self.update_frame_to_stream(frame)
-                # Add time and date to the frame
-                #frame = self.add_text_to_frame(frame)
-
-                # Convert OpenCV image to PIL ImageTk format
-                #frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                #image = Image.fromarray(frame_rgb)
-                #image_tk = ImageTk.PhotoImage(image)
-
-                # Update the label with the new image
-                # self.label.config(image=image_tk)
-                # self.label.image = image_tk
-                # Update the live frame during the transition
-                
-                # Update the GUI
-                # self.root.update_idletasks()
-                # self.root.update()
             return AnimationStatus.ANIMATION_FINISHED
         except Exception as e:
             print(f"Error during frame update: {e}")
@@ -560,9 +388,6 @@ class PhotoFrame(iFrame):
         while self.is_running:
             # Start the transition with a random image pair
             self.start_image_transition(duration=self.settings["animation_duration"])
-            # Display the current image with time and date during the wait time
-            self.display_image_with_time(
-                self.current_image, self.wait_time)
             time.sleep(1)
 
     def set_window_properties(self):
@@ -616,15 +441,6 @@ class PhotoFrame(iFrame):
         logging.info("Starting transition thread...")
         transition_thread = threading.Thread(target=self.run_photoframe)
         transition_thread.start()
-
-        # try:
-        #     # Start the Tkinter main loop
-        #     #logging.info("Entering Tkinter main loop.")
-        #     #self.root.mainloop()
-        # except KeyboardInterrupt:
-        #     logging.warning("Keyboard interrupt received. Exiting application...")
-        #     self.on_closing()
-
 # endregion Main
 
 

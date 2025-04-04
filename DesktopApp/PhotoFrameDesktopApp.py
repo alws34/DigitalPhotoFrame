@@ -1,39 +1,84 @@
+import json
 import tkinter as tk
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ImageDraw, ImageFont
+
 import threading
+import psutil
 import requests
 import cv2
 import numpy as np
 import time
+import base64
 
-class MJPEGClient:
+class JSONStreamClient:
     """
-    Handles connection to the MJPEG server and yields frames.
-    
-    It connects to a Flask endpoint that streams MJPEG data. The get_frames()
-    method reads chunks of bytes from the response and searches for JPEG frame boundaries.
+    Handles connection to the /live_feed JSON stream, receives image+metadata.
+    Decodes the image and yields frames.
     """
     def __init__(self, url):
         self.url = url
         self.session = requests.Session()
 
     def get_frames(self):
-        # Connect to the MJPEG stream URL
         response = self.session.get(self.url, stream=True)
-        bytes_buffer = bytes()
+        buffer = ""
+
         for chunk in response.iter_content(chunk_size=1024):
-            bytes_buffer += chunk
-            # Find the start and end of the JPEG frame in the stream
-            a = bytes_buffer.find(b'\xff\xd8')  # JPEG start
-            b = bytes_buffer.find(b'\xff\xd9')  # JPEG end
-            if a != -1 and b != -1:
-                jpg = bytes_buffer[a:b+2]
-                bytes_buffer = bytes_buffer[b+2:]
-                # Decode the JPEG image to a NumPy array (BGR format)
-                img_array = np.frombuffer(jpg, dtype=np.uint8)
-                frame = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-                if frame is not None:
-                    yield frame
+            buffer += chunk.decode("utf-8", errors="ignore")
+            lines = buffer.split("\n")
+            buffer = lines.pop()  # Keep incomplete line
+
+            for line in lines:
+                try:
+                    data = json.loads(line)
+                    image_data = base64.b64decode(data["image"])
+                    img_array = np.frombuffer(image_data, dtype=np.uint8)
+                    frame = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+                    if frame is not None:
+                        yield frame
+                except Exception as e:
+                    print("Error decoding JSON frame:", e)
+
+class WeatherClient:
+    def __init__(self, api_key, location_key):
+        self.api_key = api_key
+        self.location_key = location_key
+        self.data = None
+        self.icon = None
+        self.last_update = 0
+
+    def fetch_weather(self):
+        if not self.api_key or not self.location_key:
+            return
+
+        try:
+            url = f"http://dataservice.accuweather.com/currentconditions/v1/{self.location_key}?apikey={self.api_key}&details=true"
+            response = requests.get(url)
+            response.raise_for_status()
+            data = response.json()[0]
+
+            self.data = {
+                "temp": int(data["Temperature"]["Metric"]["Value"]),
+                "unit": "C",
+                "description": data["WeatherText"]
+            }
+
+            icon_num = int(data["WeatherIcon"])
+            icon_path = f"icons/{icon_num:02d}.png"  # Ensure these icons exist locally
+            if os.path.exists(icon_path):
+                self.icon = Image.open(icon_path).convert("RGBA")
+
+            self.last_update = time.time()
+
+        except Exception as e:
+            print("Failed to fetch weather:", e)
+
+    def get_weather_data(self):
+        return self.data
+
+    def get_weather_icon(self):
+        return self.icon
+
 
 class PhotoFrame(tk.Frame):
     """
@@ -48,8 +93,11 @@ class PhotoFrame(tk.Frame):
         self.stream_url = stream_url
         self.desired_width = desired_width
         self.desired_height = desired_height
+        self.triple_tap_count = 0
+        self.last_tap_time = 0
+        self.show_stats = settings.get("stats", {}).get("show", False)
+        self.cached_stats = self.get_system_stats()
         
-        # Configure the parent window if it's a Tk instance
         if isinstance(self.parent, tk.Tk):
             self.parent.title("Digital Photo Frame V2.0")
             self.parent.geometry(f"{self.parent.winfo_screenwidth()}x{self.parent.winfo_screenheight()}+0+0")
@@ -60,22 +108,67 @@ class PhotoFrame(tk.Frame):
             self.parent.option_add('*Cursor', 'none')
             self.parent.protocol("WM_DELETE_WINDOW", self.on_closing)
             self.parent.bind_all('<Control-c>', lambda e: self.on_closing())
-        
-        # Label for displaying the video stream
+            self.parent.bind("<Button-1>", self.handle_triple_tap)
+
         self.label = tk.Label(self, bg='black')
         self.label.pack(fill="both", expand=True)
         
-        # Create an MJPEG client for fetching frames
-        self.mjpeg_client = MJPEGClient(self.stream_url)
+        self.stream_client = JSONStreamClient(self.stream_url)
         self.current_frame = None
         self.stop_event = threading.Event()
         
-        # Start a background thread to fetch and process frames from the server
         self.fetch_thread = threading.Thread(target=self.frame_fetch_loop, daemon=True)
         self.fetch_thread.start()
+        self.weather_client = WeatherClient(
+            settings.get("weather_api_key", ""),
+            settings.get("location_key", "")
+        )
+        self.weather_thread = threading.Thread(target=self.weather_loop, daemon=True)
+        self.weather_thread.start()
+        self.stats_thread = threading.Thread(target=self.update_stats_loop, daemon=True)
+        self.stats_thread.start()
         
-        # Schedule GUI updates (approximately 30 FPS)
         self.update_display()
+
+    def handle_triple_tap(self, event):
+        now = time.time()
+        if now - self.last_tap_time < 1.5:
+            self.triple_tap_count += 1
+        else:
+            self.triple_tap_count = 1  # Restart counting
+
+        self.last_tap_time = now
+
+        if self.triple_tap_count == 3:
+            self.show_stats = not self.show_stats
+            print(f"Stats display toggled to {self.show_stats}")
+            self.triple_tap_count = 0
+
+    def weather_loop(self):
+        while not self.stop_event.is_set():
+            self.weather_client.fetch_weather()
+            time.sleep(600)  # Every 10 minutes
+
+    def add_stats_to_frame(self, frame):
+        font_path = settings['font_name']
+        font_size = settings['stats']['font_size']
+        font_color = settings['stats']['font_color']
+
+        color_map = {
+            "yellow": (255, 255, 0),
+            "white": (255, 255, 255),
+            "red": (255, 0, 0),
+            "green": (0, 255, 0),
+            "blue": (0, 0, 255)
+        }
+        font_color = color_map.get(font_color.lower(), (255, 255, 0))
+        stats_font = ImageFont.truetype(font_path, font_size)
+
+        pil_image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        draw = ImageDraw.Draw(pil_image)
+        draw.text((10, 10), self.cached_stats, font=stats_font, fill=font_color)
+
+        return cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
 
     def on_closing(self):
         """Handler for window close event."""
@@ -91,7 +184,6 @@ class PhotoFrame(tk.Frame):
         aspect_ratio = w / h
         desired_aspect = self.desired_width / self.desired_height
 
-        # Determine new size preserving the aspect ratio
         if aspect_ratio > desired_aspect:
             new_w = self.desired_width
             new_h = int(self.desired_width / aspect_ratio)
@@ -99,7 +191,6 @@ class PhotoFrame(tk.Frame):
             new_h = self.desired_height
             new_w = int(self.desired_height * aspect_ratio)
         
-        # Resize the image
         resized_img = cv2.resize(cv_img, (new_w, new_h))
         
         # Create a black background and center the resized image on it
@@ -115,10 +206,9 @@ class PhotoFrame(tk.Frame):
         Continuously fetch frames from the MJPEG client, resize them,
         and update the current_frame variable.
         """
-        for frame in self.mjpeg_client.get_frames():
+        for frame in self.stream_client.get_frames():
             if self.stop_event.is_set():
                 break
-            # Resize the incoming frame
             resized_frame = self.resize_image(frame)
             self.current_frame = resized_frame
             # Sleep briefly to allow a consistent fetch rate (~30 FPS)
@@ -131,7 +221,8 @@ class PhotoFrame(tk.Frame):
         """
         if self.current_frame is not None:
             # Convert the BGR image to RGB
-            cv_img_rgb = cv2.cvtColor(self.current_frame, cv2.COLOR_BGR2RGB)
+            overlay_frame = self.add_overlay_text(self.current_frame.copy())
+            cv_img_rgb = cv2.cvtColor(overlay_frame, cv2.COLOR_BGR2RGB)
             pil_image = Image.fromarray(cv_img_rgb)
             image_tk = ImageTk.PhotoImage(pil_image)
             self.label.config(image=image_tk)
@@ -143,24 +234,119 @@ class PhotoFrame(tk.Frame):
         """Stops the background frame fetching thread."""
         self.stop_event.set()
 
+    def add_overlay_text(self, frame):
+        current_time = time.strftime("%H:%M:%S")
+        current_date = time.strftime("%d/%m/%y")
+
+        font_path = settings['font_name']
+        time_font_size = settings['time_font_size']
+        date_font_size = settings['date_font_size']
+        margin_left = settings['margin_left']
+        margin_bottom = settings['margin_bottom']
+        spacing = settings['spacing_between']
+        margin_right = settings.get('margin_right', 50)
+        font_color = (255, 255, 255)
+
+        time_font = ImageFont.truetype(font_path, time_font_size)
+        date_font = ImageFont.truetype(font_path, date_font_size)
+
+        pil_img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        draw = ImageDraw.Draw(pil_img)
+
+        # Draw time and date
+        time_bbox = draw.textbbox((0, 0), current_time, font=time_font)
+        date_bbox = draw.textbbox((0, 0), current_date, font=date_font)
+
+        x_date = margin_left
+        x_time = x_date + (date_bbox[2] - date_bbox[0] - (time_bbox[2] - time_bbox[0])) // 2
+        y_date = self.desired_height - margin_bottom
+        y_time = y_date - (date_bbox[3] - date_bbox[1]) - spacing
+
+        draw.text((x_time, y_time), current_time, font=time_font, fill=font_color)
+        draw.text((x_date, y_date), current_date, font=date_font, fill=font_color)
+
+        # Draw weather if available
+        weather = self.weather_client.get_weather_data()
+        icon = self.weather_client.get_weather_icon()
+
+        if weather and icon:
+            temp_text = f"{weather['temp']}°{weather['unit']}"
+            desc_text = weather['description']
+            temp_font = ImageFont.truetype(font_path, time_font_size)
+            desc_font = ImageFont.truetype(font_path, date_font_size)
+
+            temp_bbox = draw.textbbox((0, 0), temp_text, font=temp_font)
+            desc_bbox = draw.textbbox((0, 0), desc_text, font=desc_font)
+
+            icon_size = 100
+            x_icon = self.desired_width - margin_right - icon_size
+            y_icon = self.desired_height - margin_bottom - icon_size
+
+            x_temp = x_icon - spacing - (temp_bbox[2] - temp_bbox[0])
+            y_temp = y_icon + (icon_size - (temp_bbox[3] - temp_bbox[1])) // 2
+
+            x_desc = x_temp
+            y_desc = y_temp + (temp_bbox[3] - temp_bbox[1]) + 10
+
+            icon_resized = icon.resize((icon_size, icon_size), Image.Resampling.LANCZOS)
+            pil_img.paste(icon_resized, (x_icon, y_icon), icon_resized)
+            draw.text((x_temp, y_temp), temp_text, font=temp_font, fill=font_color)
+            draw.text((x_desc, y_desc), desc_text, font=desc_font, fill=font_color)
+
+        # Move this out of the if block so it's always executed
+        frame_with_text = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+
+        if self.show_stats:
+            try:
+                frame_with_text = self.add_stats_to_frame(frame_with_text)
+            except Exception as e:
+                print("Error adding stats to frame:", e)
+
+        return frame_with_text
+
+    def get_system_stats(self):
+        cpu = cv2.getCPUTickCount()
+        cpu_usage = int(psutil.cpu_percent(interval=0.1))
+
+        ram = psutil.virtual_memory()
+        ram_used = ram.used // (1024 * 1024)
+        ram_total = ram.total // (1024 * 1024)
+        ram_percent = ram.percent
+
+        try:
+            cpu_temps = psutil.sensors_temperatures().get("cpu_thermal", [])
+            cpu_temp = round(cpu_temps[0].current, 1) if cpu_temps else "N/A"
+        except Exception:
+            cpu_temp = "N/A"
+
+        return f"CPU: {cpu_usage}%\nRAM: {ram_percent}% ({ram_used}/{ram_total}MB)\nCPU Temp: {cpu_temp}°C"
+
+    def update_stats_loop(self):
+        while not self.stop_event.is_set():
+            self.cached_stats = self.get_system_stats()
+            time.sleep(1)
+
 
 if __name__ == "__main__":
-    # Example usage:
-    # Set the MJPEG server URL (make sure this matches your Flask server configuration)
-    MJPEG_SERVER_URL = "http://localhost:5001/video_feed"
-    
-    # Create the main Tkinter window
+    with open("./photoframe_settings.json", "r") as f:
+        settings = json.load(f)
+
+    backend_host = settings.get("backend_configs", {}).get("host", "localhost")
+    if backend_host == "0.0.0.0":
+        backend_host = "127.0.0.1"    
+    backend_port = settings.get("backend_configs", {}).get("server_port", 5001)
+    print(backend_host)
+    print(backend_port)
+    STREAM_URL = f"http://{backend_host}:{backend_port}/live_feed"
+
     root = tk.Tk()
     
-    # Define desired display dimensions (full screen)
     screen_width = root.winfo_screenwidth()
     screen_height = root.winfo_screenheight()
     
-    # Create an instance of PhotoFrame, passing the root as the parent
-    mjpeg_frame = PhotoFrame(root, stream_url=MJPEG_SERVER_URL, desired_width=screen_width, desired_height=screen_height)
+    mjpeg_frame = PhotoFrame(root, stream_url=STREAM_URL, desired_width=screen_width, desired_height=screen_height)
     mjpeg_frame.pack(fill="both", expand=True)
     
-    # Start the Tkinter main loop
     try:
         root.mainloop()
     except KeyboardInterrupt:

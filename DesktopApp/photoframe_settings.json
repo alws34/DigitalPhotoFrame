@@ -1,0 +1,20 @@
+{
+    "font_name": "arial.ttf",
+    "time_font_size": 80,
+    "date_font_size": 50,
+    "margin_left": 80,
+    "margin_bottom": 80,
+    "margin_right": 50,
+    "spacing_between": 50,
+    "weather_api_key": "",
+    "location_key": "",
+    "backend_configs": {
+        "server_port": 5001,
+        "host": "0.0.0.0"
+    },
+    "stats": {
+        "show": true,
+        "font_size": 20,
+        "font_color": "yellow"
+    }
+}
