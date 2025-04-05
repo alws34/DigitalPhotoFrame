@@ -8,17 +8,19 @@
       type="text/css"
       href="{{ url_for('static', filename='styles.css') }}"
     />
-    <script type="text/javascript" src="{{ url_for('static', filename='scripts.js') }}"></script>
+    <script
+      type="text/javascript"
+      src="{{ url_for('static', filename='scripts.js') }}"
+    ></script>
   </head>
   <body>
     <!-- Top Right Control Panel -->
     <div id="top-right">
-      <button onclick="openLogsModal()">Logs</button>
-      <button onclick="toggleSettings()">Edit</button>
-      <button onclick="openAppSettingsModal()">App Settings</button>
-      <button onclick="logout()">Logout</button>
+      <button onclick="toggleSettings()">Edit Images</button>
+      <button onclick="openAppSettingsModal()">Settings</button>
       <button onclick="openUploadModal()">Upload</button>
-
+      <button onclick="logout()">Logout</button>
+      <button onclick="openLogsModal()">Logs</button>
     </div>
 
     <!-- Main Container -->
@@ -40,17 +42,27 @@
 
       <!-- Scrollable Section for Images -->
       <div id="bottom-scrollable" style="display: none">
+        <div class="action-bar">
+          <button onclick="downloadSelected()">Download Selected</button>
+          <button onclick="deleteSelected()">Delete Selected</button>
+        </div>
+        
         {% for image in images %}
+        
         <div class="image-card">
           <img
             src="{{ url_for('serve_image', filename=image) }}"
             alt="{{ image }}"
           />
           <br />
-          <input type="checkbox" name="selected_files" value="{{ image }}" />
-          Select<br />
-          <button onclick="downloadImage('{{ image }}')">Download</button>
-          <button onclick="deleteImage('{{ image }}')">Delete</button>
+          <label>
+            <input
+              type="checkbox"
+              class="select-checkbox"
+              value="{{ image }}"
+            />
+            Select
+          </label>
           <button onclick="openEditModal('{{ image }}')">Edit</button>
         </div>
         {% endfor %}

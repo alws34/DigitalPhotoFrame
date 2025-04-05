@@ -301,3 +301,41 @@ function handleFiles(fileList) {
     reader.readAsDataURL(file);
   }
 }
+function getSelectedFiles() {
+  return Array.from(document.querySelectorAll('.select-checkbox:checked')).map(cb => cb.value);
+}
+
+function downloadSelected() {
+  const selected = getSelectedFiles();
+  if (selected.length === 0) return alert("No images selected.");
+  const form = document.createElement("form");
+  form.method = "POST";
+  form.action = "/download_selected";
+  selected.forEach(filename => {
+    const input = document.createElement("input");
+    input.type = "hidden";
+    input.name = "selected_files";
+    input.value = filename;
+    form.appendChild(input);
+  });
+  document.body.appendChild(form);
+  form.submit();
+}
+
+function deleteSelected() {
+  const selected = getSelectedFiles();
+  if (selected.length === 0) return alert("No images selected.");
+  if (!confirm(`Are you sure you want to delete ${selected.length} image(s)?`)) return;
+  const form = document.createElement("form");
+  form.method = "POST";
+  form.action = "/delete_selected";
+  selected.forEach(filename => {
+    const input = document.createElement("input");
+    input.type = "hidden";
+    input.name = "selected_files";
+    input.value = filename;
+    form.appendChild(input);
+  });
+  document.body.appendChild(form);
+  form.submit();
+}
