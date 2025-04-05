@@ -1,7 +1,7 @@
 {
     "images_dir_full_path": ".\\Images",
     "animation_duration": 10,
-    "delay_between_images": 1,
+    "delay_between_images": 30,
     "allow_translucent_background": true,
     "weather_api_key": "",
     "location_key": "",

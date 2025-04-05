@@ -1,35 +1,22 @@
-# Base image
-FROM python:3.9-slim
+FROM python:3.11-slim
 
-# Set environment variables to suppress Tkinter's GUI warnings
-ENV DEBIAN_FRONTEND=noninteractive
-
-# Install Tkinter and other dependencies
+# Install dependencies for tkinter and fonts
 RUN apt-get update && apt-get install -y \
     python3-tk \
-    tk-dev \
-    libffi-dev \
-    libssl-dev \
     libjpeg-dev \
-    libz-dev \
-    libopencv-dev \
-    x11-apps \
-    && apt-get clean
+    libfreetype6-dev \
+    ttf-dejavu \
+    libgl1 \
+    && rm -rf /var/lib/apt/lists/*
 
-# Set working directory
 WORKDIR /app
 
-# Copy application files
 COPY . /app
 
-# Install Python dependencies
-RUN pip install --no-cache-dir -r Requirments.txt
+# Create venv manually
+RUN python3 -m venv env \
+    && . env/bin/activate \
+    && pip install --upgrade pip \
+    && pip install -r Requirments.txt
 
-# Expose necessary ports
-EXPOSE 5000 5001
-
-# Export DISPLAY variable dynamically
-ENV DISPLAY=:0
-
-# Default command (to be overridden in docker-compose.yml)
-CMD ["bash"]
+CMD [ "env/bin/python", "PhotoFrameDesktopApp.py" ]

@@ -1,128 +1,139 @@
-# Digital Photo Frame V2.0
 
-A Python-based photo frame application for Raspberry Pi, offering beautiful image transitions, real-time weather updates, and live video streaming capabilities.
+# 📷 Digital Photo Frame
 
-## Features
+A modern, customizable **photo frame application** with touchscreen support and web interface support. Built with Python, it displays beautiful image transitions, shows real-time weather, and allows remote management via a browser.
 
-- **Image Transitions:**
-  - Alpha Dissolve
-  - Pixel Dissolve
-  - Checkerboard
-  - Blinds
-  - Scroll
-  - Wipe
-  - Zoom Out
-  - Zoom In
-  - Iris Open
-  - Iris Close
-  - Barn Door Open
-  - Barn Door Close
-  - Shrink
-  - Stretch
+---
 
-- **Real-Time Weather Updates:**
-  - Displays current temperature, weather description, and an icon overlay.
-  - Fetches weather data from the AccuWeather API.
+## 🧠 Overview
 
-- **Dynamic Image Resizing:**
-  - Resizes images to fit the screen while maintaining the aspect ratio.
-  - Blurred, translucent backgrounds for a professional look.
+This project includes:
 
-- **Directory Monitoring:**
-  - Automatically detects changes in the `Images/` directory and reloads images.
-
-- **MJPEG Server:**
-  - Streams the current photo frame view via a local web server for easy remote access.
-
-## Installation
-
-Follow these steps to set up the project on your Raspberry Pi:
-
-### Prerequisites
-
-1. Ensure Raspberry Pi OS is installed.
-2. Install Docker and Docker Compose:
-`   sudo apt update
-   sudo apt install docker.io docker-compose -y`
-
-### Raspberry Pi Configuration
-Install xscreensaver and disable it:
-
-`sudo apt install xscreensaver -y`
-
-After installing, change the screensaver to blank (disable it) - you may disable screen blanking in any other way you see fit. 
+- A **Tkinter-based Desktop App** designed for Raspberry Pi (SPI touch screen support).
+- A **Flask-based Backend** for image management and live streaming.
+- Optional **weather overlay**, **stats display**, and **touch gestures**.
+- Two deployment options: **Docker** and **Native (systemd + venv)**.
 
 
-### Edit the Raspberry Pi's boot configuration:
-```sudo nano /boot/firmware/config.txt```
-Change:
-`dtoverlay=vc4-kms-v3d`
-To:
-`dtoverlay=vc4-fkms-v3d`
+---
 
-Reboot the Raspberry Pi:
-`sudo reboot`
+## ⚙️ Settings Files
 
-## Setting Up the Application
-Clone the repository:
+### `settings.json` (used by backend and main slideshow)
 
-`git clone https://github.com/alws34/DigitalPhotoFrame2`
-`cd DigitalPhotoFrame2`
-
-- Place your images in the Images/ directory.
-
-Create a settings.json file in the root directory with the required configuration
-* Example Configuration:
-```  
+```json
 {
-    "font_name": "arial.ttf",
-    "time_font_size": 60,
-    "date_font_size": 30,
-    "margin_left": 80,
-    "margin_bottom": 50,
-    "margin_right": 50,
-    "spacing_between": 50,
-    "animation_duration": 10,
-    "delay_between_images": 30,
-    "allow_translucent_background": true,
-    "weather_api_key": "<YOUR_API_KEY>",  //Accuweather API
-    "location_key": "<YOUR_LOCATION_KEY>" //Accuweather API
-    "mjpeg_server":{
-        "allow_mjpeg_server": true,
-        "server_port": 5001,
-        "host": "0.0.0.0"
-    }
+  "images_dir_full_path": "./Images",
+  "animation_duration": 10,
+  "delay_between_images": 30,
+  "allow_translucent_background": true,
+  "weather_api_key": "",
+  "location_key": "",
+  "backend_configs": {
+    "server_port": 5001,
+    "host": "0.0.0.0"
+  }
 }
 ```
 
+### `photoframe_settings.json` (used by desktop app)
 
-### Build and run the application with Docker:
+```json
+{
+  "font_name": "arial.ttf",
+  "time_font_size": 80,
+  "date_font_size": 50,
+  "margin_left": 80,
+  "margin_bottom": 80,
+  "margin_right": 50,
+  "spacing_between": 50,
+  "weather_api_key": "",
+  "location_key": "",
+  "backend_configs": {
+    "server_port": 5001,
+    "host": "0.0.0.0"
+  },
+  "stats": {
+    "show": true,
+    "font_size": 20,
+    "font_color": "yellow"
+  }
+}
+```
 
-`docker-compose up --build`
+---
 
-If the container doesnt work (getting error: `_tkinter.TclError: couldn't connect to display ":0"`)
-run the following commands: 
-`sudo nano ~/.bashrc`
-Add at the END of the file: 
-`xhost +local:`
-`export DISPLAY=:0`
-Run: 
-`source ~/.bashrc`
-`xhost`
-`sudo reboot`
+## ✨ Capabilities
 
+- 🖼️ **Slideshow with animated transitions**
+- 🌦️ **Weather overlay** via AccuWeather API (optional)
+- 🧠 **System stats**: CPU, RAM, temperature
+- 👆 **Triple tap gesture** to toggle stats on screen
+- 🌐 **Web-based UI** to upload, edit, delete images
+- 🧾 **Live streaming** over LAN (`/live_feed`)
 
-## Usage
-Access the photo frame interface directly on the Raspberry Pi or through the web server at:
+---
 
-`http://<raspberry_pi_ip>:5001/video_feed`
+## 🚀 Installation Instructions
 
-To add new images, place them in the Images/ directory. The application automatically detects and reloads the new images.
+### Option 1: Docker (Backend + Desktop)
 
-Customize the transition effects or weather API settings by modifying the settings.json file.
+#### 🔧 Backend
 
-Contribution
-Feel free to submit issues, fork the repository, and make pull requests. Contributions are welcome to enhance features or fix bugs.
+1. Build & Run:
 
-License
-This project is licensed under the MIT License. See the LICENSE file for details.
+```bash
+docker compose up -d --build
+```
+
+This runs the Flask backend at `http://<device>:5001`.
+
+#### 🖥️ Desktop App (on Raspberry Pi)
+
+1. Use `docker-compose.desktop.yml`:
+```bash
+docker compose -f docker-compose.desktop.yml up -d --build
+```
+
+2. Make sure SPI screen is accessible via `/dev/fb0`.
+
+---
+
+### Option 2: Native (Recommended for Raspberry Pi)
+
+#### 📦 Backend
+
+```bash
+cd /home/pi/photoframe
+python3 -m venv env
+source env/bin/activate
+pip install -r Requirments.txt
+python3 PhotoFrameServer.py
+```
+
+#### 🖼️ Desktop App
+
+```bash
+cd /home/pi/photoframe
+source env/bin/activate
+python3 PhotoFrameDesktopApp.py
+```
+
+✅ To run on boot, use:
+
+```bash
+sudo systemctl enable photoframe-desktop.service
+sudo systemctl start photoframe-desktop.service
+```
+
+---
+
+## 📝 Notes
+
+- Use `.json` files to customize layout, weather, and font sizes.
+- Install `pyheif` if you want to support HEIC image uploads.
+- Make sure your `arial.ttf` is available or change the font name.
+
+---
+
+Enjoy your smart photo frame!

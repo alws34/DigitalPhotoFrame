@@ -1,31 +1,19 @@
-version: "3.9"
 
 services:
-  photoframe_app:
-    build: .
-    container_name: photoframe_app
-    command: python PhotoFrame.py
+  photoframe_backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: photoframe_backend
+    command: python3 PhotoFrameServer.py
     restart: always
+    ports:
+      - "5001:5001"
     volumes:
       - ./Images:/app/Images
       - ./settings.json:/app/settings.json
-      - /tmp/.X11-unix:/tmp/.X11-unix # For GUI applications
-      - /etc/localtime:/etc/localtime:ro # Link host timezone
-      - /etc/timezone:/etc/timezone:ro # Link host timezone
-    devices:
-      - "/dev/fb0:/dev/fb0" # For accessing Raspberry Pi screen
-    ports:
-      - "5001:5001" # MJPEG stream
+      - ./metadata.json:/app/metadata.json
+      - ./users.json:/app/users.json
+      - ./PhotoFrame.log:/app/PhotoFrame.log
     environment:
-      - DISPLAY=$DISPLAY # For GUI applications
-
-
-  photoframe_flaskserver:
-    build: .
-    container_name: photoframe_flask_server
-    command: python main.py
-    restart: always
-    ports:
-      - "5000:5000"
-    volumes:
-      - ./Images:/app/Images
+      - TZ=Asia/Jerusalem
