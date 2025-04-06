@@ -38,12 +38,12 @@ class ManagerBackend:
         self.latest_metadata = {} 
         self.port = settings["server_port"]
         self.host = settings["host"]
-        self.IMAGE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../Images"))
+        self.IMAGE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "Images"))
         self.ALLOWED_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.webp', '.heic', '.heif'}
         self.SELECTED_COLOR = '#ffcccc'
-        self.USER_DATA_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), '../users.json'))
-        self.SETTINGS_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), '../settings.json'))
-        self.METADATA_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), '../metadata.json'))
+        self.USER_DATA_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), 'users.json'))
+        self.SETTINGS_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), 'settings.json'))
+        self.METADATA_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), 'metadata.json'))
         self.LOG_FILE_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "PhotoFrame.log"))
         self.Frame = frame 
         os.makedirs(self.IMAGE_DIR, exist_ok=True)

@@ -3,7 +3,6 @@ import logging
 import json
 import threading
 import time
-import tkinter as tk
 from PIL import Image, ImageDraw, ImageFont
 import cv2
 import random as rand
@@ -11,6 +10,7 @@ import os
 from enum import Enum
 import numpy as np
 import sys
+sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import psutil 
 import hashlib
@@ -120,8 +120,8 @@ class PhotoFrame(iFrame):
         self.root = None
         self.frame = None
         self.label = None
-        self.screen_width = None
-        self.screen_height = None
+        self.screen_width = 1920
+        self.screen_height = 1080
         self.current_image = None
         self.next_image = None
         self.frame_to_stream = None
@@ -246,6 +246,8 @@ class PhotoFrame(iFrame):
         if len(self.shuffled_images) == 0:
             self.shuffled_images = list(self.images)
             rand.shuffle(self.shuffled_images)
+        if len(self.shuffled_images) == 0:
+            return None
         self.current_image_idx = (self.current_image_idx + 1) % len(self.shuffled_images)
         return self.shuffled_images[self.current_image_idx]
 
@@ -366,6 +368,8 @@ class PhotoFrame(iFrame):
         """
         if self.current_image is None:
             self.current_image = cv2.imread(self.get_random_image())
+            if self.current_image is None:
+                return AnimationStatus.ANIMATION_FINISHED
             self.current_image = self.image_handler.resize_image_with_background(
                 self.current_image, self.screen_width, self.screen_height)
 
@@ -392,43 +396,7 @@ class PhotoFrame(iFrame):
         while self.is_running:
             # Start the transition with a random image pair
             self.start_image_transition(duration=self.settings["animation_duration"])
-            time.sleep(1)
-
-    def set_window_properties(self):
-        # Create the Tkinter root window and frame
-        self.root = tk.Tk()
-        self.root.title("Digital Photo Frame V2.0")
-
-        # Make the window full-screen and borderless
-        self.root.geometry(f"{self.root.winfo_screenwidth()}x{self.root.winfo_screenheight()}+0+0")
-        self.root.attributes("-fullscreen", True)
-        self.root.wm_attributes("-topmost", True)  # Ensure it's always on top
-        self.root.configure(bg='black')
-
-        # Hide the mouse cursor
-        self.root.config(cursor="none")
-        self.root.option_add('*Cursor', 'none')
-
-        # Get screen dimensions
-        self.screen_width = self.root.winfo_screenwidth()
-        self.screen_height = self.root.winfo_screenheight()
-
-        # Create a full-screen frame
-        self.frame = tk.Frame(
-            self.root, width=self.screen_width, height=self.screen_height, bg='black')
-        self.frame.pack(fill="both", expand=True)
-
-        self.notification_manager = NotificationManager(self.root)
-        
-        self.root.bind("<Button-1>", self.handle_triple_tap)  # Bind tap event to toggle stats display  
-        
-        # Bind the close event (Alt+F4)
-        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
-
-        # Bind Ctrl+C to terminate the application
-        self.root.bind_all('<Control-c>', lambda e: self.on_closing())
-        
-        
+            time.sleep(self.settings["delay_between_images"])     
 
     def shuffle_images(self):
         self.shuffled_images = list(self.images)
@@ -439,7 +407,7 @@ class PhotoFrame(iFrame):
     def main(self):
         logging.info("Starting main application...")
         self.shuffle_images()
-        self.set_window_properties()
+        #self.set_window_properties()
 
         # Start the transition thread
         logging.info("Starting transition thread...")

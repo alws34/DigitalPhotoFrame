@@ -52,7 +52,7 @@ class ImagesObserver(iBoserver):
         self.frame.send_log_message("Starting directory observer...", logging.debug)
         event_handler = ImageChangeHandler(self)
         self.observer = Observer()
-        self.observer.schedule(event_handler, "../Images", recursive=True)
+        self.observer.schedule(event_handler, "Images", recursive=True)
         self.observer.start()
         self.frame.send_log_message("Directory observer started.", logging.info)
     
@@ -73,7 +73,7 @@ class ImagesObserver(iBoserver):
         
     def get_images_from_directory(self) -> list:
         """Fetch all image file paths from the directory."""
-        images_path = os.path.abspath("../Images")  # Resolve absolute path
+        images_path = os.path.abspath("Images")  # Resolve absolute path
         valid_extensions = ('.jpg', '.jpeg', '.png', '.gif', '.bmp')
         images = []
         for root, dirs, files in os.walk(images_path):

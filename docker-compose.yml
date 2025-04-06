@@ -1,19 +1,16 @@
-
 services:
-  photoframe_backend:
+  photoframe_web:
     build:
       context: .
-      dockerfile: Dockerfile
-    container_name: photoframe_backend
-    command: python3 PhotoFrameServer.py
-    restart: always
+      dockerfile: WebServer/Dockerfile
+    container_name: photoframe_web
+    volumes:
+      - ./WebServer/Images:/app/Images
+      - ./WebServer/settings.json:/app/settings.json
+      - ./WebServer/users.json:/app/users.json
+      - ./WebServer/metadata.json:/app/metadata.json
+      - ./WebServer/PhotoFrame.log:/app/PhotoFrame.log
+      
     ports:
       - "5001:5001"
-    volumes:
-      - ./Images:/app/Images
-      - ./settings.json:/app/settings.json
-      - ./metadata.json:/app/metadata.json
-      - ./users.json:/app/users.json
-      - ./PhotoFrame.log:/app/PhotoFrame.log
-    environment:
-      - TZ=Asia/Jerusalem
+    restart: unless-stopped
