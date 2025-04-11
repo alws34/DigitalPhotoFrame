@@ -6,6 +6,7 @@ import os
 import json
 import hashlib
 from datetime import datetime
+from numpy import uint8
 from cv2 import imencode
 from flask import Flask, Response, jsonify, request, redirect, url_for, send_from_directory, render_template, flash, session, send_file, stream_with_context
 from numpy import ndarray
@@ -46,6 +47,7 @@ class ManagerBackend:
         self.METADATA_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), 'metadata.json'))
         self.LOG_FILE_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "PhotoFrame.log"))
         self.Frame = frame 
+        self._metadata_lock = threading.Lock()
         os.makedirs(self.IMAGE_DIR, exist_ok=True)
 
         if not os.path.exists(self.USER_DATA_FILE):
@@ -144,11 +146,7 @@ class ManagerBackend:
 
         self.update_current_metadata(entry)
 
-    def stream_frame(self):
-        """
-        Generator to serve MJPEG frames from the live frame.
-        Streams the live frame directly without resizing.
-        """
+    def mjpeg_stream(self):
         while self.Frame.get_is_running():
             try:
                 frame = self.Frame.get_live_frame()
@@ -156,26 +154,36 @@ class ManagerBackend:
                     if frame.dtype != np.uint8:
                         frame = frame.astype(np.uint8)
 
-                    # Encode the frame as JPEG
-                    _, jpeg = imencode('.jpg', frame)
-                    frame = jpeg.tobytes()
-                   
-                    jpeg_b64 = base64.b64encode(frame).decode('utf-8')
-                    metadata = self.latest_metadata
-                    
-                    json_payload = json.dumps({
-                        "image": jpeg_b64,
-                        "metadata": metadata
-                    })
+                    success, jpeg = imencode('.jpg', frame)
+                    if not success:
+                        continue
 
-                    yield json_payload + "\n"
-                time.sleep(1 / 30)  # ~10 FPS
+                    yield (
+                        b'--frame\r\n'
+                        b'Content-Type: image/jpeg\r\n\r\n' +
+                        jpeg.tobytes() + b'\r\n'
+                    )
+
+                time.sleep(1 / 30)  # ~30fps
             except Exception as e:
-                self.Frame.send_log_message(f"JSON stream error: {e}", logger=logging.error)
-                time.sleep(0.5)
+                logging.error(f"MJPEG stream error: {e}")
+                time.sleep(0.2)
+
+
+
+  
 
 
     def setup_routes(self):
+        @self.app.route('/video_feed')
+        def video_feed():
+            return Response(self.mjpeg_stream(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+        @self.app.route("/current_metadata")
+        def current_metadata():
+            with self._metadata_lock:
+                return jsonify(self.latest_metadata or {})
+        
         @self.app.route('/upload_with_metadata', methods=['POST'])
         def upload_with_metadata():
             uploaded_files = request.files.getlist("file[]")
@@ -298,18 +306,24 @@ class ManagerBackend:
                 metadata_db = self.load_metadata_db()
                 if file_hash in metadata_db:
                     latest_metadata = metadata_db[file_hash]
-            return render_template("index.html", images=images, image_count=image_count, settings=settings, latest_metadata=latest_metadata)
-
+            username = session.get('user', 'Guest')
+            return render_template("index.html", images=images, image_count=image_count,
+                           settings=settings, latest_metadata=latest_metadata,
+                           username=username)
         
+        @self.app.route("/get_latest_metadata")
+        def latest_metadata():
+            return jsonify(self.latest_metadata)
+
         @self.app.route('/live_feed')
         def live_feed():
-            if not self.is_authenticated():
-                client_ip = request.remote_addr
-                if not (client_ip.startswith("192.168.") or client_ip == "127.0.0.1"):
-                    return redirect(url_for('login'))
+            # if not self.is_authenticated():
+            #     client_ip = request.remote_addr
+            #     if not (client_ip.startswith("192.168.") or client_ip == "127.0.0.1"):
+            #         return redirect(url_for('login'))
             
             return Response(
-                stream_with_context(self.stream_frame()),
+                stream_with_context(self.mjpeg_stream()),
                 mimetype='application/json'
             )
 
@@ -526,7 +540,8 @@ class ManagerBackend:
         This method can be called by other parts of your application
         (like PhotoFrameServer.py) to update metadata.
         """
-        self.latest_metadata = metadata
+        with self._metadata_lock:
+            self.latest_metadata = metadata
 
     def start(self):
         threading.Thread(

@@ -13,6 +13,9 @@ COPY WebServer/ /app/
 COPY Handlers/ /app/Handlers/
 COPY Utilities/ /app/Utilities/
 COPY Effects/ /app/Effects/
+
+RUN mkdir -p /app/Images
+
 RUN pip install --no-cache-dir -r Requirments.txt
 
 EXPOSE 5001

@@ -6,10 +6,10 @@ services:
     container_name: photoframe_web
     volumes:
       - ./WebServer/Images:/app/Images
-      - ./WebServer/settings.json:/app/settings.json
-      - ./WebServer/users.json:/app/users.json
-      - ./WebServer/metadata.json:/app/metadata.json
-      - ./WebServer/PhotoFrame.log:/app/PhotoFrame.log
+      #- ./WebServer/settings.json:/app/settings.json
+      #- ./WebServer/users.json:/app/users.json
+      #- ./WebServer/metadata.json:/app/metadata.json
+      #- ./WebServer/PhotoFrame.log:/app/PhotoFrame.log
       
     ports:
       - "5001:5001"

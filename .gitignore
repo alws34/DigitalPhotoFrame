@@ -1,8 +1,8 @@
 /images/*
 /Effects/__pycache__/*
 Images/*
-env/*
-users.json
-PhotoFrame.log
+*/env/*
+#users.json
+#PhotoFrame.log
 *__pycache__/*
 *.pyc

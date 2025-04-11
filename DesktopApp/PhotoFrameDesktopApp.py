@@ -1,7 +1,10 @@
 import json
 import tkinter as tk
 from PIL import Image, ImageTk, ImageDraw, ImageFont
-
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.dirname(__file__)))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import threading
 import psutil
 import requests
@@ -23,7 +26,7 @@ class JSONStreamClient:
         response = self.session.get(self.url, stream=True)
         buffer = ""
 
-        for chunk in response.iter_content(chunk_size=1024):
+        for chunk in response.iter_content(chunk_size=4096):
             buffer += chunk.decode("utf-8", errors="ignore")
             lines = buffer.split("\n")
             buffer = lines.pop()  # Keep incomplete line
@@ -38,6 +41,26 @@ class JSONStreamClient:
                         yield frame
                 except Exception as e:
                     print("Error decoding JSON frame:", e)
+
+class MJPEGStreamClient:
+    def __init__(self, url):
+        self.url = url
+        self.stream = None
+
+    def get_frames(self):
+        import urllib.request
+        stream = urllib.request.urlopen(self.url)
+        byte_buffer = b""
+        while True:
+            byte_buffer += stream.read(1024)
+            a = byte_buffer.find(b'\xff\xd8')
+            b = byte_buffer.find(b'\xff\xd9')
+            if a != -1 and b != -1:
+                jpg = byte_buffer[a:b+2]
+                byte_buffer = byte_buffer[b+2:]
+                frame = cv2.imdecode(np.frombuffer(jpg, dtype=np.uint8), cv2.IMREAD_COLOR)
+                if frame is not None:
+                    yield frame
 
 class WeatherClient:
     def __init__(self, api_key, location_key):
@@ -113,7 +136,7 @@ class PhotoFrame(tk.Frame):
         self.label = tk.Label(self, bg='black')
         self.label.pack(fill="both", expand=True)
         
-        self.stream_client = JSONStreamClient(self.stream_url)
+        self.stream_client = MJPEGStreamClient(self.stream_url)
         self.current_frame = None
         self.stop_event = threading.Event()
         
@@ -328,7 +351,7 @@ class PhotoFrame(tk.Frame):
 
 
 if __name__ == "__main__":
-    with open("./photoframe_settings.json", "r") as f:
+    with open(os.getcwd() + "/photoframe_settings.json", "r") as f:
         settings = json.load(f)
 
     backend_host = settings.get("backend_configs", {}).get("host", "localhost")
@@ -337,8 +360,9 @@ if __name__ == "__main__":
     backend_port = settings.get("backend_configs", {}).get("server_port", 5001)
     print(backend_host)
     print(backend_port)
-    STREAM_URL = f"http://{backend_host}:{backend_port}/live_feed"
+    STREAM_URL = f"http://{backend_host}:{backend_port}/video_feed"
 
+    os.environ["DISPLAY"] = ":0"
     root = tk.Tk()
     
     screen_width = root.winfo_screenwidth()

@@ -120,43 +120,6 @@ function deleteImage(imageName) {
   }
 }
 
-let buffer = "";
-fetch("/live_feed").then((response) => {
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-
-  function readChunk() {
-    reader.read().then(({ done, value }) => {
-      if (done) return;
-      buffer += decoder.decode(value, { stream: true });
-
-      const lines = buffer.split("\n");
-      buffer = lines.pop(); // preserve incomplete JSON
-
-      for (const line of lines) {
-        try {
-          const data = JSON.parse(line);
-          document.getElementById("liveImage").src =
-            "data:image/jpeg;base64," + data.image;
-          document.getElementById("captionField").textContent =
-            data.metadata.caption || "No Caption";
-          document.getElementById("uploaderField").textContent =
-            data.metadata.uploader || "Unknown";
-          document.getElementById("dateField").textContent = data.metadata
-            .date_added
-            ? formatDate(data.metadata.date_added)
-            : "Unknown";
-        } catch (e) {
-          console.error("Invalid JSON stream:", e);
-        }
-      }
-
-      readChunk();
-    });
-  }
-
-  readChunk();
-});
 function openUploadModal() {
   document.getElementById("uploadModal").style.display = "block";
 }
@@ -252,10 +215,18 @@ window.addEventListener("DOMContentLoaded", () => {
   });
 });
 
-document.getElementById("fileInput").addEventListener("change", function () {
-  document.getElementById("previewContainer").innerHTML = "";
-  handleFiles(this.files);
+window.addEventListener("DOMContentLoaded", () => {
+  const fileInput = document.getElementById("fileInput");
+  if (fileInput) {
+    fileInput.addEventListener("change", function () {
+      document.getElementById("previewContainer").innerHTML = "";
+      handleFiles(this.files);
+    });
+  } else {
+    console.error("❌ fileInput element not found in DOM");
+  }
 });
+
 
 
 function handleFiles(fileList) {
@@ -339,3 +310,41 @@ function deleteSelected() {
   document.body.appendChild(form);
   form.submit();
 }
+
+function pollMetadata() {
+  fetch("/current_metadata")
+    .then(res => res.json())
+    .then(data => {
+      document.getElementById("captionField").textContent =
+        data.caption || "No Caption";
+      document.getElementById("uploaderField").textContent =
+        data.uploader || "Unknown";
+      document.getElementById("dateField").textContent = data.date_added
+        ? formatDate(data.date_added)
+        : "Unknown";
+    })
+    .catch((err) => {
+      console.error("Failed to fetch metadata:", err);
+    });
+}
+
+setInterval(pollMetadata, 2000); // poll every 2 seconds
+
+
+function toggleMenu() {
+  const menu = document.getElementById("dropdown-menu");
+  menu.style.display = menu.style.display === "flex" ? "none" : "flex";
+}
+document.addEventListener("click", function (e) {
+  const menu = document.getElementById("dropdown-menu");
+  const hamburger = document.querySelector(".hamburger");
+
+  if (!menu || !hamburger) return;
+
+  const isClickInsideMenu = menu.contains(e.target);
+  const isClickOnHamburger = hamburger.contains(e.target);
+
+  if (!isClickInsideMenu && !isClickOnHamburger) {
+    menu.style.display = "none";
+  }
+});

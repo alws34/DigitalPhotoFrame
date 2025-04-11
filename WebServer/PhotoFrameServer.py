@@ -161,7 +161,7 @@ class PhotoFrame(iFrame):
             metadata_db = self.manager_backend.load_metadata_db()
             file_hash = self.manager_backend.compute_image_hash(image_path)
             if file_hash in metadata_db:
-                self.manager_backend.update_current_metadata(metadata_db[file_hash])
+                self.manager_backend.update_current_metadata(metadata_db[file_hash]) 
 
                 
 # endregion guestbook
@@ -173,6 +173,9 @@ class PhotoFrame(iFrame):
     def get_live_frame(self):
         return self.frame_to_stream
     
+    def get_metadata(self):
+        """Returns metadata for the current image."""
+        return self.manager_backend.current_metadata if hasattr(self.manager_backend, "current_metadata") else {}
 #endregion Stream
 
 # region Utils
@@ -385,7 +388,6 @@ class PhotoFrame(iFrame):
         effect_function = self.effects[self.get_random_effect()]
         gen = effect_function(self.current_image, self.next_image, duration)
         self.status = self.update_frame(gen)
-        self.update_frame_to_stream(frame)
 
         if self.status == AnimationStatus.ANIMATION_FINISHED:
             self.current_image = self.next_image

@@ -14,14 +14,23 @@
     ></script>
   </head>
   <body>
-    <!-- Top Right Control Panel -->
-    <div id="top-right">
-      <button onclick="toggleSettings()">Edit Images</button>
-      <button onclick="openAppSettingsModal()">Settings</button>
-      <button onclick="openUploadModal()">Upload</button>
-      <button onclick="logout()">Logout</button>
-      <button onclick="openLogsModal()">Logs</button>
+    <!-- Top Navigation Bar -->
+    <div id="top-bar">
+      <div class="top-left">
+        <span class="welcome-message">Welcome {{ username }}!</span>
+      </div>
+      <div class="top-right">
+        <div class="hamburger" onclick="toggleMenu()">&#9776;</div>
+        <div id="dropdown-menu" class="dropdown-menu">
+          <button onclick="toggleSettings()">Edit Images</button>
+          <button onclick="openAppSettingsModal()">Settings</button>
+          <button onclick="openUploadModal()">Upload</button>
+          <button onclick="logout()">Logout</button>
+          <button onclick="openLogsModal()">Logs</button>
+        </div>
+      </div>
     </div>
+
 
     <!-- Main Container -->
     <div id="main-container">
@@ -29,7 +38,7 @@
         <img id="stream" src="{{ url_for('live_feed') }}" alt="Live Feed" />
       </div> -->
       <div id="image-transition">
-        <img id="liveImage" src="" alt="Live Feed" />
+        <img id="liveImage" src="/video_feed" />
       </div>
       <!-- Metadata Display -->
       <div id="image-info">

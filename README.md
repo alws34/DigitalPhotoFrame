@@ -88,42 +88,25 @@ docker compose up -d --build
 
 This runs the Flask backend at `http://<device>:5001`.
 
-#### 🖥️ Desktop App (on Raspberry Pi)
-
-1. Use `docker-compose.desktop.yml`:
+#### 🖥️ Desktop App (Tested with Raspberry Pi)
 ```bash
-docker compose -f docker-compose.desktop.yml up -d --build
+cd /home/pi/DigitalPhotoFrame/DesktopApp
+chmod +x install_photoframe_service.sh
+sudo ./install_photoframe_service.sh
+
+sudo systemctl status PhotoFrame_Desktop_App #if needed
+sudo systemctl restart PhotoFrame_Desktop_App #if needed
 ```
 
-2. Make sure SPI screen is accessible via `/dev/fb0`.
-
----
-
-### Option 2: Native (Recommended for Raspberry Pi)
 
 #### 📦 Backend
 
 ```bash
-cd /home/pi/photoframe
-python3 -m venv env
-source env/bin/activate
-pip install -r Requirments.txt
-python3 PhotoFrameServer.py
-```
-
-#### 🖼️ Desktop App
-
-```bash
-cd /home/pi/photoframe
-source env/bin/activate
-python3 PhotoFrameDesktopApp.py
-```
-
-✅ To run on boot, use:
-
-```bash
-sudo systemctl enable photoframe-desktop.service
-sudo systemctl start photoframe-desktop.service
+cd /home/pi/DigitalPhotoFrame
+docker-compose down --remove-orphans
+docker-compose build --no-cache
+docker-compose up -d
+docker logs -f photoframe_web 
 ```
 
 ---
