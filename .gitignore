@@ -6,3 +6,4 @@ Images/*
 #PhotoFrame.log
 *__pycache__/*
 *.pyc
+WebServer/Images/*

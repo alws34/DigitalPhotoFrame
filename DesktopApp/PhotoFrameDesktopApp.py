@@ -13,34 +13,6 @@ import numpy as np
 import time
 import base64
 
-class JSONStreamClient:
-    """
-    Handles connection to the /live_feed JSON stream, receives image+metadata.
-    Decodes the image and yields frames.
-    """
-    def __init__(self, url):
-        self.url = url
-        self.session = requests.Session()
-
-    def get_frames(self):
-        response = self.session.get(self.url, stream=True)
-        buffer = ""
-
-        for chunk in response.iter_content(chunk_size=4096):
-            buffer += chunk.decode("utf-8", errors="ignore")
-            lines = buffer.split("\n")
-            buffer = lines.pop()  # Keep incomplete line
-
-            for line in lines:
-                try:
-                    data = json.loads(line)
-                    image_data = base64.b64decode(data["image"])
-                    img_array = np.frombuffer(image_data, dtype=np.uint8)
-                    frame = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-                    if frame is not None:
-                        yield frame
-                except Exception as e:
-                    print("Error decoding JSON frame:", e)
 
 class MJPEGStreamClient:
     def __init__(self, url):
@@ -48,20 +20,36 @@ class MJPEGStreamClient:
         self.stream = None
 
     def get_frames(self):
-        import urllib.request
-        stream = urllib.request.urlopen(self.url)
-        byte_buffer = b""
-        while True:
-            byte_buffer += stream.read(1024)
-            a = byte_buffer.find(b'\xff\xd8')
-            b = byte_buffer.find(b'\xff\xd9')
-            if a != -1 and b != -1:
-                jpg = byte_buffer[a:b+2]
-                byte_buffer = byte_buffer[b+2:]
-                frame = cv2.imdecode(np.frombuffer(jpg, dtype=np.uint8), cv2.IMREAD_COLOR)
-                if frame is not None:
-                    yield frame
+        try:
+            stream = requests.get(self.url, stream=True, timeout=5)
+            if stream.status_code != 200:
+                print(f"[MJPEGStreamClient] HTTP {stream.status_code}, no stream.")
+                yield None
+                return
 
+            content_type = stream.headers.get("Content-Type", "")
+            if "boundary=" in content_type:
+                self.boundary = content_type.split("boundary=")[1]
+            else:
+                self.boundary = "--frame"
+
+            buffer = b""
+            for chunk in stream.iter_content(chunk_size=1024):
+                buffer += chunk
+                while True:
+                    start = buffer.find(b'\xff\xd8')  # JPEG start
+                    end = buffer.find(b'\xff\xd9')    # JPEG end
+                    if start != -1 and end != -1 and end > start:
+                        jpg = buffer[start:end + 2]
+                        buffer = buffer[end + 2:]
+                        frame = cv2.imdecode(np.frombuffer(jpg, dtype=np.uint8), cv2.IMREAD_COLOR)
+                        if frame is not None:
+                            yield frame
+                    else:
+                        break
+        except requests.exceptions.RequestException as e:
+            yield None             
+                  
 class WeatherClient:
     def __init__(self, api_key, location_key):
         self.api_key = api_key
@@ -132,6 +120,13 @@ class PhotoFrame(tk.Frame):
             self.parent.protocol("WM_DELETE_WINDOW", self.on_closing)
             self.parent.bind_all('<Control-c>', lambda e: self.on_closing())
             self.parent.bind("<Button-1>", self.handle_triple_tap)
+        self.time_font = ImageFont.truetype(settings['font_name'], settings['time_font_size'])
+        self.date_font = ImageFont.truetype(settings['font_name'], settings['date_font_size'])
+        self.font_temp = self.time_font  # reuse
+        self.font_desc = self.date_font  # reuse
+        stats_font_path = settings['font_name']
+        stats_font_size = settings.get("stats", {}).get("font_size", 20)
+        self.stats_font = ImageFont.truetype(stats_font_path, stats_font_size)
 
         self.label = tk.Label(self, bg='black')
         self.label.pack(fill="both", expand=True)
@@ -142,6 +137,7 @@ class PhotoFrame(tk.Frame):
         
         self.fetch_thread = threading.Thread(target=self.frame_fetch_loop, daemon=True)
         self.fetch_thread.start()
+
         self.weather_client = WeatherClient(
             settings.get("weather_api_key", ""),
             settings.get("location_key", "")
@@ -185,11 +181,10 @@ class PhotoFrame(tk.Frame):
             "blue": (0, 0, 255)
         }
         font_color = color_map.get(font_color.lower(), (255, 255, 0))
-        stats_font = ImageFont.truetype(font_path, font_size)
 
         pil_image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
         draw = ImageDraw.Draw(pil_image)
-        draw.text((10, 10), self.cached_stats, font=stats_font, fill=font_color)
+        draw.text((10, 10), self.cached_stats, font=self.stats_font, fill=font_color)
 
         return cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
 
@@ -223,6 +218,26 @@ class PhotoFrame(tk.Frame):
         background[y_offset:y_offset+new_h, x_offset:x_offset+new_w] = resized_img
         
         return background
+    
+    def get_fallback_frame(self, text="Waiting for stream..."):
+        """
+        Returns a black image with centered white text.
+        """
+        # Create black background
+        img = Image.new('RGB', (self.desired_width, self.desired_height), (0, 0, 0))
+        draw = ImageDraw.Draw(img)
+
+        font = self.date_font  # Use your existing font
+        bbox = draw.textbbox((0, 0), text, font=font)
+        text_width = bbox[2] - bbox[0]
+        text_height = bbox[3] - bbox[1]
+
+        x = (self.desired_width - text_width) // 2
+        y = (self.desired_height - text_height) // 2
+
+        draw.text((x, y), text, font=font, fill=(255, 255, 255))
+        return cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+
 
     def frame_fetch_loop(self):
         """
@@ -232,10 +247,14 @@ class PhotoFrame(tk.Frame):
         for frame in self.stream_client.get_frames():
             if self.stop_event.is_set():
                 break
+            if frame is None:
+                self.current_frame = self.get_fallback_frame("Waiting for stream...")
+                time.sleep(5)
+                break
             resized_frame = self.resize_image(frame)
             self.current_frame = resized_frame
             # Sleep briefly to allow a consistent fetch rate (~30 FPS)
-            time.sleep(0.03)
+            time.sleep(1/30)
 
     def update_display(self):
         """
@@ -270,23 +289,20 @@ class PhotoFrame(tk.Frame):
         margin_right = settings.get('margin_right', 50)
         font_color = (255, 255, 255)
 
-        time_font = ImageFont.truetype(font_path, time_font_size)
-        date_font = ImageFont.truetype(font_path, date_font_size)
-
         pil_img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
         draw = ImageDraw.Draw(pil_img)
 
         # Draw time and date
-        time_bbox = draw.textbbox((0, 0), current_time, font=time_font)
-        date_bbox = draw.textbbox((0, 0), current_date, font=date_font)
+        time_bbox = draw.textbbox((0, 0), current_time, font=self.time_font)
+        date_bbox = draw.textbbox((0, 0), current_date, font=self.date_font)
 
         x_date = margin_left
         x_time = x_date + (date_bbox[2] - date_bbox[0] - (time_bbox[2] - time_bbox[0])) // 2
         y_date = self.desired_height - margin_bottom
         y_time = y_date - (date_bbox[3] - date_bbox[1]) - spacing
 
-        draw.text((x_time, y_time), current_time, font=time_font, fill=font_color)
-        draw.text((x_date, y_date), current_date, font=date_font, fill=font_color)
+        draw.text((x_time, y_time), current_time, font=self.time_font, fill=font_color)
+        draw.text((x_date, y_date), current_date, font=self.date_font, fill=font_color)
 
         # Draw weather if available
         weather = self.weather_client.get_weather_data()
@@ -295,11 +311,9 @@ class PhotoFrame(tk.Frame):
         if weather and icon:
             temp_text = f"{weather['temp']}°{weather['unit']}"
             desc_text = weather['description']
-            temp_font = ImageFont.truetype(font_path, time_font_size)
-            desc_font = ImageFont.truetype(font_path, date_font_size)
 
-            temp_bbox = draw.textbbox((0, 0), temp_text, font=temp_font)
-            desc_bbox = draw.textbbox((0, 0), desc_text, font=desc_font)
+            temp_bbox = draw.textbbox((0, 0), temp_text, font=self.time_font)
+            desc_bbox = draw.textbbox((0, 0), desc_text, font=self.font_desc)
 
             icon_size = 100
             x_icon = self.desired_width - margin_right - icon_size
@@ -328,8 +342,8 @@ class PhotoFrame(tk.Frame):
         return frame_with_text
 
     def get_system_stats(self):
-        cpu = cv2.getCPUTickCount()
-        cpu_usage = int(psutil.cpu_percent(interval=0.1))
+        #cpu = cv2.getCPUTickCount()
+        cpu_usage = int(psutil.cpu_percent(interval=1))
 
         ram = psutil.virtual_memory()
         ram_used = ram.used // (1024 * 1024)
@@ -347,7 +361,7 @@ class PhotoFrame(tk.Frame):
     def update_stats_loop(self):
         while not self.stop_event.is_set():
             self.cached_stats = self.get_system_stats()
-            time.sleep(1)
+            time.sleep(5)
 
 
 if __name__ == "__main__":
