@@ -1,17 +1,21 @@
 import json
+import logging
 import tkinter as tk
 from PIL import Image, ImageTk, ImageDraw, ImageFont
 import sys
 import os
+
+
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from Handlers.weather_handler import weather_handler
+from iFrame import iFrame
 import threading
 import psutil
 import requests
 import cv2
 import numpy as np
 import time
-import base64
 
 
 class MJPEGStreamClient:
@@ -50,48 +54,8 @@ class MJPEGStreamClient:
         except requests.exceptions.RequestException as e:
             yield None             
                   
-class WeatherClient:
-    def __init__(self, api_key, location_key):
-        self.api_key = api_key
-        self.location_key = location_key
-        self.data = None
-        self.icon = None
-        self.last_update = 0
 
-    def fetch_weather(self):
-        if not self.api_key or not self.location_key:
-            return
-
-        try:
-            url = f"http://dataservice.accuweather.com/currentconditions/v1/{self.location_key}?apikey={self.api_key}&details=true"
-            response = requests.get(url)
-            response.raise_for_status()
-            data = response.json()[0]
-
-            self.data = {
-                "temp": int(data["Temperature"]["Metric"]["Value"]),
-                "unit": "C",
-                "description": data["WeatherText"]
-            }
-
-            icon_num = int(data["WeatherIcon"])
-            icon_path = f"icons/{icon_num:02d}.png"  # Ensure these icons exist locally
-            if os.path.exists(icon_path):
-                self.icon = Image.open(icon_path).convert("RGBA")
-
-            self.last_update = time.time()
-
-        except Exception as e:
-            print("Failed to fetch weather:", e)
-
-    def get_weather_data(self):
-        return self.data
-
-    def get_weather_icon(self):
-        return self.icon
-
-
-class PhotoFrame(tk.Frame):
+class PhotoFrame(tk.Frame, iFrame):
     """
     A tkinter frame that fetches frames from an MJPEG server, resizes them,
     and displays the live video stream.
@@ -138,10 +102,7 @@ class PhotoFrame(tk.Frame):
         self.fetch_thread = threading.Thread(target=self.frame_fetch_loop, daemon=True)
         self.fetch_thread.start()
 
-        self.weather_client = WeatherClient(
-            settings.get("weather_api_key", ""),
-            settings.get("location_key", "")
-        )
+        self.weather_client = weather_handler(frame = self, settings= settings)
         self.weather_thread = threading.Thread(target=self.weather_loop, daemon=True)
         self.weather_thread.start()
         self.stats_thread = threading.Thread(target=self.update_stats_loop, daemon=True)
@@ -149,6 +110,9 @@ class PhotoFrame(tk.Frame):
         
         self.update_display()
 
+    def send_log_message(self, msg, logger: logging):
+        print(msg)
+    
     def handle_triple_tap(self, event):
         now = time.time()
         if now - self.last_tap_time < 1.5:
@@ -165,7 +129,7 @@ class PhotoFrame(tk.Frame):
 
     def weather_loop(self):
         while not self.stop_event.is_set():
-            self.weather_client.fetch_weather()
+            self.weather_client.fetch_weather_data()
             time.sleep(600)  # Every 10 minutes
 
     def add_stats_to_frame(self, frame):
@@ -327,8 +291,8 @@ class PhotoFrame(tk.Frame):
 
             icon_resized = icon.resize((icon_size, icon_size), Image.Resampling.LANCZOS)
             pil_img.paste(icon_resized, (x_icon, y_icon), icon_resized)
-            draw.text((x_temp, y_temp), temp_text, font=temp_font, fill=font_color)
-            draw.text((x_desc, y_desc), desc_text, font=desc_font, fill=font_color)
+            draw.text((x_temp, y_temp), temp_text, font=self.date_font , fill=font_color)
+            draw.text((x_desc, y_desc), desc_text, font=self.date_font, fill=font_color)
 
         # Move this out of the if block so it's always executed
         frame_with_text = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
