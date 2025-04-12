@@ -1,3 +1,4 @@
+import io
 import json
 import logging
 import tkinter as tk
@@ -17,6 +18,21 @@ import cv2
 import numpy as np
 import time
 
+# region Logging Setup
+log_file_path = os.path.join(os.path.dirname(__file__), "AppLog.log")
+logging.basicConfig(
+    filename=log_file_path,
+    level=logging.INFO, 
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO) 
+console_formatter = logging.Formatter("%(levelname)s - %(message)s")
+console_handler.setFormatter(console_formatter)
+logging.getLogger().addHandler(console_handler)
+logging.info("PhotoFrame application starting...")
+# endregion Logging Setup
 
 class MJPEGStreamClient:
     def __init__(self, url):
@@ -38,7 +54,7 @@ class MJPEGStreamClient:
                 self.boundary = "--frame"
 
             buffer = b""
-            for chunk in stream.iter_content(chunk_size=1024):
+            for chunk in stream.iter_content(chunk_size=10240):
                 buffer += chunk
                 while True:
                     start = buffer.find(b'\xff\xd8')  # JPEG start
@@ -53,8 +69,7 @@ class MJPEGStreamClient:
                         break
         except requests.exceptions.RequestException as e:
             yield None             
-                  
-
+    
 class PhotoFrame(tk.Frame, iFrame):
     """
     A tkinter frame that fetches frames from an MJPEG server, resizes them,
@@ -111,7 +126,7 @@ class PhotoFrame(tk.Frame, iFrame):
         self.update_display()
 
     def send_log_message(self, msg, logger: logging):
-        print(msg)
+        logger(msg)
     
     def handle_triple_tap(self, event):
         now = time.time()
@@ -294,7 +309,6 @@ class PhotoFrame(tk.Frame, iFrame):
             draw.text((x_temp, y_temp), temp_text, font=self.date_font , fill=font_color)
             draw.text((x_desc, y_desc), desc_text, font=self.date_font, fill=font_color)
 
-        # Move this out of the if block so it's always executed
         frame_with_text = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
         if self.show_stats:

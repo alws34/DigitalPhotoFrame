@@ -1,11 +1,10 @@
-import base64
 import logging
 import shutil
 import time
 import os
 import json
 import hashlib
-from datetime import datetime
+from datetime import datetime, timedelta
 from numpy import uint8
 from cv2 import imencode
 from flask import Flask, Response, jsonify, request, redirect, url_for, send_from_directory, render_template, flash, session, send_file, stream_with_context
@@ -20,8 +19,9 @@ from PIL import Image
 import threading
 from flask_cors import CORS
 import numpy as np
-
+import traceback
 from iFrame import iFrame
+
 if platform.system() == "Linux":
     try:
         import pyheif
@@ -46,6 +46,7 @@ class ManagerBackend:
         self.SETTINGS_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), 'settings.json'))
         self.METADATA_FILE = os.path.abspath(os.path.join(os.path.dirname(__file__), 'metadata.json'))
         self.LOG_FILE_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "PhotoFrame.log"))
+        self.WEATHER_CACHE = "weather_cache.json"
         self.Frame = frame 
         self._metadata_lock = threading.Lock()
         os.makedirs(self.IMAGE_DIR, exist_ok=True)
@@ -169,15 +170,122 @@ class ManagerBackend:
                 logging.error(f"MJPEG stream error: {e}")
                 time.sleep(0.2)
 
-
-
-  
-
-
     def setup_routes(self):
         @self.app.route('/video_feed')
         def video_feed():
             return Response(self.mjpeg_stream(), mimetype='multipart/x-mixed-replace; boundary=frame')
+        
+        @self.app.route("/system_stats")
+        def system_stats():
+            import psutil
+            try:
+                cpu_usage = int(psutil.cpu_percent(interval=0.5))
+                ram = psutil.virtual_memory()
+                ram_used = ram.used // (1024 * 1024)
+                ram_total = ram.total // (1024 * 1024)
+                ram_percent = ram.percent
+                try:
+                    cpu_temps = psutil.sensors_temperatures().get("cpu_thermal", [])
+                    cpu_temp = round(cpu_temps[0].current, 1) if cpu_temps else "N/A"
+                except Exception:
+                    cpu_temp = "N/A"
+
+                return f"CPU: {cpu_usage}%\\nRAM: {ram_percent}% ({ram_used}/{ram_total}MB)\\nCPU Temp: {cpu_temp}°C"
+            except Exception as e:
+                return "Stats unavailable", 500
+
+        @self.app.route('/settings')
+        def serve_settings():
+            try:
+                with open(self.SETTINGS_FILE, 'r') as f:
+                    return jsonify(json.load(f))
+            except Exception as e:
+                return jsonify({"error": "Failed to read settings", "details": str(e)}), 500
+
+        @self.app.route("/current_weather")
+        def current_weather():
+            try:
+                with open("settings.json") as f:
+                    settings = json.load(f)
+
+                api_key = settings.get("weather_api_key")
+                location_key = settings.get("location_key")
+
+                if not api_key or not location_key:
+                    return jsonify({
+                        "temp": "N/A",
+                        "unit": "C",
+                        "description": "Weather unavailable",
+                        "icon_url": None
+                    }), 400
+
+                # Try live fetch
+                url = f"http://dataservice.accuweather.com/currentconditions/v1/{location_key}?apikey={api_key}&details=true"
+
+                try:
+                    response = requests.get(url)
+                    data = response.json()
+
+                    if not isinstance(data, list) or not data or not isinstance(data[0], dict):
+                        raise ValueError("Unexpected API response")
+
+                    w = data[0]
+                    temp = w.get("Temperature", {}).get("Metric", {}).get("Value")
+                    unit = w.get("Temperature", {}).get("Metric", {}).get("Unit", "C")
+                    description = w.get("WeatherText", "")
+                    icon = int(w.get("WeatherIcon", 0))
+                    icon_url = f"https://developer.accuweather.com/sites/default/files/{icon:02d}-s.png"
+
+                    weather = {
+                        "temp": round(temp) if isinstance(temp, (int, float)) else "N/A",
+                        "unit": unit,
+                        "description": description,
+                        "icon_url": icon_url
+                    }
+
+                    with open(self.WEATHER_CACHE, "w") as f:
+                        json.dump({
+                            "timestamp": datetime.now().isoformat(),
+                            "weather_data": weather
+                        }, f)
+
+                    print("INFO - Weather icon successfully fetched.")
+                    return jsonify(weather)
+
+                except Exception as live_error:
+                    print("ERROR - Weather fetch failed:", live_error)
+
+                    # Fallback to cache
+                    if os.path.exists(self.WEATHER_CACHE):
+                        with open(self.WEATHER_CACHE) as f:
+                            cached = json.load(f)
+                            weather = cached.get("weather_data", {})
+                            # Build icon_url if it's not cached already
+                            if "icon_url" not in weather and "icon" in weather:
+                                icon = weather["icon"]
+                                weather["icon_url"] = f"https://developer.accuweather.com/sites/default/files/{icon:02d}-s.png"
+
+                            if all(k in weather for k in ("temp", "unit", "description", "icon_url")):
+                                print("INFO - Serving weather from fallback cache:", weather)
+                                return jsonify(weather), 200
+
+                    return jsonify({
+                        "temp": "N/A",
+                        "unit": "C",
+                        "description": "Weather unavailable",
+                        "icon_url": None
+                    }), 503
+
+            except Exception as e:
+                print("ERROR - Unexpected exception in weather route:", e)
+                return jsonify({
+                    "temp": "N/A",
+                    "unit": "C",
+                    "description": "Weather unavailable",
+                    "icon_url": None
+                }), 500
+
+
 
         @self.app.route("/current_metadata")
         def current_metadata():
@@ -545,7 +653,7 @@ class ManagerBackend:
 
     def start(self):
         threading.Thread(
-            target=lambda: self.app.run(host=self.host, port=self.port, debug=False, use_reloader=False),
+            target=lambda: self.app.run(host=self.host, port=self.port, debug=False, use_reloader=False, threaded=True),
             daemon=True
         ).start()
 
