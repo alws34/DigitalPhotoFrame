@@ -27,7 +27,7 @@ from iFrame import iFrame
 
 if platform.system() == "Linux":
     try:
-        import pyheifp
+        import pyheif
         has_pyheif = True
     except ImportError:
         has_pyheif = False
