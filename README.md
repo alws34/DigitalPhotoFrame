@@ -23,7 +23,7 @@ This project includes:
 
 ```json
 {
-  "images_dir_full_path": "./Images",
+  "images_dir": "./Images",
   "animation_duration": 10,
   "delay_between_images": 30,
   "allow_translucent_background": true,

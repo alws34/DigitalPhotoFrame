@@ -7,6 +7,9 @@ import hashlib
 from datetime import datetime, timedelta
 from numpy import uint8
 from cv2 import imencode
+from queue import Queue, Full
+from threading import Thread, Event
+import cv2
 from flask import Flask, Response, jsonify, request, redirect, url_for, send_from_directory, render_template, flash, session, send_file, stream_with_context
 from numpy import ndarray
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -33,31 +36,42 @@ else:
 
 
 class Backend:
-    def __init__(self, frame: iFrame, settings):
-        self.app = Flask("Backend")
+    def __init__(self, frame: iFrame, settings, image_dir=None):    
+        base = Path(__file__).parent
+        self.app = Flask(
+            __name__,
+            template_folder=str(base / "./templates"),
+            static_folder=str(base / "./static"),
+        )
         CORS(self.app)
         self.app.secret_key = 'supersecretkey'
         self.latest_metadata = {}
-        self.port = settings["server_port"]
-        self.host = settings["host"]
-        self.IMAGE_DIR = os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "Images"))
+
+        self.port = settings["backend_configs"]["server_port"]
+        self.host = settings["backend_configs"]["host"]
+        images_path = image_dir #settings.get("images_dir")
+        self.IMAGE_DIR = images_path if images_path else self.set_absolute_paths("Images")
+        
         self.ALLOWED_EXTENSIONS = {'.png', '.jpg', '.jpeg',
                                    '.gif', '.bmp', '.tiff', '.webp', '.heic', '.heif'}
         self.SELECTED_COLOR = '#ffcccc'
-        self.USER_DATA_FILE = os.path.abspath(
-            os.path.join(os.path.dirname(__file__), 'users.json'))
-        self.SETTINGS_FILE = os.path.abspath(os.path.join(
-            os.path.dirname(__file__), 'settings.json'))
-        self.METADATA_FILE = os.path.abspath(os.path.join(
-            os.path.dirname(__file__), 'metadata.json'))
-        self.LOG_FILE_PATH = os.path.abspath(os.path.join(
-            os.path.dirname(__file__), "PhotoFrame.log"))
+        
+        # if not images_path or not os.path.exists(images_path):
+        #     self.IMAGE_DIR = self.set_absolute_paths("Images")
+        self.USER_DATA_FILE = self.set_absolute_paths('users.json')
+        self.SETTINGS_FILE = self.set_absolute_paths('settings.json')
+        self.METADATA_FILE = self.set_absolute_paths('metadata.json')
+        self.LOG_FILE_PATH = self.set_absolute_paths("PhotoFrame.log")
         self.WEATHER_CACHE = "weather_cache.json"
+        
         self.Frame = frame
+        
         self._metadata_lock = threading.Lock()
         os.makedirs(self.IMAGE_DIR, exist_ok=True)
-
+        
+        self.settings = self.load_settings()
+        self.encoding_quality = self.settings.get("image_quality_encoding", 80)
+        
         if not os.path.exists(self.USER_DATA_FILE):
             with open(self.USER_DATA_FILE, 'w') as file:
                 json.dump({}, file)
@@ -65,7 +79,36 @@ class Backend:
         if not os.path.exists(self.METADATA_FILE):
             with open(self.METADATA_FILE, 'w') as file:
                 json.dump({}, file)
+        
+        self._jpeg_queue = Queue(maxsize=2)
+        self._stop_event  = Event()
+        Thread(target=self._capture_loop, daemon=True).start()
+        
         self.setup_routes()
+
+    def set_absolute_paths(self, path):
+        return os.path.abspath(os.path.join(os.path.dirname(__file__), path))
+    
+
+    def _capture_loop(self):
+        """Continuously grab frames, JPEG‐encode them, and push into the queue."""
+        while self.Frame.get_is_running() and not self._stop_event.is_set():
+            frame = self.Frame.get_live_frame() # block until new frame
+            if not isinstance(frame, ndarray) or frame.size == 0:
+                continue
+
+            # encode at 80% quality for speed + smaller payloads
+            success, jpg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, self.encoding_quality])
+            if not success:
+                continue
+
+            data = jpg.tobytes()
+            try:
+                # if queue full, drop the oldest frame
+                self._jpeg_queue.put(data, block=False)
+            except Full:
+                _ = self._jpeg_queue.get_nowait()
+                self._jpeg_queue.put(data, block=False)
 
     def load_settings(self):
         with open(self.SETTINGS_FILE, 'r') as file:
@@ -82,8 +125,13 @@ class Backend:
         return [entry.name for entry in Path(self.IMAGE_DIR).iterdir() if entry.is_file() and self.allowed_file(entry.name)]
 
     def load_users(self):
-        with open(self.USER_DATA_FILE, 'r') as file:
-            return json.load(file)
+        try:
+            with open(self.USER_DATA_FILE, 'r') as f:
+                return json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            users = {}
+            self.save_users(users)
+            return users
 
     def save_users(self, users):
         with open(self.USER_DATA_FILE, 'w') as file:
@@ -154,34 +202,37 @@ class Backend:
 
         self.update_current_metadata(entry)
 
-    def mjpeg_stream(self):
+    def mjpeg_stream(self, screen_w, screen_h):
+        boundary = (
+            b'--frame\r\n'
+            b'Content-Type: image/jpeg\r\n'
+            b'Cache-Control: no-cache\r\n\r\n'
+        )
         while self.Frame.get_is_running():
+            jpeg = self._jpeg_queue.get()   # blocks until available
+            yield boundary + jpeg + b'\r\n'        
+            
+    def setup_routes(self):      
+        @self.app.route('/stream')
+        def stream():
+            default_w, default_h = 1920, 1080
             try:
-                frame = self.Frame.get_live_frame()
-                if isinstance(frame, ndarray) and frame.size > 0:
-                    if frame.dtype != np.uint8:
-                        frame = frame.astype(np.uint8)
-
-                    success, jpeg = imencode('.jpg', frame)
-                    if not success:
-                        continue
-
-                    yield (
-                        b'--frame\r\n'
-                        b'Content-Type: image/jpeg\r\n\r\n' +
-                        jpeg.tobytes() + b'\r\n'
-                    )
-
-                time.sleep(1 / 30)  # ~30fps
-            except Exception as e:
-                logging.error(f"MJPEG stream error: {e}")
-                time.sleep(0.2)
-
-    def setup_routes(self):
-        @self.app.route('/video_feed')
-        def video_feed():
-            return Response(self.mjpeg_stream(), mimetype='multipart/x-mixed-replace; boundary=frame')
-
+                w = int(request.args.get('width', default_w))
+                h = int(request.args.get('height', default_h))
+            except ValueError:
+                w, h = default_w, default_h
+            resp = Response(
+                self.mjpeg_stream(w, h),
+                mimetype='multipart/x-mixed-replace; boundary=frame'
+            )
+            # disable caching so each client always gets fresh frames
+            resp.headers.update({
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                'Pragma':        'no-cache',
+                'Expires':       '0',
+            })
+            return resp
+  
         @self.app.route("/system_stats")
         def system_stats():
             import psutil
@@ -213,7 +264,7 @@ class Backend:
         @self.app.route("/current_weather")
         def current_weather():
             try:
-                with open("settings.json") as f:
+                with open(self.SETTINGS_FILE) as f:
                     settings = json.load(f)
 
                 api_key = settings.get("weather_api_key")
@@ -414,7 +465,6 @@ class Backend:
             images = self.get_images_from_directory()
             image_count = len(images)
             settings = self.load_settings()
-            # Load metadata for the first image if available
             latest_metadata = {}
             if images:
                 filepath = os.path.join(self.IMAGE_DIR, images[0])

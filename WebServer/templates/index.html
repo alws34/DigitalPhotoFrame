@@ -25,8 +25,8 @@
           <button onclick="toggleSettings()">Edit Images</button>
           <button onclick="openAppSettingsModal()">Settings</button>
           <button onclick="openUploadModal()">Upload</button>
+          <button onclick="openLogsModal()"> Show Logs</button>
           <button onclick="logout()">Logout</button>
-          <button onclick="openLogsModal()">Logs</button>
         </div>
       </div>
     </div>
@@ -34,11 +34,8 @@
 
     <!-- Main Container -->
     <div id="main-container">
-      <!-- <div id="image-transition">
-        <img id="stream" src="{{ url_for('live_feed') }}" alt="Live Feed" />
-      </div> -->
       <div id="image-transition">
-        <img id="liveImage" src="/video_feed" />
+        <img id="liveImage" src="/stream" />
       </div>
       <!-- Metadata Display -->
       <div id="image-info">
@@ -180,7 +177,7 @@
               name="file[]"
               multiple
               accept="image/*"
-              onchange="previewFiles()"
+
               style="display: none"
             />
             <button

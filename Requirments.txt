@@ -6,6 +6,6 @@ flask
 watchdog
 requests
 paho.mqtt
-pyheif
 psutil
 flask_cors
+pyheif

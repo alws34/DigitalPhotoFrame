@@ -43,7 +43,7 @@ from Effects.StretchEffect import StretchEffect
 from Effects.PlainEffect import PlainEffect
 # endregion Importing Effects
 
-from Utilities.NotificationManager import NotificationManager
+#from Utilities.NotificationManager import NotificationManager
 #endregion imports
 
 # region Logging Setup
@@ -71,23 +71,24 @@ class AnimationStatus(Enum):
 class PhotoFrame(iFrame):
     def __init__(self):
         logging.debug("Initializing PhotoFrame...")
+        self.SETTINGS_PATH = "settings.json"
+        
         try:
-            # with open("settings.json", 'r') as file:
-            #     self.settings = json.load(file)
-            self.settings = SettingsHandler("settings.json", logging)
+            self.settings = SettingsHandler(self.SETTINGS_PATH, logging)
             logging.info("Loaded settings from settings.json.")
         except FileNotFoundError:
             logging.error("settings.json not found. Exiting.")
             raise
+                
 
-        self.images_dir_full_path = self.settings["images_dir_full_path"]
-        if not os.path.exists(self.images_dir_full_path):
-            os.mkdir(self.images_dir_full_path)
+        self.IMAGE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), self.settings.get("images_dir")))
+        if not os.path.exists(self.IMAGE_DIR):
+            os.mkdir(self.IMAGE_DIR)
             logging.warning("'Images' directory not found. Created a new one.")
             return
         
         self.logger = logging.getLogger(__name__)
-
+        
         self.effects = self.set_effects()
         self.images = self.get_images_from_directory()
         self.shuffled_images = list(self.images)
@@ -108,7 +109,7 @@ class PhotoFrame(iFrame):
         self.Observer = ImagesObserver(frame = self) 
         self.weather_handler = weather_handler(frame = self, settings = self.settings)
  
-        self.m_api = Backend(frame = self, settings=self.settings["backend_configs"]) 
+        self.m_api = Backend(frame = self, settings=self.settings, image_dir  = self.IMAGE_DIR) 
         self.m_api.start()
 
         #self.weather_handler.fetch_weather_data()
@@ -213,7 +214,7 @@ class PhotoFrame(iFrame):
                             ".gif"]  # Add more extensions if needed
         image_paths = []
 
-        for root, dirs, files in os.walk(self.images_dir_full_path):
+        for root, dirs, files in os.walk(self.IMAGE_DIR):
             for file in files:
                 if file.lower().endswith(tuple(image_extensions)):
                     image_path = os.path.join(root, file)
@@ -267,8 +268,7 @@ class PhotoFrame(iFrame):
             self.triple_tap_count = 0  # Reset counter
             logging.info(f"Stats display toggled to {self.settings['stats']['show']}")
 
-            # Save the updated settings
-            with open("settings.json", "w") as file:
+            with open(self.SETTINGS_PATH, "w") as file:
                 json.dump(self.settings, file, indent=4)
 
     def get_system_stats(self):
@@ -341,7 +341,13 @@ class PhotoFrame(iFrame):
         except Exception as e:
             print(f"Error during frame update: {e}")
             return AnimationStatus.ANIMATION_ERROR
-
+    def set_screen_size(self, width, height):
+        """
+        Set the width and height of the Tkinter frame.
+        """
+        self.screen_width = width
+        self.screen_height = height
+            
     def start_image_transition(self, image1_path=None, image2_path=None, duration=5):
         """
         Start the image transition inside a Tkinter frame.
@@ -393,7 +399,6 @@ class PhotoFrame(iFrame):
         transition_thread = threading.Thread(target=self.run_photoframe)
         transition_thread.start()
 # endregion Main
-
 
 if __name__ == "__main__":
     try:
