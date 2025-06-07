@@ -1,20 +1,25 @@
 #region imports
+import os
+import sys
+
+sys.path.append(os.path.abspath(os.path.dirname(__file__)))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 import logging
 import json
 import threading
 import time
 from PIL import Image, ImageDraw, ImageFont
-import cv2
+from cv2 import COLOR_RGB2BGR, COLOR_BGR2RGB, cvtColor, imread
 import random as rand
-import os
 from enum import Enum
-import numpy as np
-import sys
-sys.path.append(os.path.abspath(os.path.dirname(__file__)))
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from numpy import array as np_array
 import psutil 
 import hashlib
-from ManagerBackend import ManagerBackend
+
+
+from WebServer.Settings import SettingsHandler
+from WebServer.API import Backend
 from Handlers.image_handler import Image_Utils
 from Handlers.weather_handler import weather_handler
 from Handlers.observer import ImagesObserver
@@ -62,33 +67,6 @@ class AnimationStatus(Enum):
     ANIMATION_FINISHED = 1
     ANIMATION_ERROR = 2
 
-class DynamicSettings:
-    def __init__(self, path):
-        self.path = path
-        self._lock = threading.Lock()
-
-    def _load(self):
-        try:
-            with self._lock:
-                with open(self.path, 'r') as f:
-                    return json.load(f)
-        except Exception as e:
-            logging.warning(f"Could not reload settings from {self.path}: {e}")
-            return {}
-
-    def __getitem__(self, key):
-        data = self._load()
-        return data[key]
-
-    def get(self, key, default=None):
-        data = self._load()
-        return data.get(key, default)
-
-    def save(self, data: dict):
-        with self._lock:
-            with open(self.path, "w") as f:
-                json.dump(data, f, indent=4)
-
 
 class PhotoFrame(iFrame):
     def __init__(self):
@@ -96,8 +74,7 @@ class PhotoFrame(iFrame):
         try:
             # with open("settings.json", 'r') as file:
             #     self.settings = json.load(file)
-            self.settings = DynamicSettings("settings.json")
-
+            self.settings = SettingsHandler("settings.json", logging)
             logging.info("Loaded settings from settings.json.")
         except FileNotFoundError:
             logging.error("settings.json not found. Exiting.")
@@ -131,8 +108,8 @@ class PhotoFrame(iFrame):
         self.Observer = ImagesObserver(frame = self) 
         self.weather_handler = weather_handler(frame = self, settings = self.settings)
  
-        self.manager_backend = ManagerBackend(frame = self, settings=self.settings["backend_configs"]) 
-        self.manager_backend.start()
+        self.m_api = Backend(frame = self, settings=self.settings["backend_configs"]) 
+        self.m_api.start()
 
         #self.weather_handler.fetch_weather_data()
         self.weather_handler.initialize_weather_updates()
@@ -153,15 +130,15 @@ class PhotoFrame(iFrame):
         
 # region guestbook
     def update_image_metadata(self, image_path):
-        # Use ManagerBackend's absolute metadata file and store_image_metadata method.
-        if hasattr(self, "manager_backend"):
+        # Use Backend's absolute metadata file and store_image_metadata method.
+        if hasattr(self, "m_api"):
             # This will create metadata only if it doesn't already exist.
-            self.manager_backend.update_image_metadata(image_path)
+            self.m_api.update_image_metadata(image_path)
             # Load the updated metadata and update the current metadata for polling.
-            metadata_db = self.manager_backend.load_metadata_db()
-            file_hash = self.manager_backend.compute_image_hash(image_path)
+            metadata_db = self.m_api.load_metadata_db()
+            file_hash = self.m_api.compute_image_hash(image_path)
             if file_hash in metadata_db:
-                self.manager_backend.update_current_metadata(metadata_db[file_hash]) 
+                self.m_api.update_current_metadata(metadata_db[file_hash]) 
 
                 
 # endregion guestbook
@@ -175,7 +152,7 @@ class PhotoFrame(iFrame):
     
     def get_metadata(self):
         """Returns metadata for the current image."""
-        return self.manager_backend.current_metadata if hasattr(self.manager_backend, "current_metadata") else {}
+        return self.m_api.current_metadata if hasattr(self.m_api, "current_metadata") else {}
 #endregion Stream
 
 # region Utils
@@ -336,12 +313,12 @@ class PhotoFrame(iFrame):
         # Use cached stats (updated once per second)
         stats_text = self.cached_stats
 
-        pil_image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+        pil_image = Image.fromarray(cvtColor(frame, COLOR_BGR2RGB))
         draw = ImageDraw.Draw(pil_image)
 
         draw.text((10, 10), stats_text, font=stats_font, fill=font_color)
 
-        return cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+        return cvtColor(np_array(pil_image), COLOR_RGB2BGR)
 
 
 #endregion stats
@@ -370,7 +347,7 @@ class PhotoFrame(iFrame):
         Start the image transition inside a Tkinter frame.
         """
         if self.current_image is None:
-            self.current_image = cv2.imread(self.get_random_image())
+            self.current_image = imread(self.get_random_image())
             if self.current_image is None:
                 return AnimationStatus.ANIMATION_FINISHED
             self.current_image = self.image_handler.resize_image_with_background(
@@ -381,7 +358,7 @@ class PhotoFrame(iFrame):
 
         self.update_image_metadata(image2_path)
 
-        self.next_image = cv2.imread(image2_path)
+        self.next_image = imread(image2_path)
         self.next_image = self.image_handler.resize_image_with_background(
             self.next_image, self.screen_width, self.screen_height)
 
@@ -407,12 +384,12 @@ class PhotoFrame(iFrame):
         rand.shuffle(self.shuffled_effects)
 
     def main(self):
-        logging.info("Starting main application...")
+        logging.info("Starting PhotoFrame Main Loop.")
         self.shuffle_images()
         #self.set_window_properties()
 
         # Start the transition thread
-        logging.info("Starting transition thread...")
+        logging.info("Starting transition thread.")
         transition_thread = threading.Thread(target=self.run_photoframe)
         transition_thread.start()
 # endregion Main
