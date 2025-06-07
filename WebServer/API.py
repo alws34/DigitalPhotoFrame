@@ -686,6 +686,7 @@ class Backend:
             "raw", heif_file.mode, heif_file.stride,
         )
         image.save(output_path, format="JPEG")
+        os.remove(heic_path)
 
     def update_current_metadata(self, metadata):
         """
