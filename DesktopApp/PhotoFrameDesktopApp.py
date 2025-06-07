@@ -99,6 +99,14 @@ class PhotoFrame(tk.Frame, iFrame):
             self.parent.protocol("WM_DELETE_WINDOW", self.on_closing)
             self.parent.bind_all('<Control-c>', lambda e: self.on_closing())
             self.parent.bind("<Button-1>", self.handle_triple_tap)
+            
+            # ───── Long-press to exit ─────
+            self._long_press_job = None
+            self._long_press_duration_ms = 5000  # 5 seconds
+            self.parent.bind("<ButtonPress-1>",   self._on_button_press)
+            self.parent.bind("<ButtonRelease-1>", self._on_button_release)
+            # ────────────────────────────────
+
         self.time_font = ImageFont.truetype(settings['font_name'], settings['time_font_size'])
         self.date_font = ImageFont.truetype(settings['font_name'], settings['date_font_size'])
         self.font_temp = self.time_font  # reuse
@@ -127,6 +135,27 @@ class PhotoFrame(tk.Frame, iFrame):
 
     def send_log_message(self, msg, logger: logging):
         logger(msg)
+    
+    def _on_button_press(self, event):
+        # schedule the exit callback after 5 seconds
+        if self._long_press_job is None:
+            self._long_press_job = self.after(
+                self._long_press_duration_ms,
+                self._long_press_detected
+            )
+
+    def _on_button_release(self, event):
+        # cancel if released before 5 seconds
+        if self._long_press_job is not None:
+            self.after_cancel(self._long_press_job)
+            self._long_press_job = None
+
+    def _long_press_detected(self):
+        logging.info("Long-press detected: shutting down application")
+        # clean shutdown
+        self.stop_event.set()
+        self.parent.destroy()
+        sys.exit(0)
     
     def handle_triple_tap(self, event):
         now = time.time()
@@ -352,7 +381,7 @@ if __name__ == "__main__":
     backend_port = settings.get("backend_configs", {}).get("server_port", 5001)
     print(backend_host)
     print(backend_port)
-    STREAM_URL = f"http://{backend_host}:{backend_port}/video_feed"
+    STREAM_URL = f"http://{backend_host}:{backend_port}/stream"
 
     os.environ["DISPLAY"] = ":0"
     root = tk.Tk()
