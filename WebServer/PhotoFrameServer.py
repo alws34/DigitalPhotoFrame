@@ -20,7 +20,7 @@ import hashlib
 
 from WebServer.Settings import SettingsHandler
 from WebServer.API import Backend
-from Handlers.image_handler import Image_Utils
+from WebServer.utilities.image_handler import Image_Utils
 from Handlers.weather_handler import weather_handler
 from Handlers.observer import ImagesObserver
 from iFrame import iFrame
@@ -62,33 +62,52 @@ logging.getLogger().addHandler(console_handler)
 logging.info("PhotoFrame application starting...")
 # endregion Logging Setup
 
-
+SETTINGS_PATH = "settings.json"
 class AnimationStatus(Enum):
     ANIMATION_FINISHED = 1
     ANIMATION_ERROR = 2
 
 
 class PhotoFrame(iFrame):
-    def __init__(self):
-        logging.debug("Initializing PhotoFrame...")
-        self.SETTINGS_PATH = "settings.json"
-        
+    def set_logger(self, logger):
         try:
-            self.settings = SettingsHandler(self.SETTINGS_PATH, logging)
+            self.logger = logging.getLogger(__name__)
             logging.info("Loaded settings from settings.json.")
         except FileNotFoundError:
             logging.error("settings.json not found. Exiting.")
             raise
-                
+    
+    # def set_images_dir(self):
+    #     self.IMAGE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), self.settings.get("images_dir")))
+    #     if not os.path.exists(self.IMAGE_DIR):
+    #         os.mkdir(self.IMAGE_DIR)
+    #         logging.warning("'Images' directory not found. Created a new one.")
+    #         return False
+    #     return True
+    def set_images_dir(self):
+        # fall back to "Images" if nothing set
+        images_dir = self.settings.get("images_dir") or "Images"
 
-        self.IMAGE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), self.settings.get("images_dir")))
+        # make it absolute, relative to this file
+        self.IMAGE_DIR = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), images_dir)
+        )
+
         if not os.path.exists(self.IMAGE_DIR):
-            os.mkdir(self.IMAGE_DIR)
-            logging.warning("'Images' directory not found. Created a new one.")
-            return
+            os.makedirs(self.IMAGE_DIR, exist_ok=True)
+            logging.warning(f"'{self.IMAGE_DIR}' directory not found. Created a new one.")
+            # you probably want to continue running even if you just created it
+        return True
+
+    def __init__(self):
+        self.set_logger(logging)
         
-        self.logger = logging.getLogger(__name__)
+        self.settings = SettingsHandler(SETTINGS_PATH, logging)
         
+        if not self.set_images_dir():
+            logging.error("Failed to set images directory. Exiting.")
+            raise FileNotFoundError("Images directory not found and could not be created.")
+         
         self.effects = self.set_effects()
         self.images = self.get_images_from_directory()
         self.shuffled_images = list(self.images)
@@ -97,7 +116,6 @@ class PhotoFrame(iFrame):
         self.current_effect_idx = -1
         self.root = None
         self.frame = None
-        self.label = None
         self.screen_width = 1920
         self.screen_height = 1080
         self.current_image = None
@@ -163,12 +181,6 @@ class PhotoFrame(iFrame):
             for chunk in iter(lambda: f.read(4096), b""):
                 hash_obj.update(chunk)
         return hash_obj.hexdigest()
-
-    def update_stats_loop(self):
-        """Runs in a separate thread to update system stats every second."""
-        while self.is_running:
-            self.cached_stats = self.get_system_stats()
-            time.sleep(1)
 
     def get_is_running(self):
         return self.is_running
@@ -252,77 +264,6 @@ class PhotoFrame(iFrame):
         self.root.destroy()
 # endregion Events
 
-#region stats
-    def handle_triple_tap(self, event):
-        """Handles triple tap to toggle stats display."""
-        current_time = time.time()
-        if current_time - self.last_tap_time < 1.5:  # Time window for triple-tap
-            self.triple_tap_count += 1
-        else:
-            self.triple_tap_count = 1  # Reset if too much time has passed
-
-        self.last_tap_time = current_time
-
-        if self.triple_tap_count == 3:  # Toggle stats on third tap
-            self.settings["stats"]["show"] = not self.settings["stats"]["show"]
-            self.triple_tap_count = 0  # Reset counter
-            logging.info(f"Stats display toggled to {self.settings['stats']['show']}")
-
-            with open(self.SETTINGS_PATH, "w") as file:
-                json.dump(self.settings, file, indent=4)
-
-    def get_system_stats(self):
-        """Retrieves system stats (CPU usage, RAM usage, CPU temperature)."""
-        cpu_usage = psutil.cpu_percent()
-
-        # Get RAM usage
-        ram = psutil.virtual_memory()
-        ram_used = ram.used // (1024 * 1024)  # Convert to MB
-        ram_total = ram.total // (1024 * 1024)  # Convert to MB
-        ram_percent = ram.percent  # Get RAM usage percentage
-
-        # Get CPU temperature correctly
-        try:
-            cpu_temps = psutil.sensors_temperatures().get("cpu_thermal", [])
-            cpu_temp = round(cpu_temps[0].current, 1) if cpu_temps else "N/A"
-        except (IndexError, AttributeError):
-            cpu_temp = "N/A"
-
-        return f"CPU: {cpu_usage}%\nRAM: {ram_percent}% ({ram_used}/{ram_total}MB)\nCPU Temp: {cpu_temp}°C"
-
-    def add_stats_to_frame(self, frame):
-        """Adds cached system stats to the image if enabled."""
-        if not self.settings["stats"]["show"]:
-            return frame  # Skip if stats are disabled
-
-        font_path = self.settings['font_name']
-        font_size = self.settings['stats']['font_size']
-        font_color = self.settings['stats']['font_color']
-
-        color_map = {
-            "yellow": (255, 255, 0),
-            "white": (255, 255, 255),
-            "red": (255, 0, 0),
-            "green": (0, 255, 0),
-            "blue": (0, 0, 255)
-        }
-        font_color = color_map.get(font_color.lower(), (255, 255, 0))
-
-        stats_font = ImageFont.truetype(font_path, font_size)
-
-        # Use cached stats (updated once per second)
-        stats_text = self.cached_stats
-
-        pil_image = Image.fromarray(cvtColor(frame, COLOR_BGR2RGB))
-        draw = ImageDraw.Draw(pil_image)
-
-        draw.text((10, 10), stats_text, font=stats_font, fill=font_color)
-
-        return cvtColor(np_array(pil_image), COLOR_RGB2BGR)
-
-
-#endregion stats
-
 
 # region Main
     def update_frame(self, generator):
@@ -341,6 +282,7 @@ class PhotoFrame(iFrame):
         except Exception as e:
             print(f"Error during frame update: {e}")
             return AnimationStatus.ANIMATION_ERROR
+
     def set_screen_size(self, width, height):
         """
         Set the width and height of the Tkinter frame.
@@ -383,18 +325,12 @@ class PhotoFrame(iFrame):
             self.start_image_transition(duration=self.settings["animation_duration"])
             time.sleep(self.settings["delay_between_images"])     
 
-    def shuffle_images(self):
-        self.shuffled_images = list(self.images)
-        rand.shuffle(self.shuffled_images)
-        self.shuffled_effects = list(self.effects.keys())
-        rand.shuffle(self.shuffled_effects)
+    
 
     def main(self):
         logging.info("Starting PhotoFrame Main Loop.")
-        self.shuffle_images()
-        #self.set_window_properties()
-
-        # Start the transition thread
+        self.shuffled_images = self.image_handler.shuffle_images(self.images)
+        self.shuffled_effects = self.image_handler.shuffle_effects(self.effects)
         logging.info("Starting transition thread.")
         transition_thread = threading.Thread(target=self.run_photoframe)
         transition_thread.start()

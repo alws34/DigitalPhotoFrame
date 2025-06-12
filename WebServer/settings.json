@@ -1,20 +1,34 @@
 {
-    "images_dir": "Images",
-    "animation_duration": 10,
-    "delay_between_images": 30,
-    "image_quality_encoding": 80, 
-    "font_name": "arial.ttf",
-    "time_font_size": 80,
-    "date_font_size": 50,
-    "margin_left": 80,
-    "margin_bottom": 80,
-    "margin_right": 50,
-    "spacing_between": 50,
-    "allow_translucent_background": true,
-    "weather_api_key": "",
-    "location_key": "",
-    "backend_configs": {
-        "server_port": 5001,
-        "host": "0.0.0.0"
-    }
+  "backend_configs": {
+    "host": "0.0.0.0",
+    "server_port": 5001,
+    "stream_width": 1920,
+    "stream_height": 1080,
+    "stream_fps": 25
+  },
+
+  "image_quality_encoding": 60,
+
+  "weather_api_key": "YOUR_ACCUWEATHER_API_KEY",
+  "location_key": "YOUR_LOCATION_KEY",
+  "animation_duration": 10,
+  "delay_between_images": 30,
+  "allow_translucent_background": true,
+
+  "image_dir": "Images",
+
+  "font_name": "arial.ttf",
+  "time_font_size": 80,
+  "date_font_size": 50,
+
+  "margin_left": 50,
+  "margin_bottom": 80,
+  "margin_right": 50,
+  "spacing_between": 50,
+
+  "stats": {
+    "show": true,
+    "font_size": 20,
+    "font_color": "yellow"
+  }
 }

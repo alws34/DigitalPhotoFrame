@@ -1,9 +1,19 @@
 import cv2
 import numpy as np
-
+import random as rand
 class Image_Utils():
     def __init__(self, settings: dict):
         self.settings = settings
+
+    def shuffle_images(self, images):
+        images_copy = list(images)
+        rand.shuffle(images_copy)
+        return images_copy
+    
+    def shuffle_effects(self, effects):
+        keys = list(effects.keys())
+        rand.shuffle(keys)
+        return keys
 
     def resize_image(self, image, target_width, target_height):
         # Get the original dimensions of the image

@@ -24,8 +24,9 @@ from flask_cors import CORS
 import numpy as np
 import traceback
 from iFrame import iFrame
+from concurrent.futures import ThreadPoolExecutor
 
-if platform.system() == "Linux":
+if platform.system() == "Linux" or platform.system() == "Darwin":
     try:
         import pyheif
         has_pyheif = True
@@ -47,6 +48,9 @@ class Backend:
         self.app.secret_key = 'supersecretkey'
         self.latest_metadata = {}
 
+        self.stream_h = settings["backend_configs"]["stream_height"]
+        self.stream_w = settings["backend_configs"]["stream_width"]
+        
         self.port = settings["backend_configs"]["server_port"]
         self.host = settings["backend_configs"]["host"]
         images_path = image_dir #settings.get("images_dir")
@@ -65,6 +69,7 @@ class Backend:
         self.WEATHER_CACHE = "weather_cache.json"
         
         self.Frame = frame
+        self.executor = ThreadPoolExecutor(max_workers=2)
         
         self._metadata_lock = threading.Lock()
         os.makedirs(self.IMAGE_DIR, exist_ok=True)
@@ -89,26 +94,38 @@ class Backend:
     def set_absolute_paths(self, path):
         return os.path.abspath(os.path.join(os.path.dirname(__file__), path))
     
-
     def _capture_loop(self):
-        """Continuously grab frames, JPEG‐encode them, and push into the queue."""
-        while self.Frame.get_is_running() and not self._stop_event.is_set():
-            frame = self.Frame.get_live_frame() # block until new frame
-            if not isinstance(frame, ndarray) or frame.size == 0:
-                continue
+        interval = 1.0 / self.settings["backend_configs"].get("stream_fps", 10)
+        while not self._stop_event.is_set() and self.Frame.get_is_running():
+            start = time.time()
+            frame = self.Frame.get_live_frame()
+            if isinstance(frame, ndarray) and frame.size:
+                frame_small = cv2.resize(frame,
+                                         (self.stream_w, self.stream_h),
+                                         interpolation=cv2.INTER_AREA)
+                try:
+                    self.executor.submit(self._encode_and_queue, frame_small)
+                except RuntimeError:
+                    # Happens if the executor is already shutting down
+                    break
 
-            # encode at 80% quality for speed + smaller payloads
-            success, jpg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, self.encoding_quality])
-            if not success:
-                continue
+            elapsed = time.time() - start
+            if elapsed < interval:
+                time.sleep(interval - elapsed)
 
-            data = jpg.tobytes()
-            try:
-                # if queue full, drop the oldest frame
-                self._jpeg_queue.put(data, block=False)
-            except Full:
-                _ = self._jpeg_queue.get_nowait()
-                self._jpeg_queue.put(data, block=False)
+        
+    def _encode_and_queue(self, frame: ndarray):
+        success, jpg = cv2.imencode('.jpg', frame,
+                                [cv2.IMWRITE_JPEG_QUALITY, self.encoding_quality])
+        if not success:
+            return
+        data = jpg.tobytes()
+        try:
+            self._jpeg_queue.put_nowait(data)
+        except Full:
+            _ = self._jpeg_queue.get_nowait()
+            self._jpeg_queue.put_nowait(data)
+
 
     def load_settings(self):
         with open(self.SETTINGS_FILE, 'r') as file:
