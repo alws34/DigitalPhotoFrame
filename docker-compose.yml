@@ -39,7 +39,7 @@ services:
     ports:
       - "5200:5001"
     volumes:
-      - ./images:/app/WebServer/Images
+      - ./Images:/app/WebServer/Images
     command: python PhotoFrameServer.py
     environment:
       SCREEN_WIDTH: "1920"
