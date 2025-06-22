@@ -148,8 +148,8 @@ function previewFiles() {
       div.innerHTML = `
         <img src="${e.target.result}" style="max-width: 300px; max-height: 300px;" />
         <table>
-          <tr><td>Uploader:</td><td><input name="uploader_${i}" required></td></tr>
-          <tr><td>Caption:</td><td><input name="caption_${i}" required></td></tr>
+          <tr><td>Uploader:</td><td><input name="uploader_${i}"></td></tr>
+          <tr><td>Caption:</td><td><input name="caption_${i}"></td></tr>
         </table>
       `;
       container.appendChild(div);
@@ -185,16 +185,15 @@ window.addEventListener("DOMContentLoaded", () => {
       const preview = previews[i];
 
       const uploader = preview.querySelector(`input[name="uploader_${i}"]`);
-      const caption = preview.querySelector(`input[name="caption_${i}"]`);
+      const caption  = preview.querySelector(`input[name="caption_${i}"]`);
 
-      if (!uploader || !caption || !uploader.value || !caption.value) {
-        alert(`Missing uploader or caption for image ${i + 1}`);
-        return;
-      }
+      // allow both fields to be blank
+      const uploaderVal = uploader  ? uploader.value.trim() : "";
+      const captionVal  = caption   ? caption.value.trim()  : "";
 
       formData.append("file[]", file);
-      formData.append(`uploader_${i}`, uploader.value);
-      formData.append(`caption_${i}`, caption.value);
+      formData.append(`uploader_${i}`, uploaderVal);
+      formData.append(`caption_${i}`, captionVal);
     }
 
     fetch("/upload_with_metadata", {
