@@ -6,15 +6,11 @@ sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import logging
-import json
 import threading
 import time
-from PIL import Image, ImageDraw, ImageFont
-from cv2 import COLOR_RGB2BGR, COLOR_BGR2RGB, cvtColor, imread
+from cv2 import imread
 import random as rand
 from enum import Enum
-from numpy import array as np_array
-import psutil 
 import hashlib
 
 
@@ -24,24 +20,8 @@ from WebServer.utilities.image_handler import Image_Utils
 from Handlers.weather_handler import weather_handler
 from Handlers.observer import ImagesObserver
 from iFrame import iFrame
+from EffectHandler import EffectHandler
 
-# region Importing Effects
-from Effects.CheckerboardEffect import CheckerboardEffect
-from Effects.AlphaDissolveEffect import AlphaDissolveEffect
-from Effects.PixelDissolveEffect import PixelDissolveEffect
-from Effects.BlindsEffect import BlindsEffect
-from Effects.ScrollEffect import ScrollEffect
-from Effects.WipeEffect import WipeEffect
-from Effects.ZoomOutEffect import ZoomOutEffect
-from Effects.ZoomInEffect import ZoomInEffect
-from Effects.IrisOpenEffect import IrisOpenEffect
-from Effects.IrisCloseEffect import IrisCloseEffect
-from Effects.BarnDoorOpenEffect import BarnDoorOpenEffect
-from Effects.BarnDoorCloseEffect import BarnDoorCloseEffect
-from Effects.ShrinkEffect import ShrinkEffect
-from Effects.StretchEffect import StretchEffect
-from Effects.PlainEffect import PlainEffect
-# endregion Importing Effects
 
 #from Utilities.NotificationManager import NotificationManager
 #endregion imports
@@ -77,18 +57,9 @@ class PhotoFrame(iFrame):
             logging.error("settings.json not found. Exiting.")
             raise
     
-    # def set_images_dir(self):
-    #     self.IMAGE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), self.settings.get("images_dir")))
-    #     if not os.path.exists(self.IMAGE_DIR):
-    #         os.mkdir(self.IMAGE_DIR)
-    #         logging.warning("'Images' directory not found. Created a new one.")
-    #         return False
-    #     return True
     def set_images_dir(self):
-        # fall back to "Images" if nothing set
         images_dir = self.settings.get("images_dir") or "Images"
 
-        # make it absolute, relative to this file
         self.IMAGE_DIR = os.path.abspath(
             os.path.join(os.path.dirname(__file__), images_dir)
         )
@@ -99,53 +70,44 @@ class PhotoFrame(iFrame):
             # you probably want to continue running even if you just created it
         return True
 
-    def __init__(self):
+    def __init__(self,width=1920, height=1080):
         self.set_logger(logging)
         
         self.settings = SettingsHandler(SETTINGS_PATH, logging)
+        self.EffectHandler = EffectHandler()
+        self.image_handler = Image_Utils(settings = self.settings)
         
         if not self.set_images_dir():
             logging.error("Failed to set images directory. Exiting.")
             raise FileNotFoundError("Images directory not found and could not be created.")
          
-        self.effects = self.set_effects()
-        self.images = self.get_images_from_directory()
-        self.shuffled_images = list(self.images)
-        self.shuffled_effects = list(self.effects.keys())
+        self.effects = self.EffectHandler.get_effects()
+
+        self.update_images_list()
+
         self.current_image_idx = -1
         self.current_effect_idx = -1
-        self.root = None
-        self.frame = None
-        self.screen_width = 1920
-        self.screen_height = 1080
+
+        self.screen_width = width
+        self.screen_height = height
+        
         self.current_image = None
         self.next_image = None
         self.frame_to_stream = None
         self.is_running = True
-        
-        self.image_handler = Image_Utils(settings = self.settings)
-        self.Observer = ImagesObserver(frame = self) 
-        self.weather_handler = weather_handler(frame = self, settings = self.settings)
- 
-        self.m_api = Backend(frame = self, settings=self.settings, image_dir  = self.IMAGE_DIR) 
-        self.m_api.start()
 
-        #self.weather_handler.fetch_weather_data()
-        self.weather_handler.initialize_weather_updates()
+        self.Observer = ImagesObserver(frame = self) 
         self.Observer.start_observer()
         
-        self.notification_manager = None
+        self.weather_handler = weather_handler(frame = self, settings = self.settings)
+        self.weather_handler.initialize_weather_updates()
         
-        self.triple_tap_count = 0  # Counter for triple tap detection
-        self.last_tap_time = 0
-       
-        # Cached system stats and update time
-        self.cached_stats = ""
-        self.last_stats_update = 0        
+        self.m_api = Backend(frame = self, settings=self.settings, image_dir  = self.IMAGE_DIR) 
+        #self.m_api.start()
 
     def update_images_list(self):
         self.images = self.get_images_from_directory()
-        self.shuffle_images()
+        self.shuffled_images = self.image_handler.shuffle_images(self.images)
         
 # region guestbook
     def update_image_metadata(self, image_path):
@@ -165,6 +127,10 @@ class PhotoFrame(iFrame):
 #region Stream
     def update_frame_to_stream(self, frame):
         self.frame_to_stream = frame
+        # tell the backend we have a new frame ready:
+        if hasattr(self, 'm_api'):
+            self.m_api._new_frame_ev.set()
+
 
     def get_live_frame(self):
         return self.frame_to_stream
@@ -187,31 +153,8 @@ class PhotoFrame(iFrame):
     
     def send_log_message(self, msg, logger: logging):
         logger(msg)
-        
-    def on_touch_event(self, event):
-        """Handler for touchscreen events. Does nothing."""
-        logging.info(f"Touch event detected: {event}. Ignored.")
-        if event.type == "swipe" and event.direction == "right":
-            self.notification_manager.remove_all_notifications()
-        
-    def set_effects(self):
-        return {
-            0: AlphaDissolveEffect,
-            1: PixelDissolveEffect,
-            2: CheckerboardEffect,
-            3: BlindsEffect,
-            4: ScrollEffect,
-            5: WipeEffect,
-            6: ZoomOutEffect,
-            7: ZoomInEffect,
-            8: IrisOpenEffect,
-            9: IrisCloseEffect,
-            10: BarnDoorOpenEffect,
-            11: BarnDoorCloseEffect,
-            12: ShrinkEffect,
-            13: StretchEffect,
-            # 14: PlainEffect
-        }
+
+    
 
     def get_images_from_directory(self):
         """Gets all image files (as paths) from a given directory.
@@ -244,25 +187,9 @@ class PhotoFrame(iFrame):
         self.current_image_idx = (self.current_image_idx + 1) % len(self.shuffled_images)
         return self.shuffled_images[self.current_image_idx]
 
-    def get_random_effect(self):
-        '''Returns a different effect each time.'''
-        if len(self.shuffled_effects) == 0:
-            self.shuffled_effects = list(self.effects.keys())
-            rand.shuffle(self.shuffled_effects)
-        self.current_effect_idx = (
-            self.current_effect_idx + 1) % len(self.shuffled_effects)
-        return self.shuffled_effects[self.current_effect_idx]
+
 # endregion Utils
 
-# region Events
-    def on_closing(self):
-        """Handler for window close event."""
-        logging.info("Closing application...")
-        self.stop_event.set() 
-        self.is_running = False
-        self.stop_observer()
-        self.root.destroy()
-# endregion Events
 
 
 # region Main
@@ -310,30 +237,28 @@ class PhotoFrame(iFrame):
         self.next_image = self.image_handler.resize_image_with_background(
             self.next_image, self.screen_width, self.screen_height)
 
-        effect_function = self.effects[self.get_random_effect()]
+        effect_function = self.effects[self.EffectHandler.get_random_effect()]
         gen = effect_function(self.current_image, self.next_image, duration)
         self.status = self.update_frame(gen)
 
         if self.status == AnimationStatus.ANIMATION_FINISHED:
             self.current_image = self.next_image
-            # Update the current image to image2 after the transition completes
             return AnimationStatus.ANIMATION_FINISHED
 
     def run_photoframe(self):
+        self.shuffled_images = self.image_handler.shuffle_images(self.images)
+        
         while self.is_running:
-            # Start the transition with a random image pair
             self.start_image_transition(duration=self.settings["animation_duration"])
             time.sleep(self.settings["delay_between_images"])     
 
-    
-
     def main(self):
-        logging.info("Starting PhotoFrame Main Loop.")
-        self.shuffled_images = self.image_handler.shuffle_images(self.images)
-        self.shuffled_effects = self.image_handler.shuffle_effects(self.effects)
-        logging.info("Starting transition thread.")
         transition_thread = threading.Thread(target=self.run_photoframe)
         transition_thread.start()
+        api_thread = threading.Thread(
+            target=self.m_api.start, daemon=True
+        )
+        api_thread.start()
 # endregion Main
 
 if __name__ == "__main__":

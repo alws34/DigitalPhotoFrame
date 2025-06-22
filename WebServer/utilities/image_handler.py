@@ -9,11 +9,7 @@ class Image_Utils():
         images_copy = list(images)
         rand.shuffle(images_copy)
         return images_copy
-    
-    def shuffle_effects(self, effects):
-        keys = list(effects.keys())
-        rand.shuffle(keys)
-        return keys
+
 
     def resize_image(self, image, target_width, target_height):
         # Get the original dimensions of the image

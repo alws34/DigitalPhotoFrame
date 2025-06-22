@@ -4,7 +4,8 @@
     "server_port": 5001,
     "stream_width": 1920,
     "stream_height": 1080,
-    "stream_fps": 25
+    "stream_fps": 25,
+    "supersecretkey": "YOUR_SUPERSECRET_KEY"
   },
 
   "image_quality_encoding": 60,
