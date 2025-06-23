@@ -87,52 +87,42 @@ class Backend:
     def set_absolute_paths(self, path):
         return os.path.abspath(os.path.join(os.path.dirname(__file__), path))
     
-    # def _capture_loop(self):
-    #     print("[MJPEG] capture loop starting")
-    #     interval = 1.0 / self.settings["backend_configs"].get("stream_fps", 10)
-    #     while not self._stop_event.is_set() and self.Frame.get_is_running():
-    #         start = time.time()
-    #         frame = self.Frame.get_live_frame()
-    #         if isinstance(frame, ndarray) and frame.size:
-    #             print(f"[MJPEG] got frame {frame.shape}")
-    #             try:
-    #                 self.executor.submit(self._encode_and_queue, frame)
-    #             except RuntimeError:
-    #                 break
-    #         else:
-    #             print("[MJPEG] no frame yet")
-    #         elapsed = time.time() - start
-    #         if elapsed < interval:
-    #             time.sleep(interval - elapsed)
 
     def _capture_loop(self):
-        fps = self.settings["backend_configs"].get("stream_fps", 10)
-        target = 1.0 / fps
+        """
+        Encode every new frame as it arrives. When no frame arrives for
+        `idle_delay` seconds, re-send the last JPEG so that newcomers
+        still see something without re-encoding.
+        """
+        idle_fps   = self.settings["backend_configs"].get("idle_fps", 1)
+        idle_delay = 1.0 / max(idle_fps, 1)
+
+        last_jpeg  = None
+
         while not self._stop_event.is_set() and self.Frame.get_is_running():
-            self._new_frame_ev.wait()
-            self._new_frame_ev.clear()
 
-            start = time.time()
-            frame = self.Frame.get_live_frame()
-            if not (isinstance(frame, ndarray) and frame.size):
+            got_new = self._new_frame_ev.wait(timeout=idle_delay)
+            if got_new:
+                self._new_frame_ev.clear()
+
+                frame = self.Frame.get_live_frame()
+                if isinstance(frame, ndarray) and frame.size:
+                    ok, jpg = cv2.imencode(
+                        '.jpg', frame,
+                        [cv2.IMWRITE_JPEG_QUALITY, self.encoding_quality]
+                    )
+                    if ok:
+                        last_jpeg = jpg.tobytes()
+
+            if last_jpeg is None:
                 continue
 
-            ok, jpg = cv2.imencode('.jpg', frame,
-                                [cv2.IMWRITE_JPEG_QUALITY,
-                                    self.encoding_quality])
-            if not ok:
-                continue
             try:
-                self._jpeg_queue.put_nowait(jpg.tobytes())
+                self._jpeg_queue.put_nowait(last_jpeg)
             except Full:
                 _ = self._jpeg_queue.get_nowait()
-                self._jpeg_queue.put_nowait(jpg.tobytes())
-
-            # **throttle**
-            elapsed = time.time() - start
-            if elapsed < target:
-                time.sleep(target - elapsed)
-            
+                self._jpeg_queue.put_nowait(last_jpeg)
+                
     def _encode_and_queue(self, frame: ndarray):
         success, jpg = cv2.imencode('.jpg', frame,
                                 [cv2.IMWRITE_JPEG_QUALITY, self.encoding_quality])
