@@ -106,30 +106,33 @@ class Backend:
     #             time.sleep(interval - elapsed)
 
     def _capture_loop(self):
-        """Waits for a new frame event, encodes & enqueues it, then waits again."""
-        print("[MJPEG] capture loop starting")
+        fps = self.settings["backend_configs"].get("stream_fps", 10)
+        target = 1.0 / fps
         while not self._stop_event.is_set() and self.Frame.get_is_running():
-            # block indefinitely until a new frame is ready:
             self._new_frame_ev.wait()
             self._new_frame_ev.clear()
 
+            start = time.time()
             frame = self.Frame.get_live_frame()
             if not (isinstance(frame, ndarray) and frame.size):
                 continue
 
-            success, jpg = cv2.imencode('.jpg', frame,
-                [cv2.IMWRITE_JPEG_QUALITY, self.encoding_quality])
-            if not success:
+            ok, jpg = cv2.imencode('.jpg', frame,
+                                [cv2.IMWRITE_JPEG_QUALITY,
+                                    self.encoding_quality])
+            if not ok:
                 continue
-
-            # push the latest frame (dropping oldest if queue full)
             try:
                 self._jpeg_queue.put_nowait(jpg.tobytes())
             except Full:
                 _ = self._jpeg_queue.get_nowait()
                 self._jpeg_queue.put_nowait(jpg.tobytes())
 
-        
+            # **throttle**
+            elapsed = time.time() - start
+            if elapsed < target:
+                time.sleep(target - elapsed)
+            
     def _encode_and_queue(self, frame: ndarray):
         success, jpg = cv2.imencode('.jpg', frame,
                                 [cv2.IMWRITE_JPEG_QUALITY, self.encoding_quality])
@@ -286,7 +289,7 @@ class Backend:
         def system_stats():
             import psutil
             try:
-                cpu_usage = int(psutil.cpu_percent(interval=0.5))
+                cpu_usage = int(psutil.cpu_percent(interval=None))
                 ram = psutil.virtual_memory()
                 ram_used = ram.used // (1024 * 1024)
                 ram_total = ram.total // (1024 * 1024)

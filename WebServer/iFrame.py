@@ -28,6 +28,6 @@ class iFrame(ABC):
     @abstractmethod
     def get_live_frame(self):
         pass
-    @abstractmethod
-    def get_metadata(self):
-        pass
+    # @abstractmethod
+    # def get_metadata(self):
+    #     pass

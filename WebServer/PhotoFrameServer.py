@@ -17,7 +17,6 @@ import hashlib
 from WebServer.Settings import SettingsHandler
 from WebServer.API import Backend
 from WebServer.utilities.image_handler import Image_Utils
-from Handlers.weather_handler import weather_handler
 from Handlers.observer import ImagesObserver
 from iFrame import iFrame
 from EffectHandler import EffectHandler
@@ -49,27 +48,6 @@ class AnimationStatus(Enum):
 
 
 class PhotoFrame(iFrame):
-    def set_logger(self, logger):
-        try:
-            self.logger = logging.getLogger(__name__)
-            logging.info("Loaded settings from settings.json.")
-        except FileNotFoundError:
-            logging.error("settings.json not found. Exiting.")
-            raise
-    
-    def set_images_dir(self):
-        images_dir = self.settings.get("images_dir") or "Images"
-
-        self.IMAGE_DIR = os.path.abspath(
-            os.path.join(os.path.dirname(__file__), images_dir)
-        )
-
-        if not os.path.exists(self.IMAGE_DIR):
-            os.makedirs(self.IMAGE_DIR, exist_ok=True)
-            logging.warning(f"'{self.IMAGE_DIR}' directory not found. Created a new one.")
-            # you probably want to continue running even if you just created it
-        return True
-
     def __init__(self,width=1920, height=1080):
         self.set_logger(logging)
         
@@ -99,11 +77,29 @@ class PhotoFrame(iFrame):
         self.Observer = ImagesObserver(frame = self) 
         self.Observer.start_observer()
         
-        self.weather_handler = weather_handler(frame = self, settings = self.settings)
-        self.weather_handler.initialize_weather_updates()
-        
         self.m_api = Backend(frame = self, settings=self.settings, image_dir  = self.IMAGE_DIR) 
         #self.m_api.start()
+ 
+    def set_logger(self, logger):
+        try:
+            self.logger = logging.getLogger(__name__)
+            logging.info("Loaded settings from settings.json.")
+        except FileNotFoundError:
+            logging.error("settings.json not found. Exiting.")
+            raise
+    
+    def set_images_dir(self):
+        images_dir = self.settings.get("images_dir") or "Images"
+
+        self.IMAGE_DIR = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), images_dir)
+        )
+
+        if not os.path.exists(self.IMAGE_DIR):
+            os.makedirs(self.IMAGE_DIR, exist_ok=True)
+            logging.warning(f"'{self.IMAGE_DIR}' directory not found. Created a new one.")
+            # you probably want to continue running even if you just created it
+        return True
 
     def update_images_list(self):
         self.images = self.get_images_from_directory()
@@ -111,33 +107,24 @@ class PhotoFrame(iFrame):
         
 # region guestbook
     def update_image_metadata(self, image_path):
-        # Use Backend's absolute metadata file and store_image_metadata method.
         if hasattr(self, "m_api"):
-            # This will create metadata only if it doesn't already exist.
             self.m_api.update_image_metadata(image_path)
-            # Load the updated metadata and update the current metadata for polling.
             metadata_db = self.m_api.load_metadata_db()
             file_hash = self.m_api.compute_image_hash(image_path)
             if file_hash in metadata_db:
                 self.m_api.update_current_metadata(metadata_db[file_hash]) 
-
-                
+             
 # endregion guestbook
 
 #region Stream
     def update_frame_to_stream(self, frame):
         self.frame_to_stream = frame
-        # tell the backend we have a new frame ready:
         if hasattr(self, 'm_api'):
             self.m_api._new_frame_ev.set()
 
-
     def get_live_frame(self):
         return self.frame_to_stream
-    
-    def get_metadata(self):
-        """Returns metadata for the current image."""
-        return self.m_api.current_metadata if hasattr(self.m_api, "current_metadata") else {}
+
 #endregion Stream
 
 # region Utils
@@ -154,17 +141,7 @@ class PhotoFrame(iFrame):
     def send_log_message(self, msg, logger: logging):
         logger(msg)
 
-    
-
     def get_images_from_directory(self):
-        """Gets all image files (as paths) from a given directory.
-
-        Args:
-            directory_path: The path to the directory to search for images.
-
-        Returns:
-            A list of paths to image files found in the directory.
-        """
         image_extensions = [".jpg", ".jpeg", ".png",
                             ".gif"]  # Add more extensions if needed
         image_paths = []
@@ -178,7 +155,6 @@ class PhotoFrame(iFrame):
         return image_paths
 
     def get_random_image(self):
-        '''Returns a different image path each time.'''
         if len(self.shuffled_images) == 0:
             self.shuffled_images = list(self.images)
             rand.shuffle(self.shuffled_images)
@@ -194,12 +170,6 @@ class PhotoFrame(iFrame):
 
 # region Main
     def update_frame(self, generator):
-        """
-        Update the frame in the Tkinter window by fetching the next frame from the generator.
-
-        Args:
-        generator: The generator yielding transition frames.
-        """
         if generator is None:
             return
         try:
@@ -209,18 +179,8 @@ class PhotoFrame(iFrame):
         except Exception as e:
             print(f"Error during frame update: {e}")
             return AnimationStatus.ANIMATION_ERROR
-
-    def set_screen_size(self, width, height):
-        """
-        Set the width and height of the Tkinter frame.
-        """
-        self.screen_width = width
-        self.screen_height = height
-            
+           
     def start_image_transition(self, image1_path=None, image2_path=None, duration=5):
-        """
-        Start the image transition inside a Tkinter frame.
-        """
         if self.current_image is None:
             self.current_image = imread(self.get_random_image())
             if self.current_image is None:
