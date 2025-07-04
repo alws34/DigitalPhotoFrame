@@ -76,13 +76,14 @@ class Backend:
             with open(self.METADATA_FILE, 'w') as file:
                 json.dump({}, file)
         
-        self._jpeg_queue   = Queue(maxsize=2)
+        self._jpeg_queue   = Queue(maxsize=30)
         self._new_frame_ev = Event()
         self._stop_event   = Event()
         
+        self.setup_routes()
         Thread(target=self._capture_loop, daemon=True).start()
         
-        self.setup_routes()
+        
 
     def set_absolute_paths(self, path):
         return os.path.abspath(os.path.join(os.path.dirname(__file__), path))
@@ -115,10 +116,11 @@ class Backend:
                         last_jpeg = jpg.tobytes()
 
             if last_jpeg is None:
+                time.sleep(0.1)
                 continue
 
             try:
-                self._jpeg_queue.put_nowait(last_jpeg)
+                self._jpeg_queue.put(last_jpeg, timeout=0.5)
             except Full:
                 _ = self._jpeg_queue.get_nowait()
                 self._jpeg_queue.put_nowait(last_jpeg)
@@ -228,27 +230,6 @@ class Backend:
 
         self.update_current_metadata(entry)
 
-    # def mjpeg_stream(self, screen_w, screen_h):
-    #     boundary = (
-    #         b'--frame\r\n'
-    #         b'Content-Type: image/jpeg\r\n'
-    #         b'Cache-Control: no-cache\r\n\r\n'
-    #     )
-    #     fps = self.settings["backend_configs"].get("stream_fps", 10)
-    #     interval = 1.0 / fps
-    #     while self.Frame.get_is_running():
-    #         frame = self.Frame.get_live_frame()
-    #         if isinstance(frame, ndarray) and frame.size:
-    #             # resize and encode immediately
-    #             frame_small = cv2.resize(frame,
-    #                                     (self.stream_w, self.stream_h),
-    #                                     interpolation=cv2.INTER_AREA)
-    #             success, jpg = cv2.imencode('.jpg', frame_small,
-    #                                         [cv2.IMWRITE_JPEG_QUALITY, self.encoding_quality])
-    #             if success:
-    #                 yield boundary + jpg.tobytes() + b'\r\n'
-    #         time.sleep(interval)
-      
     def mjpeg_stream(self, screen_w, screen_h):
         boundary = (b'--frame\r\n'
                     b'Content-Type: image/jpeg\r\n'
@@ -394,6 +375,19 @@ class Backend:
         def current_metadata():
             with self._metadata_lock:
                 return jsonify(self.latest_metadata or {})
+
+        @self.app.route('/metadata_stream')
+        def metadata_stream():
+            def gen():
+                last = None
+                while True:
+                    with self._metadata_lock:
+                        meta = self.latest_metadata
+                    if meta != last:
+                        yield f"data: {json.dumps(meta)}\n\n"
+                        last = meta.copy()
+                    time.sleep(0.1)
+            return Response(gen(), mimetype='text/event-stream')
 
         @self.app.route('/upload_with_metadata', methods=['POST'])
         def upload_with_metadata():

@@ -327,8 +327,17 @@ function pollMetadata() {
     });
 }
 
-setInterval(pollMetadata, 2000); // poll every 2 seconds
 
+// setInterval(pollMetadata, 2000); // poll every 2 seconds
+const evtSrc = new EventSource("/metadata_stream");
+evtSrc.onmessage = e => {
+  const data = JSON.parse(e.data);
+  document.getElementById("captionField").textContent  = data.caption || "No Caption";
+  document.getElementById("uploaderField").textContent = data.uploader || "Unknown";
+  document.getElementById("dateField").textContent     = data.date_added 
+    ? new Date(data.date_added).toLocaleDateString("en-GB")
+    : "Unknown";
+};
 
 function toggleMenu() {
   const menu = document.getElementById("dropdown-menu");

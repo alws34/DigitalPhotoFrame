@@ -12,7 +12,7 @@ from cv2 import imread
 import random as rand
 from enum import Enum
 import hashlib
-
+import psutil
 
 from WebServer.Settings import SettingsHandler
 from WebServer.API import Backend
@@ -48,38 +48,64 @@ class AnimationStatus(Enum):
 
 
 class PhotoFrame(iFrame):
-    def __init__(self,width=1920, height=1080):
+    def __init__(self, width=1920, height=1080):
         self.set_logger(logging)
-        
         self.settings = SettingsHandler(SETTINGS_PATH, logging)
-        self.EffectHandler = EffectHandler()
-        self.image_handler = Image_Utils(settings = self.settings)
-        
         if not self.set_images_dir():
             logging.error("Failed to set images directory. Exiting.")
             raise FileNotFoundError("Images directory not found and could not be created.")
-         
+
+        self.EffectHandler = EffectHandler()
+        self.image_handler = Image_Utils(settings=self.settings)
         self.effects = self.EffectHandler.get_effects()
 
         self.update_images_list()
-
         self.current_image_idx = -1
         self.current_effect_idx = -1
-
         self.screen_width = width
         self.screen_height = height
-        
         self.current_image = None
         self.next_image = None
         self.frame_to_stream = None
         self.is_running = True
 
-        self.Observer = ImagesObserver(frame = self) 
+        # start filesystem observer
+        self.Observer = ImagesObserver(frame=self)
         self.Observer.start_observer()
-        
-        self.m_api = Backend(frame = self, settings=self.settings, image_dir  = self.IMAGE_DIR) 
-        #self.m_api.start()
- 
+
+    def start_monitor_thread(self, pid, interval=1.0):
+        t = threading.Thread(
+        target=self.monitor_cpu_usage,
+        args=(pid, interval),
+        daemon=True
+        )
+        t.start()
+        return t
+
+    def monitor_cpu_usage(self,pid, interval=1.0):
+        """
+        Monitors the CPU usage of the process with the given PID.
+        Prints a line every `interval` seconds until the process exits.
+        """
+        try:
+            proc = psutil.Process(pid)
+        except psutil.NoSuchProcess:
+            logging.error(f"No process found with PID={pid}")
+            return
+
+        # Prime the internal cpu_percent counter
+        proc.cpu_percent(interval=None)
+
+        while True:
+            try:
+                cpu = proc.cpu_percent(interval=None)
+                print(f"PID={pid} CPU: {cpu:5.1f}%")
+            except (psutil.NoSuchProcess, psutil.ZombieProcess):
+                logging.info(f"Process PID={pid} has exited.")
+                break
+            time.sleep(interval)
+
+
     def set_logger(self, logger):
         try:
             self.logger = logging.getLogger(__name__)
@@ -170,15 +196,20 @@ class PhotoFrame(iFrame):
 
 # region Main
     def update_frame(self, generator):
-        if generator is None:
-            return
-        try:
-            for frame in generator:
-                self.update_frame_to_stream(frame)
-            return AnimationStatus.ANIMATION_FINISHED
-        except Exception as e:
-            print(f"Error during frame update: {e}")
-            return AnimationStatus.ANIMATION_ERROR
+            """
+            Consume an effect-generator at a fixed FPS so CPU gets idle time.
+            """
+            target_fps = self.settings.get("animation_fps", 30)
+            interval = 1.0 / float(target_fps)
+
+            try:
+                for frame in generator:
+                    self.update_frame_to_stream(frame)
+                    time.sleep(interval)  
+                return AnimationStatus.ANIMATION_FINISHED
+            except Exception as e:
+                print(f"Error during frame update: {e}")
+                return AnimationStatus.ANIMATION_ERROR
            
     def start_image_transition(self, image1_path=None, image2_path=None, duration=5):
         if self.current_image is None:
@@ -207,24 +238,38 @@ class PhotoFrame(iFrame):
 
     def run_photoframe(self):
         self.shuffled_images = self.image_handler.shuffle_images(self.images)
+        self.current_image = imread(self.get_random_image())
+        self.current_image = self.image_handler.resize_image_with_background(
+            self.current_image, self.screen_width, self.screen_height
+        )
+        self.update_frame_to_stream(self.current_image)
         
         while self.is_running:
-            self.start_image_transition(duration=self.settings["animation_duration"])
-            time.sleep(self.settings["delay_between_images"])     
+            if self.settings["animation_duration"] > 0:
+                self.start_image_transition(duration=self.settings["animation_duration"])
+                time.sleep(self.settings["delay_between_images"])
+            else:
+                time.sleep(0.1) 
 
     def main(self):
-        transition_thread = threading.Thread(target=self.run_photoframe)
-        transition_thread.start()
-        api_thread = threading.Thread(
-            target=self.m_api.start, daemon=True
-        )
-        api_thread.start()
-# endregion Main
+        threading.Thread(target=self.run_photoframe, daemon=True).start()
+        threading.Thread(target=self._start_api, daemon=True).start()
+
+        my_pid = os.getpid()
+        #self.start_monitor_thread(my_pid, interval=1.0)
+
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            logging.info("Shutting down.")
+            self.is_running = False
+
+    def _start_api(self):
+        self.m_api = Backend(frame=self, settings=self.settings, image_dir=self.IMAGE_DIR)
+        self.m_api.start()
 
 if __name__ == "__main__":
-    try:
-        frame = PhotoFrame()
-        frame.main()
-    except Exception as e:
-        logging.critical(f"Unhandled exception occurred: {e}")
-        raise
+    
+    frame = PhotoFrame()
+    frame.main()

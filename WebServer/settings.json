@@ -4,16 +4,17 @@
     "server_port": 5001,
     "stream_width": 1920,
     "stream_height": 1080,
-    "stream_fps": 25,
+    "stream_fps": 30,
     "supersecretkey": "YOUR_SUPERSECRET_KEY"
   },
-
-  "image_quality_encoding": 60,
+  "image_quality_encoding": 100,
 
   "weather_api_key": "YOUR_ACCUWEATHER_API_KEY",
   "location_key": "YOUR_LOCATION_KEY",
   "animation_duration": 10,
-  "delay_between_images": 30,
+  "delay_between_images": 10,
+  "animation_fps": 30,       
+
   "allow_translucent_background": true,
 
   "image_dir": "Images",
