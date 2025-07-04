@@ -1,0 +1,11 @@
+Pillow
+numpy
+pandas
+opencv-python
+flask
+flask_cors
+watchdog
+requests
+paho.mqtt
+psutil
+pyheif

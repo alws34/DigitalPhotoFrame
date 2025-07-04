@@ -5,28 +5,14 @@ services:
     container_name: photoframe
     build:
       context: .
-      dockerfile: Dockerfile          # (same directory as compose file)
-
-    # Keep it alive unless you stop it
-    restart: unless-stopped
-
-    # Local time-zone for readable logs
+      dockerfile: Dockerfile
+    ports:
+      - "5200:5001"          
+    volumes:
+      - ./Images:/app/WebServer/Images 
     environment:
       TZ: "Asia/Jerusalem"
-
-    # Persist anything the app writes/edits at runtime
-    volumes:
-      - ./Images:/app/WebServer/app/Images
-
-      # runtime JSON & log files stay as-is
-      - ./WebServer/settings.json:/app/WebServer/settings.json
-      - ./WebServer/metadata.json:/app/WebServer/metadata.json
-      - ./WebServer/users.json:/app/WebServer/users.json
-      - ./WebServer/PhotoFrame.log:/app/WebServer/PhotoFrame.log
-
-    # Port inside container is hard-coded to 5000 in Settings → expose it as 8080 outside
-    ports:
-      - "8080:5001"
-
-    # Run the server as a module so path headaches disappear
-    command: ["python", "-m", "WebServer.PhotoFrameServer"]
+      SCREEN_WIDTH: "1920"
+      SCREEN_HEIGHT: "1080"
+      QUALITY: "70"
+    restart: unless-stopped

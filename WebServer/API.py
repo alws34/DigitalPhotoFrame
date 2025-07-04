@@ -1,13 +1,10 @@
-import logging
 import shutil
 import time
 import os
 import json
 import hashlib
-from datetime import datetime, timedelta
-from numpy import uint8
-from cv2 import imencode
-from queue import Queue, Full
+from datetime import datetime
+from queue import Queue, Full, Empty
 from threading import Thread, Event
 import cv2
 from flask import Flask, Response, jsonify, request, redirect, url_for, send_from_directory, render_template, flash, session, send_file, stream_with_context
@@ -21,11 +18,10 @@ import requests
 from PIL import Image
 import threading
 from flask_cors import CORS
-import numpy as np
-import traceback
 from iFrame import iFrame
+from concurrent.futures import ThreadPoolExecutor
 
-if platform.system() == "Linux":
+if platform.system() == "Linux" or platform.system() == "Darwin":
     try:
         import pyheif
         has_pyheif = True
@@ -44,20 +40,20 @@ class Backend:
             static_folder=str(base / "./static"),
         )
         CORS(self.app)
-        self.app.secret_key = 'supersecretkey'
+        self.app.secret_key =settings["backend_configs"]["supersecretkey"] 
         self.latest_metadata = {}
 
+        self.stream_h = settings["backend_configs"]["stream_height"]
+        self.stream_w = settings["backend_configs"]["stream_width"]
+        
         self.port = settings["backend_configs"]["server_port"]
         self.host = settings["backend_configs"]["host"]
-        images_path = image_dir #settings.get("images_dir")
-        self.IMAGE_DIR = images_path if images_path else self.set_absolute_paths("Images")
+        self.IMAGE_DIR = image_dir if image_dir is not None else self.set_absolute_paths("Images")
         
         self.ALLOWED_EXTENSIONS = {'.png', '.jpg', '.jpeg',
                                    '.gif', '.bmp', '.tiff', '.webp', '.heic', '.heif'}
         self.SELECTED_COLOR = '#ffcccc'
-        
-        # if not images_path or not os.path.exists(images_path):
-        #     self.IMAGE_DIR = self.set_absolute_paths("Images")
+
         self.USER_DATA_FILE = self.set_absolute_paths('users.json')
         self.SETTINGS_FILE = self.set_absolute_paths('settings.json')
         self.METADATA_FILE = self.set_absolute_paths('metadata.json')
@@ -65,6 +61,7 @@ class Backend:
         self.WEATHER_CACHE = "weather_cache.json"
         
         self.Frame = frame
+        self.executor = ThreadPoolExecutor(max_workers=2)
         
         self._metadata_lock = threading.Lock()
         os.makedirs(self.IMAGE_DIR, exist_ok=True)
@@ -75,40 +72,71 @@ class Backend:
         if not os.path.exists(self.USER_DATA_FILE):
             with open(self.USER_DATA_FILE, 'w') as file:
                 json.dump({}, file)
-        # Ensure metadata file exists
         if not os.path.exists(self.METADATA_FILE):
             with open(self.METADATA_FILE, 'w') as file:
                 json.dump({}, file)
         
-        self._jpeg_queue = Queue(maxsize=2)
-        self._stop_event  = Event()
-        Thread(target=self._capture_loop, daemon=True).start()
+        self._jpeg_queue   = Queue(maxsize=30)
+        self._new_frame_ev = Event()
+        self._stop_event   = Event()
         
         self.setup_routes()
+        Thread(target=self._capture_loop, daemon=True).start()
+        
+        
 
     def set_absolute_paths(self, path):
         return os.path.abspath(os.path.join(os.path.dirname(__file__), path))
     
 
     def _capture_loop(self):
-        """Continuously grab frames, JPEG‐encode them, and push into the queue."""
-        while self.Frame.get_is_running() and not self._stop_event.is_set():
-            frame = self.Frame.get_live_frame() # block until new frame
-            if not isinstance(frame, ndarray) or frame.size == 0:
+        """
+        Encode every new frame as it arrives. When no frame arrives for
+        `idle_delay` seconds, re-send the last JPEG so that newcomers
+        still see something without re-encoding.
+        """
+        idle_fps   = self.settings["backend_configs"].get("idle_fps", 1)
+        idle_delay = 1.0 / max(idle_fps, 1)
+
+        last_jpeg  = None
+
+        while not self._stop_event.is_set() and self.Frame.get_is_running():
+
+            got_new = self._new_frame_ev.wait(timeout=idle_delay)
+            if got_new:
+                self._new_frame_ev.clear()
+
+                frame = self.Frame.get_live_frame()
+                if isinstance(frame, ndarray) and frame.size:
+                    ok, jpg = cv2.imencode(
+                        '.jpg', frame,
+                        [cv2.IMWRITE_JPEG_QUALITY, self.encoding_quality]
+                    )
+                    if ok:
+                        last_jpeg = jpg.tobytes()
+
+            if last_jpeg is None:
+                time.sleep(0.1)
                 continue
 
-            # encode at 80% quality for speed + smaller payloads
-            success, jpg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, self.encoding_quality])
-            if not success:
-                continue
-
-            data = jpg.tobytes()
             try:
-                # if queue full, drop the oldest frame
-                self._jpeg_queue.put(data, block=False)
+                self._jpeg_queue.put(last_jpeg, timeout=0.5)
             except Full:
                 _ = self._jpeg_queue.get_nowait()
-                self._jpeg_queue.put(data, block=False)
+                self._jpeg_queue.put_nowait(last_jpeg)
+                
+    def _encode_and_queue(self, frame: ndarray):
+        success, jpg = cv2.imencode('.jpg', frame,
+                                [cv2.IMWRITE_JPEG_QUALITY, self.encoding_quality])
+        if not success:
+            return
+        data = jpg.tobytes()
+        try:
+            self._jpeg_queue.put_nowait(data)
+        except Full:
+            _ = self._jpeg_queue.get_nowait()
+            self._jpeg_queue.put_nowait(data)
+
 
     def load_settings(self):
         with open(self.SETTINGS_FILE, 'r') as file:
@@ -203,15 +231,16 @@ class Backend:
         self.update_current_metadata(entry)
 
     def mjpeg_stream(self, screen_w, screen_h):
-        boundary = (
-            b'--frame\r\n'
-            b'Content-Type: image/jpeg\r\n'
-            b'Cache-Control: no-cache\r\n\r\n'
-        )
+        boundary = (b'--frame\r\n'
+                    b'Content-Type: image/jpeg\r\n'
+                    b'Cache-Control: no-cache\r\n\r\n')
         while self.Frame.get_is_running():
-            jpeg = self._jpeg_queue.get()   # blocks until available
-            yield boundary + jpeg + b'\r\n'        
-            
+            try:
+                data = self._jpeg_queue.get(timeout=None)  # blocks until new data
+            except Empty:
+                continue  # (or break, if you want to end the stream)
+            yield boundary + data + b'\r\n'
+                
     def setup_routes(self):      
         @self.app.route('/stream')
         def stream():
@@ -221,23 +250,17 @@ class Backend:
                 h = int(request.args.get('height', default_h))
             except ValueError:
                 w, h = default_w, default_h
-            resp = Response(
-                self.mjpeg_stream(w, h),
+            generator = stream_with_context(self.mjpeg_stream(w, h))
+            return Response(
+                generator,
                 mimetype='multipart/x-mixed-replace; boundary=frame'
             )
-            # disable caching so each client always gets fresh frames
-            resp.headers.update({
-                'Cache-Control': 'no-cache, no-store, must-revalidate',
-                'Pragma':        'no-cache',
-                'Expires':       '0',
-            })
-            return resp
   
         @self.app.route("/system_stats")
         def system_stats():
             import psutil
             try:
-                cpu_usage = int(psutil.cpu_percent(interval=0.5))
+                cpu_usage = int(psutil.cpu_percent(interval=None))
                 ram = psutil.virtual_memory()
                 ram_used = ram.used // (1024 * 1024)
                 ram_total = ram.total // (1024 * 1024)
@@ -352,6 +375,19 @@ class Backend:
         def current_metadata():
             with self._metadata_lock:
                 return jsonify(self.latest_metadata or {})
+
+        @self.app.route('/metadata_stream')
+        def metadata_stream():
+            def gen():
+                last = None
+                while True:
+                    with self._metadata_lock:
+                        meta = self.latest_metadata
+                    if meta != last:
+                        yield f"data: {json.dumps(meta)}\n\n"
+                        last = meta.copy()
+                    time.sleep(0.1)
+            return Response(gen(), mimetype='text/event-stream')
 
         @self.app.route('/upload_with_metadata', methods=['POST'])
         def upload_with_metadata():
@@ -698,11 +734,12 @@ class Backend:
             self.latest_metadata = metadata
 
     def start(self):
-        threading.Thread(
-            target=lambda: self.app.run(
-                host=self.host, port=self.port, debug=False, use_reloader=False, threaded=True),
-            daemon=True
-        ).start()
+        self.app.run(host=self.host, port=self.port, debug=False, use_reloader=False, threaded=True)
+        # threading.Thread(
+        #     target=lambda: self.app.run(
+        #         host=self.host, port=self.port, debug=False, use_reloader=False, threaded=True),
+        #     daemon=True
+        # ).start()
 
 
 if __name__ == "__main__":

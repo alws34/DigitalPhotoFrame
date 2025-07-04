@@ -10,6 +10,20 @@ html, body {
   font-family: Arial, sans-serif;
 }
 
+.action-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.action-bar .close-btn {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  font-size: 1.2em;
+  cursor: pointer;
+}
+
+
 /* Top right buttons */
 .top-right {
   position: relative;
