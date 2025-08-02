@@ -2,21 +2,27 @@ import io
 import json
 import logging
 import tkinter as tk
+import tkinter.ttk as ttk
 from PIL import Image, ImageTk, ImageDraw, ImageFont
 import sys
 import os
-
-
-sys.path.append(os.path.abspath(os.path.dirname(__file__)))
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from Handlers.weather_handler import weather_handler
-from iFrame import iFrame
 import threading
 import psutil
 import requests
 import cv2
 import numpy as np
 import time
+import socket
+import subprocess
+import qrcode
+import platform
+import shutil
+import re
+
+sys.path.append(os.path.abspath(os.path.dirname(__file__)))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from Handlers.weather_handler import weather_handler
+from iFrame import iFrame
 
 # region Logging Setup
 log_file_path = os.path.join(os.path.dirname(__file__), "AppLog.log")
@@ -33,6 +39,19 @@ console_handler.setFormatter(console_formatter)
 logging.getLogger().addHandler(console_handler)
 logging.info("PhotoFrame application starting...")
 # endregion Logging Setup
+
+
+def get_local_ip():
+    """Return the primary LAN IP address, fallback to 127.0.0.1."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+    except Exception:
+        ip = "127.0.0.1"
+    finally:
+        s.close()
+    return ip
 
 class MJPEGStreamClient:
     def __init__(self, url):
@@ -85,27 +104,26 @@ class PhotoFrame(tk.Frame, iFrame):
         self.desired_height = desired_height
         self.triple_tap_count = 0
         self.last_tap_time = 0
-        self.show_stats = settings.get("stats", {}).get("show", False)
+        self.show_stats = False #settings.get("stats", {}).get("show", False)
+        self.backend_port = settings.get("backend_configs", {}).get("server_port", 5001)
+
         self.cached_stats = self.get_system_stats()
         
         if isinstance(self.parent, tk.Tk):
             self.parent.title("Digital Photo Frame V2.0")
-            self.parent.geometry(f"{self.parent.winfo_screenwidth()}x{self.parent.winfo_screenheight()}+0+0")
+            w, h = self.parent.winfo_screenwidth(), self.parent.winfo_screenheight()
+            self.parent.geometry(f"{w}x{h}+0+0")
             self.parent.attributes("-fullscreen", True)
             self.parent.wm_attributes("-topmost", True)
-            self.parent.configure(bg='black')
+            self.parent.configure(bg="black")
             self.parent.config(cursor="none")
-            self.parent.option_add('*Cursor', 'none')
-            self.parent.protocol("WM_DELETE_WINDOW", self.on_closing)
-            self.parent.bind_all('<Control-c>', lambda e: self.on_closing())
-            self.parent.bind("<Button-1>", self.handle_triple_tap)
-            
-            # ───── Long-press to exit ─────
-            self._long_press_job = None
-            self._long_press_duration_ms = 5000  # 5 seconds
+            self.parent.bind_all("<Control-c>", lambda e: self.on_closing())
+            # new tapping mode: triple tap opens settings form
+            self.parent.bind_all("<ButtonRelease-1>", self.handle_triple_tap)
             self.parent.bind("<ButtonPress-1>",   self._on_button_press)
             self.parent.bind("<ButtonRelease-1>", self._on_button_release)
-            # ────────────────────────────────
+            self._long_press_job = None
+            self._long_press_duration_ms = 5000
 
         self.time_font = ImageFont.truetype(settings['font_name'], settings['time_font_size'])
         self.date_font = ImageFont.truetype(settings['font_name'], settings['date_font_size'])
@@ -136,40 +154,191 @@ class PhotoFrame(tk.Frame, iFrame):
     def send_log_message(self, msg, logger: logging):
         logger(msg)
     
+    # ---- long press exit ----
     def _on_button_press(self, event):
-        # schedule the exit callback after 5 seconds
         if self._long_press_job is None:
             self._long_press_job = self.after(
                 self._long_press_duration_ms,
                 self._long_press_detected
             )
-
     def _on_button_release(self, event):
-        # cancel if released before 5 seconds
         if self._long_press_job is not None:
             self.after_cancel(self._long_press_job)
             self._long_press_job = None
-
     def _long_press_detected(self):
-        logging.info("Long-press detected: shutting down application")
-        # clean shutdown
+        logging.info("Long-press detected: shutting down")
         self.stop_event.set()
         self.parent.destroy()
         sys.exit(0)
+
     
+    # ---- triple tap opens form ----
     def handle_triple_tap(self, event):
         now = time.time()
-        if now - self.last_tap_time < 1.5:
-            self.triple_tap_count += 1
+        if not hasattr(self, "_last_tap"):
+            self._last_tap = now
+            self._tap_count = 1
+        elif now - self._last_tap < 1.5:
+            self._tap_count += 1
         else:
-            self.triple_tap_count = 1  # Restart counting
+            self._tap_count = 1
+        self._last_tap = now
+        if self._tap_count == 3:
+            self.open_settings_form()
+            self._tap_count = 0
+    
+    # ---- settings form ----
+    def open_settings_form(self):
+        if hasattr(self, "settings_form") and self.settings_form.winfo_exists():
+            return
+        form = tk.Toplevel(self.parent)
+        self.settings_form = form
+        form.title("Settings")
+        form.geometry("600x400")
+        form.grab_set()
 
-        self.last_tap_time = now
+        notebook = ttk.Notebook(form)
+        stats_frame = ttk.Frame(notebook)
+        wifi_frame  = ttk.Frame(notebook)
+        about_frame = ttk.Frame(notebook)
+        notebook.add(stats_frame, text="Stats")
+        notebook.add(wifi_frame,  text="Wi-Fi")
+        notebook.add(about_frame, text="About")
+        notebook.pack(fill="both", expand=True, padx=10, pady=10)
 
-        if self.triple_tap_count == 3:
-            self.show_stats = not self.show_stats
-            print(f"Stats display toggled to {self.show_stats}")
-            self.triple_tap_count = 0
+        # -- Stats tab --
+        cpu_lbl = ttk.Label(stats_frame, text="")
+        ram_lbl = ttk.Label(stats_frame, text="")
+        tmp_lbl = ttk.Label(stats_frame, text="")
+        ip_lbl  = ttk.Label(stats_frame, text="")
+        qr_lbl  = ttk.Label(stats_frame)
+        cpu_lbl.pack(anchor="w")
+        ram_lbl.pack(anchor="w")
+        tmp_lbl.pack(anchor="w")
+        ip_lbl.pack(anchor="w", pady=(5,15))
+        qr_lbl.pack()
+
+        close_btn = ttk.Button(
+            stats_frame,
+            text="Close Application",
+            command=self.on_closing
+        )
+        close_btn.pack(pady=10)
+
+        def update_form():
+            stats = self.get_system_stats().split("\n")
+            cpu_lbl.config(text=stats[0])
+            ram_lbl.config(text=stats[1])
+            tmp_lbl.config(text=stats[2])
+            ip = get_local_ip()
+            ip_lbl.config(text=f"URL: http://{ip}:{self.backend_port}")
+            # QR code
+            url = f"http://{ip}:{self.backend_port}"
+            qr = qrcode.make(url).resize((150,150), Image.Resampling.LANCZOS)
+            qr_img = ImageTk.PhotoImage(qr)
+            qr_lbl.config(image=qr_img)
+            qr_lbl.image = qr_img
+            form.after(5000, update_form)
+
+        form.after(0, update_form)
+
+        # -- Wi-Fi tab --
+        ssid_cb = ttk.Combobox(wifi_frame, values=[])
+        pwd_ent = ttk.Entry(wifi_frame, show="*")
+        ttk.Label(wifi_frame, text="Network:").pack(anchor="w", pady=(10,0))
+        ssid_cb.pack(fill="x")
+        ttk.Label(wifi_frame, text="Password:").pack(anchor="w", pady=(10,0))
+        pwd_ent.pack(fill="x")
+        def connect():
+            ssid = ssid_cb.get()
+            pwd  = pwd_ent.get()
+            try:
+                out = subprocess.check_output(
+                    ["nmcli", "device", "wifi", "connect", ssid, "password", pwd],
+                    stderr=subprocess.STDOUT, universal_newlines=True
+                )
+                logging.info("Wi-Fi connect: %s", out)
+                tk.messagebox.showinfo("Wi-Fi", f"Connected to {ssid}")
+            except subprocess.CalledProcessError as e:
+                logging.error("Wi-Fi error: %s", e.output)
+                tk.messagebox.showerror("Wi-Fi", f"Failed: {e.output}")
+
+        ttk.Button(wifi_frame, text="Connect", command=connect).pack(pady=10)
+
+        def scan():
+            """Cross-platform Wi-Fi scan for macOS and Linux (RPiOS)."""
+            ssids = []
+            system = platform.system()
+
+            if system == "Darwin":
+                # macOS: use the airport utility
+                airport = (
+                    "/System/Library/PrivateFrameworks/"
+                    "Apple80211.framework/Versions/Current/Resources/airport"
+                )
+                if os.path.exists(airport):
+                    try:
+                        out = subprocess.check_output(
+                            [airport, "-s"],
+                            stderr=subprocess.DEVNULL,
+                            universal_newlines=True
+                        )
+                        # skip header line, split on 2+ spaces
+                        for line in out.splitlines()[1:]:
+                            parts = re.split(r"\s{2,}", line.strip())
+                            if parts:
+                                ssids.append(parts[0])
+                    except subprocess.CalledProcessError:
+                        pass
+
+            else:
+                # Linux: try nmcli, else iwlist
+                if shutil.which("nmcli"):
+                    try:
+                        out = subprocess.check_output(
+                            ["nmcli", "-t", "-f", "SSID", "device", "wifi", "list"],
+                            stderr=subprocess.DEVNULL,
+                            universal_newlines=True
+                        )
+                        ssids = [line for line in out.splitlines() if line]
+                    except subprocess.CalledProcessError:
+                        ssids = []
+                else:
+                    # fallback to iwlist; may require sudo privileges
+                    try:
+                        out = subprocess.check_output(
+                            ["iwlist", "wlan0", "scan"],
+                            stderr=subprocess.DEVNULL,
+                            universal_newlines=True
+                        )
+                        ssids = re.findall(r'ESSID:"([^"]+)"', out)
+                    except Exception:
+                        ssids = []
+
+            # remove duplicates and sort
+            ssid_cb.config(values=sorted(set(ssids)))
+            # schedule next scan in 10s
+            form.after(10000, scan)
+
+        # kick off first scan without blocking UI
+        form.after(0, scan)
+
+
+        # -- About tab --
+        about_text = (
+            "was created by alws34.\n"
+            "this is a digital photo frame application\n"
+            "that can display images on almost any platform using mjpeg streaming."
+        )
+        ttk.Label(
+            about_frame,
+            text=about_text,
+            wraplength=560,
+            justify="left"
+        ).pack(padx=10, pady=10)
+
+        # closing the form
+        form.protocol("WM_DELETE_WINDOW", form.destroy)
 
     def weather_loop(self):
         while not self.stop_event.is_set():
@@ -372,7 +541,8 @@ class PhotoFrame(tk.Frame, iFrame):
 
 
 if __name__ == "__main__":
-    with open(os.getcwd() + "/photoframe_settings.json", "r") as f:
+    path = os.getcwd() + "/DesktopApp/photoframe_settings.json"
+    with open(path, "r") as f:
         settings = json.load(f)
 
     backend_host = settings.get("backend_configs", {}).get("host", "localhost")
