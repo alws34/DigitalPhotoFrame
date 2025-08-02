@@ -122,8 +122,12 @@ class PhotoFrame(tk.Frame, iFrame):
             self.parent.bind_all("<ButtonRelease-1>", self.handle_triple_tap)
             self.parent.bind("<ButtonPress-1>",   self._on_button_press)
             self.parent.bind("<ButtonRelease-1>", self._on_button_release)
+            self.parent.bind("<ButtonRelease-1>", self._on_tap, add="+")
             self._long_press_job = None
             self._long_press_duration_ms = 5000
+        self._tap_count      = 0
+        self._last_tap_time  = 0.0
+        
 
         self.time_font = ImageFont.truetype(settings['font_name'], settings['time_font_size'])
         self.date_font = ImageFont.truetype(settings['font_name'], settings['date_font_size'])
@@ -154,6 +158,22 @@ class PhotoFrame(tk.Frame, iFrame):
     def send_log_message(self, msg, logger: logging):
         logger(msg)
     
+    def _on_tap(self, event):
+        """Count rapid consecutive taps; open settings on the third."""
+        now = time.time()
+        # if this tap is within 1.5s of the last, increment; else reset to 1
+        if now - self._last_tap_time <= 1.5:
+            self._tap_count += 1
+        else:
+            self._tap_count = 1
+        self._last_tap_time = now
+
+        logging.info(f"Tap #{self._tap_count}")            # debug output
+        if self._tap_count == 3:
+            logging.info("Triple tap detected – opening settings")
+            self.open_settings_form()
+            self._tap_count = 0
+            
     # ---- long press exit ----
     def _on_button_press(self, event):
         if self._long_press_job is None:
@@ -187,22 +207,36 @@ class PhotoFrame(tk.Frame, iFrame):
             self.open_settings_form()
             self._tap_count = 0
     
+    
+    # ---- settings form ----
     # ---- settings form ----
     def open_settings_form(self):
         if hasattr(self, "settings_form") and self.settings_form.winfo_exists():
             return
+
         form = tk.Toplevel(self.parent)
         self.settings_form = form
+        form.withdraw()
         form.title("Settings")
-        form.geometry("600x400")
-        form.grab_set()
+        form.transient(self.parent)
+        form.resizable(False, False)
 
+        # Center on screen
+        width, height = 700, 450
+        sw, sh = self.parent.winfo_screenwidth(), self.parent.winfo_screenheight()
+        x = (sw - width) // 2
+        y = (sh - height) // 2
+        form.geometry(f"{width}x{height}+{x}+{y}")
+        form.lift()
+        form.attributes("-topmost", True)
+
+        # Tabs
         notebook = ttk.Notebook(form)
         stats_frame = ttk.Frame(notebook)
-        wifi_frame  = ttk.Frame(notebook)
+        wifi_frame = ttk.Frame(notebook)
         about_frame = ttk.Frame(notebook)
         notebook.add(stats_frame, text="Stats")
-        notebook.add(wifi_frame,  text="Wi-Fi")
+        notebook.add(wifi_frame, text="Wi-Fi")
         notebook.add(about_frame, text="About")
         notebook.pack(fill="both", expand=True, padx=10, pady=10)
 
@@ -210,119 +244,183 @@ class PhotoFrame(tk.Frame, iFrame):
         cpu_lbl = ttk.Label(stats_frame, text="")
         ram_lbl = ttk.Label(stats_frame, text="")
         tmp_lbl = ttk.Label(stats_frame, text="")
-        ip_lbl  = ttk.Label(stats_frame, text="")
-        qr_lbl  = ttk.Label(stats_frame)
-        cpu_lbl.pack(anchor="w")
-        ram_lbl.pack(anchor="w")
-        tmp_lbl.pack(anchor="w")
-        ip_lbl.pack(anchor="w", pady=(5,15))
+        ip_lbl = ttk.Label(stats_frame, text="")
+        current_ssid_lbl = ttk.Label(stats_frame, text="SSID: N/A")
+        qr_lbl = ttk.Label(stats_frame)
+        for lbl in (cpu_lbl, ram_lbl, tmp_lbl, ip_lbl, current_ssid_lbl):
+            lbl.pack(anchor="w")
+        ip_lbl.pack_configure(pady=(5,15))
         qr_lbl.pack()
+        ttk.Button(stats_frame, text="Close Application", command=self.on_closing).pack(pady=10)
 
-        close_btn = ttk.Button(
-            stats_frame,
-            text="Close Application",
-            command=self.on_closing
-        )
-        close_btn.pack(pady=10)
-
-        def update_form():
-            stats = self.get_system_stats().split("\n")
-            cpu_lbl.config(text=stats[0])
-            ram_lbl.config(text=stats[1])
-            tmp_lbl.config(text=stats[2])
-            ip = get_local_ip()
-            ip_lbl.config(text=f"URL: http://{ip}:{self.backend_port}")
-            # QR code
-            url = f"http://{ip}:{self.backend_port}"
-            qr = qrcode.make(url).resize((150,150), Image.Resampling.LANCZOS)
-            qr_img = ImageTk.PhotoImage(qr)
-            qr_lbl.config(image=qr_img)
-            qr_lbl.image = qr_img
-            form.after(5000, update_form)
-
-        form.after(0, update_form)
-
-        # -- Wi-Fi tab --
-        ssid_cb = ttk.Combobox(wifi_frame, values=[])
-        pwd_ent = ttk.Entry(wifi_frame, show="*")
-        ttk.Label(wifi_frame, text="Network:").pack(anchor="w", pady=(10,0))
-        ssid_cb.pack(fill="x")
-        ttk.Label(wifi_frame, text="Password:").pack(anchor="w", pady=(10,0))
-        pwd_ent.pack(fill="x")
-        def connect():
-            ssid = ssid_cb.get()
-            pwd  = pwd_ent.get()
+        def get_current_ssid():
             try:
                 out = subprocess.check_output(
-                    ["nmcli", "device", "wifi", "connect", ssid, "password", pwd],
-                    stderr=subprocess.STDOUT, universal_newlines=True
+                    ["nmcli", "-t", "-f", "NAME", "connection", "show", "--active"],
+                    stderr=subprocess.DEVNULL, universal_newlines=True
                 )
-                logging.info("Wi-Fi connect: %s", out)
-                tk.messagebox.showinfo("Wi-Fi", f"Connected to {ssid}")
-            except subprocess.CalledProcessError as e:
-                logging.error("Wi-Fi error: %s", e.output)
-                tk.messagebox.showerror("Wi-Fi", f"Failed: {e.output}")
+                lines = [l for l in out.splitlines() if l]
+                return lines[0] if lines else "N/A"
+            except:
+                return "N/A"
 
-        ttk.Button(wifi_frame, text="Connect", command=connect).pack(pady=10)
+        current_ssid_lbl.config(text=f"SSID: {get_current_ssid()}")
 
+        def update_stats():
+            s = self.get_system_stats().split("\n")
+            cpu_lbl.config(text=s[0]); ram_lbl.config(text=s[1]); tmp_lbl.config(text=s[2])
+            ip = get_local_ip(); ip_lbl.config(text=f"URL: http://{ip}:{self.backend_port}")
+            qr = qrcode.make(f"http://{ip}:{self.backend_port}").resize((150,150), Image.Resampling.LANCZOS)
+            img = ImageTk.PhotoImage(qr); qr_lbl.config(image=img); qr_lbl.image=img
+            current_ssid_lbl.config(text=f"SSID: {get_current_ssid()}")
+            form.after(1000, update_stats)
+        form.after(0, update_stats)
+
+        # -- Wi-Fi tab --
+        ttk.Label(wifi_frame, text="Network:").pack(anchor="w", pady=(10,0))
+        ssid_cb = ttk.Combobox(wifi_frame, state="readonly")
+        ssid_cb.pack(fill="x")
+
+        # Password row
+        pw_frame = ttk.Frame(wifi_frame)
+        pw_frame.pack(fill="x", pady=(10,0))
+        ttk.Label(pw_frame, text="Password:").pack(side="left")
+        pwd_ent = ttk.Entry(pw_frame, show="*")
+        pwd_ent.pack(side="left", fill="x", expand=True, padx=(5,0))
+        show_pwd_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            pw_frame, text="Show",
+            variable=show_pwd_var,
+            command=lambda: pwd_ent.config(show="" if show_pwd_var.get() else "*")
+        ).pack(side="left", padx=(5,0))
+
+                # SSID scan once when form loads
         def scan():
-            """Cross-platform Wi-Fi scan for macOS and Linux (RPiOS)."""
-            ssids = []
-            system = platform.system()
-
-            if system == "Darwin":
-                # macOS: use the airport utility
-                airport = (
-                    "/System/Library/PrivateFrameworks/"
-                    "Apple80211.framework/Versions/Current/Resources/airport"
+            try:
+                out = subprocess.check_output(
+                    "sudo iwlist wlan0 scanning | grep ESSID", shell=True, universal_newlines=True
                 )
-                if os.path.exists(airport):
-                    try:
-                        out = subprocess.check_output(
-                            [airport, "-s"],
-                            stderr=subprocess.DEVNULL,
-                            universal_newlines=True
-                        )
-                        # skip header line, split on 2+ spaces
-                        for line in out.splitlines()[1:]:
-                            parts = re.split(r"\s{2,}", line.strip())
-                            if parts:
-                                ssids.append(parts[0])
-                    except subprocess.CalledProcessError:
-                        pass
+                ss = [line.split('ESSID:')[1].strip().strip('"') for line in out.splitlines()]
+                ss = [s for s in ss if s]
+            except:
+                ss = []
+            ssid_cb['values'] = sorted(set(ss))
+        # perform a single scan at startup
+        scan()
 
+        # Toggle, Caps, Connect
+        layout = {"mode": "qwerty", "caps": False}
+        btn_frame = ttk.Frame(wifi_frame)
+        btn_frame.pack(anchor="w", pady=5)
+
+        def switch_layout():
+            if layout["mode"] == "qwerty":
+                layout["mode"] = "symnum"
+                qwerty_frame.pack_forget(); symnum_frame.pack(anchor="center")
             else:
-                # Linux: try nmcli, else iwlist
-                if shutil.which("nmcli"):
-                    try:
-                        out = subprocess.check_output(
-                            ["nmcli", "-t", "-f", "SSID", "device", "wifi", "list"],
-                            stderr=subprocess.DEVNULL,
-                            universal_newlines=True
-                        )
-                        ssids = [line for line in out.splitlines() if line]
-                    except subprocess.CalledProcessError:
-                        ssids = []
-                else:
-                    # fallback to iwlist; may require sudo privileges
-                    try:
-                        out = subprocess.check_output(
-                            ["iwlist", "wlan0", "scan"],
-                            stderr=subprocess.DEVNULL,
-                            universal_newlines=True
-                        )
-                        ssids = re.findall(r'ESSID:"([^"]+)"', out)
-                    except Exception:
-                        ssids = []
+                layout["mode"] = "qwerty"
+                symnum_frame.pack_forget(); qwerty_frame.pack(anchor="center")
 
-            # remove duplicates and sort
-            ssid_cb.config(values=sorted(set(ssids)))
-            # schedule next scan in 10s
-            form.after(10000, scan)
+        def toggle_caps():
+            layout["caps"] = not layout["caps"]
+            for b in qwerty_buttons:
+                ch = b.cget("text").lower()
+                b.config(text=ch.upper() if layout["caps"] else ch)
 
-        # kick off first scan without blocking UI
-        form.after(0, scan)
+        def connect():
+            ssid = ssid_cb.get().strip()
+            if not ssid:
+                return
+            pwd = pwd_ent.get()
+            try:
+                subprocess.run(
+                    ["sudo", "nmcli", "device", "wifi", "connect", ssid, "password", pwd],
+                    check=True
+                )
+            except subprocess.CalledProcessError as e:
+                import tkinter.messagebox as mb
+                mb.showerror("Connection Failed", str(e))
+                return
+            current_ssid_lbl.config(text=f"SSID: {ssid}")
+            new_ip = get_local_ip()
+            ip_lbl.config(text=f"URL: http://{new_ip}:{self.backend_port}")
 
+        toggle_btn = ttk.Button(btn_frame, text="123/#", command=switch_layout)
+        caps_btn = ttk.Button(btn_frame, text="Caps", command=toggle_caps)
+        toggle_btn.pack(side="left", padx=(0,5))
+        caps_btn.pack(side="left", padx=(0,5))
+        ttk.Button(btn_frame, text="Connect", command=connect).pack(side="left")
+
+        # Keyboard container
+        kb_container = ttk.Frame(wifi_frame)
+        kb_container.pack(fill="x", anchor="center", pady=10)
+
+        # QWERTY layout
+        qwerty_frame = ttk.Frame(kb_container)
+        qwerty_buttons = []
+        rows = ["q w e r t y u i o p", "a s d f g h j k l", "z x c v b n m"]
+        for r, row in enumerate(rows):
+            for c, ch in enumerate(row.split()):
+                btn = tk.Button(
+                    qwerty_frame,
+                    text=ch,
+                    width=4,
+                    height=2,
+                    command=lambda ch=ch: pwd_ent.insert(
+                        tk.END,
+                        ch.upper() if layout["caps"] else ch
+                    )
+                )
+                btn.grid(row=r, column=c, padx=2, pady=2)
+                qwerty_buttons.append(btn)
+        space_btn = tk.Button(
+            qwerty_frame,
+            text="Space",
+            width=40,
+            height=2,
+            command=lambda: pwd_ent.insert(tk.END, ' ')
+        )
+        space_btn.grid(row=3, column=2, columnspan=7, padx=2, pady=2)
+        back_btn = tk.Button(
+            qwerty_frame,
+            text="←",
+            width=4,
+            height=2,
+            command=lambda: pwd_ent.delete(len(pwd_ent.get())-1, tk.END)
+        )
+        back_btn.grid(row=3, column=9, padx=2, pady=2)
+        qwerty_frame.pack(anchor="center")
+
+        # Symbols+Numbers layout
+        symnum_frame = ttk.Frame(kb_container)
+        symbols = "~ ! @ # $ % ^ & * ( ) _ + - = [ ] { } | ; : ' \" , . / < > ?".split()
+        for i, sym in enumerate(symbols[:20]):
+            r, c = divmod(i, 10)
+            tk.Button(
+                symnum_frame,
+                text=sym,
+                width=4,
+                height=2,
+                command=lambda s=sym: pwd_ent.insert(tk.END, s)
+            ).grid(row=r, column=c, padx=2, pady=2)
+        nums = list("1234567890")
+        for i, num in enumerate(nums):
+            r, c = divmod(i, 5)
+            tk.Button(
+                symnum_frame,
+                text=num,
+                width=4,
+                height=2,
+                command=lambda n=num: pwd_ent.insert(tk.END, n)
+            ).grid(row=r+2, column=c, padx=2, pady=2)
+        tk.Button(
+            symnum_frame,
+            text="←",
+            width=4,
+            height=2,
+            command=lambda: pwd_ent.delete(len(pwd_ent.get())-1, tk.END)
+        ).grid(row=4, column=4, padx=2, pady=2)
+        symnum_frame.pack_forget()
 
         # -- About tab --
         about_text = (
@@ -330,16 +428,16 @@ class PhotoFrame(tk.Frame, iFrame):
             "this is a digital photo frame application\n"
             "that can display images on almost any platform using mjpeg streaming."
         )
-        ttk.Label(
-            about_frame,
-            text=about_text,
-            wraplength=560,
-            justify="left"
-        ).pack(padx=10, pady=10)
+        ttk.Label(about_frame, text=about_text, wraplength=660, justify="left").pack(padx=10, pady=10)
 
-        # closing the form
-        form.protocol("WM_DELETE_WINDOW", form.destroy)
-
+        form.update_idletasks()
+        form.deiconify()
+        form.grab_set()
+   
+   
+   
+   
+   
     def weather_loop(self):
         while not self.stop_event.is_set():
             self.weather_client.fetch_weather_data()
@@ -541,7 +639,7 @@ class PhotoFrame(tk.Frame, iFrame):
 
 
 if __name__ == "__main__":
-    path = os.getcwd() + "/DesktopApp/photoframe_settings.json"
+    path = os.getcwd() + "/DigitalPhotoFrame/DesktopApp/photoframe_settings.json"
     with open(path, "r") as f:
         settings = json.load(f)
 

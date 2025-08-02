@@ -9,4 +9,4 @@ requests
 paho.mqtt
 psutil
 qrcode[pil]
-#pyheif
+pyheif
