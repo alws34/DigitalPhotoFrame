@@ -66,34 +66,50 @@ echo "[5/8] Writing system service to $SERVICE_PATH ..."
 sudo tee "$SERVICE_PATH" >/dev/null <<EOF
 [Unit]
 Description=Photo Frame Desktop App (system-wide)
-Wants=network-online.target
-After=network-online.target NetworkManager.service display-manager.service graphical.target
+Wants=network-online.target user@1000.service
+After=network-online.target systemd-user-sessions.service user@1000.service
 
 [Service]
 Type=simple
 User=pi
 Group=pi
 WorkingDirectory=$APP_DIR
+
+# Wait until a display socket and user bus exist (boot-time readiness)
+ExecStartPre=/bin/sh -c 'until [ -S /tmp/.X11-unix/X0 ] || [ -S /run/user/1000/wayland-0 ]; do sleep 1; done'
+ExecStartPre=/bin/sh -c 'until [ -S /run/user/1000/bus ]; do sleep 1; done'
+
 ExecStart=$PYTHON $APP_DIR/PhotoFrameDesktopApp.py
 Restart=always
 RestartSec=3
+TimeoutStartSec=0
+
+# Environment for GUI apps (Tk / XWayland / Wayland)
+Environment=HOME=/home/pi
 Environment=DISPLAY=:0
 $XAUTH_LINE
 Environment=XDG_RUNTIME_DIR=/run/user/1000
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
 Environment=PYTHONUNBUFFERED=1
+SyslogIdentifier=photoframe
+StandardOutput=journal
+StandardError=journal
+
+# Hardening (relaxed so we can still read user files under /home/pi)
 NoNewPrivileges=yes
 ProtectSystem=full
 ProtectHome=no
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=graphical.target
 EOF
 
 echo "[6/8] Reloading and enabling service..."
 sudo systemctl daemon-reload
+# ensure old symlinks (e.g., multi-user.target) are replaced with graphical.target
+sudo systemctl disable "$SERVICE_NAME" || true
 sudo systemctl enable "$SERVICE_NAME"
-sudo systemctl restart "$SERVICE_NAME"
+sudo systemctl start "$SERVICE_NAME"
 
 echo "[7/8] Status:"
 sudo systemctl status "$SERVICE_NAME" --no-pager -l || true
