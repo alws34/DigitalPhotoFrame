@@ -22,6 +22,8 @@ import re
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from Handlers.weather_handler import weather_handler
+from WebServer.API import Backend as BackendAPI
+from WebServer.PhotoFrameServer import PhotoFrameServer
 from iFrame import iFrame
 
 # region Logging Setup
@@ -99,16 +101,21 @@ class PhotoFrame(tk.Frame, iFrame):
     def __init__(self, parent, stream_url, desired_width, desired_height, *args, **kwargs):
         super().__init__(parent, *args, **kwargs)
         self.parent = parent
-        self.stream_url = stream_url
+        #self.stream_url = stream_url
         self.desired_width = desired_width
         self.desired_height = desired_height
         self.triple_tap_count = 0
         self.last_tap_time = 0
         self.show_stats = False #settings.get("stats", {}).get("show", False)
         self.backend_port = settings.get("backend_configs", {}).get("server_port", 5001)
+        
+        
 
         self.cached_stats = self.get_system_stats()
-        
+        self.base_path = os.path.dirname(os.path.abspath(__file__))
+
+        self.image_dir = os.path.join(self.base_path, "Images")
+
         if isinstance(self.parent, tk.Tk):
             self.parent.title("Digital Photo Frame V2.0")
             w, h = self.parent.winfo_screenwidth(), self.parent.winfo_screenheight()
@@ -129,29 +136,45 @@ class PhotoFrame(tk.Frame, iFrame):
         self._last_tap_time  = 0.0
         
 
-        self.time_font = ImageFont.truetype(settings['font_name'], settings['time_font_size'])
-        self.date_font = ImageFont.truetype(settings['font_name'], settings['date_font_size'])
+        self.font_path = self.base_path + "//" + settings['font_name']
+        self.time_font = ImageFont.truetype(self.font_path, settings['time_font_size'])
+        self.date_font = ImageFont.truetype(self.font_path, settings['date_font_size'])
         self.font_temp = self.time_font  # reuse
         self.font_desc = self.date_font  # reuse
-        stats_font_path = settings['font_name']
+        stats_font_path = self.font_path
         stats_font_size = settings.get("stats", {}).get("font_size", 20)
         self.stats_font = ImageFont.truetype(stats_font_path, stats_font_size)
 
         self.label = tk.Label(self, bg='black')
         self.label.pack(fill="both", expand=True)
         
-        self.stream_client = MJPEGStreamClient(self.stream_url)
+        #self.stream_client = MJPEGStreamClient(self.stream_url)
         self.current_frame = None
         self.stop_event = threading.Event()
         
-        self.fetch_thread = threading.Thread(target=self.frame_fetch_loop, daemon=True)
-        self.fetch_thread.start()
+        # self.fetch_thread = threading.Thread(target=self.frame_fetch_loop, daemon=True)
+        # self.fetch_thread.start()
 
         self.weather_client = weather_handler(frame = self, settings= settings)
         self.weather_thread = threading.Thread(target=self.weather_loop, daemon=True)
         self.weather_thread.start()
         self.stats_thread = threading.Thread(target=self.update_stats_loop, daemon=True)
         self.stats_thread.start()
+        
+        self.PhotoFrameServer=PhotoFrameServer(
+            width = self.desired_width,
+            height= self.desired_height,
+            iframe= self,
+            images_dir=self.image_dir
+        )
+
+        threading.Thread(target=self.PhotoFrameServer.run_photoframe, daemon=True).start()
+        
+        self.BackendAPI = BackendAPI(frame=self, settings=settings,
+                      image_dir=self.image_dir)
+        threading.Thread(target=self.BackendAPI.start, daemon=True).start()
+
+        
         
         self.update_display()
 
@@ -208,20 +231,19 @@ class PhotoFrame(tk.Frame, iFrame):
             self._tap_count = 0
     
     
-    # ---- settings form ----
+
     # ---- settings form ----
     def open_settings_form(self):
         if hasattr(self, "settings_form") and self.settings_form.winfo_exists():
             return
 
+        # Create and center the form immediately
         form = tk.Toplevel(self.parent)
         self.settings_form = form
         form.withdraw()
         form.title("Settings")
         form.transient(self.parent)
         form.resizable(False, False)
-
-        # Center on screen
         width, height = 700, 450
         sw, sh = self.parent.winfo_screenwidth(), self.parent.winfo_screenheight()
         x = (sw - width) // 2
@@ -240,75 +262,112 @@ class PhotoFrame(tk.Frame, iFrame):
         notebook.add(about_frame, text="About")
         notebook.pack(fill="both", expand=True, padx=10, pady=10)
 
-        # -- Stats tab --
-        cpu_lbl = ttk.Label(stats_frame, text="")
-        ram_lbl = ttk.Label(stats_frame, text="")
-        tmp_lbl = ttk.Label(stats_frame, text="")
-        ip_lbl = ttk.Label(stats_frame, text="")
-        current_ssid_lbl = ttk.Label(stats_frame, text="SSID: N/A")
-        qr_lbl = ttk.Label(stats_frame)
-        for lbl in (cpu_lbl, ram_lbl, tmp_lbl, ip_lbl, current_ssid_lbl):
+        # -- Stats tab widgets --
+        self.cpu_lbl = ttk.Label(stats_frame, text="CPU: Loading...")
+        self.ram_lbl = ttk.Label(stats_frame, text="RAM: Loading...")
+        self.tmp_lbl = ttk.Label(stats_frame, text="Temp: Loading...")
+        self.ip_lbl = ttk.Label(stats_frame, text="URL: Loading...")
+        self.current_ssid_lbl = ttk.Label(stats_frame, text="SSID: Loading...")
+        self.qr_lbl = ttk.Label(stats_frame)
+
+        for lbl in (
+            self.cpu_lbl,
+            self.ram_lbl,
+            self.tmp_lbl,
+            self.ip_lbl,
+            self.current_ssid_lbl
+        ):
             lbl.pack(anchor="w")
-        ip_lbl.pack_configure(pady=(5,15))
-        qr_lbl.pack()
+        self.ip_lbl.pack_configure(pady=(5, 15))
+        self.qr_lbl.pack()
         ttk.Button(stats_frame, text="Close Application", command=self.on_closing).pack(pady=10)
 
+        # Helper to get current SSID
         def get_current_ssid():
             try:
                 out = subprocess.check_output(
                     ["nmcli", "-t", "-f", "NAME", "connection", "show", "--active"],
-                    stderr=subprocess.DEVNULL, universal_newlines=True
+                    stderr=subprocess.DEVNULL,
+                    universal_newlines=True
                 )
                 lines = [l for l in out.splitlines() if l]
                 return lines[0] if lines else "N/A"
             except:
                 return "N/A"
 
-        current_ssid_lbl.config(text=f"SSID: {get_current_ssid()}")
+        # -- Background thread to update stats & QR code every second --
+        def update_stats_loop():
+            while getattr(self, "settings_form", None) and form.winfo_exists():
+                try:
+                    # System stats
+                    s = self.get_system_stats().split("\n")
+                    ip = get_local_ip()
+                    ssid = get_current_ssid()
 
-        def update_stats():
-            s = self.get_system_stats().split("\n")
-            cpu_lbl.config(text=s[0]); ram_lbl.config(text=s[1]); tmp_lbl.config(text=s[2])
-            ip = get_local_ip(); ip_lbl.config(text=f"URL: http://{ip}:{self.backend_port}")
-            qr = qrcode.make(f"http://{ip}:{self.backend_port}").resize((150,150), Image.Resampling.LANCZOS)
-            img = ImageTk.PhotoImage(qr); qr_lbl.config(image=img); qr_lbl.image=img
-            current_ssid_lbl.config(text=f"SSID: {get_current_ssid()}")
-            form.after(1000, update_stats)
-        form.after(0, update_stats)
+                    # Generate QR code
+                    qr = qrcode.make(f"http://{ip}:{self.backend_port}")
+                    qr = qr.resize((150, 150), Image.Resampling.LANCZOS)
+                    img = ImageTk.PhotoImage(qr)
 
-        # -- Wi-Fi tab --
-        ttk.Label(wifi_frame, text="Network:").pack(anchor="w", pady=(10,0))
+                    # Schedule GUI update on main thread
+                    def apply_updates():
+                        self.cpu_lbl.config(text=s[0])
+                        self.ram_lbl.config(text=s[1])
+                        self.tmp_lbl.config(text=s[2])
+                        self.ip_lbl.config(text=f"URL: http://{ip}:{self.backend_port}")
+                        self.current_ssid_lbl.config(text=f"SSID: {ssid}")
+                        self.qr_lbl.config(image=img)
+                        self.qr_lbl.image = img  # prevent GC
+
+                    form.after(0, apply_updates)
+                except:
+                    pass
+
+                time.sleep(1)
+
+        threading.Thread(target=update_stats_loop, daemon=True).start()
+
+        # -- Wi-Fi tab widgets --
+        ttk.Label(wifi_frame, text="Network:").pack(anchor="w", pady=(10, 0))
         ssid_cb = ttk.Combobox(wifi_frame, state="readonly")
         ssid_cb.pack(fill="x")
 
-        # Password row
         pw_frame = ttk.Frame(wifi_frame)
-        pw_frame.pack(fill="x", pady=(10,0))
+        pw_frame.pack(fill="x", pady=(10, 0))
         ttk.Label(pw_frame, text="Password:").pack(side="left")
         pwd_ent = ttk.Entry(pw_frame, show="*")
-        pwd_ent.pack(side="left", fill="x", expand=True, padx=(5,0))
+        pwd_ent.pack(side="left", fill="x", expand=True, padx=(5, 0))
         show_pwd_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(
-            pw_frame, text="Show",
+            pw_frame,
+            text="Show",
             variable=show_pwd_var,
             command=lambda: pwd_ent.config(show="" if show_pwd_var.get() else "*")
-        ).pack(side="left", padx=(5,0))
+        ).pack(side="left", padx=(5, 0))
 
-                # SSID scan once when form loads
+        # Async SSID scan
         def scan():
-            try:
-                out = subprocess.check_output(
-                    "sudo iwlist wlan0 scanning | grep ESSID", shell=True, universal_newlines=True
-                )
-                ss = [line.split('ESSID:')[1].strip().strip('"') for line in out.splitlines()]
-                ss = [s for s in ss if s]
-            except:
-                ss = []
-            ssid_cb['values'] = sorted(set(ss))
-        # perform a single scan at startup
+            def _worker():
+                try:
+                    out = subprocess.check_output(
+                        "sudo iwlist wlan0 scanning | grep ESSID",
+                        shell=True,
+                        universal_newlines=True
+                    )
+                    ssids = [
+                        line.split('ESSID:')[1].strip().strip('"')
+                        for line in out.splitlines()
+                    ]
+                    ssids = sorted(set(filter(None, ssids)))
+                except:
+                    ssids = []
+                form.after(0, lambda: ssid_cb.configure(values=ssids))
+
+            threading.Thread(target=_worker, daemon=True).start()
+
         scan()
 
-        # Toggle, Caps, Connect
+        # Keyboard & connect controls
         layout = {"mode": "qwerty", "caps": False}
         btn_frame = ttk.Frame(wifi_frame)
         btn_frame.pack(anchor="w", pady=5)
@@ -316,10 +375,12 @@ class PhotoFrame(tk.Frame, iFrame):
         def switch_layout():
             if layout["mode"] == "qwerty":
                 layout["mode"] = "symnum"
-                qwerty_frame.pack_forget(); symnum_frame.pack(anchor="center")
+                qwerty_frame.pack_forget()
+                symnum_frame.pack(anchor="center")
             else:
                 layout["mode"] = "qwerty"
-                symnum_frame.pack_forget(); qwerty_frame.pack(anchor="center")
+                symnum_frame.pack_forget()
+                qwerty_frame.pack(anchor="center")
 
         def toggle_caps():
             layout["caps"] = not layout["caps"]
@@ -332,30 +393,32 @@ class PhotoFrame(tk.Frame, iFrame):
             if not ssid:
                 return
             pwd = pwd_ent.get()
-            try:
-                subprocess.run(
-                    ["sudo", "nmcli", "device", "wifi", "connect", ssid, "password", pwd],
-                    check=True
-                )
-            except subprocess.CalledProcessError as e:
-                import tkinter.messagebox as mb
-                mb.showerror("Connection Failed", str(e))
-                return
-            current_ssid_lbl.config(text=f"SSID: {ssid}")
-            new_ip = get_local_ip()
-            ip_lbl.config(text=f"URL: http://{new_ip}:{self.backend_port}")
 
-        toggle_btn = ttk.Button(btn_frame, text="123/#", command=switch_layout)
-        caps_btn = ttk.Button(btn_frame, text="Caps", command=toggle_caps)
-        toggle_btn.pack(side="left", padx=(0,5))
-        caps_btn.pack(side="left", padx=(0,5))
+            def _worker():
+                try:
+                    subprocess.run(
+                        ["sudo", "nmcli", "device", "wifi", "connect", ssid, "password", pwd],
+                        check=True
+                    )
+                except subprocess.CalledProcessError as e:
+                    form.after(0, lambda: messagebox.showerror("Connection Failed", str(e)))
+                    return
+
+                new_ip = get_local_ip()
+                form.after(0, lambda: (
+                    self.current_ssid_lbl.config(text=f"SSID: {ssid}"),
+                    self.ip_lbl.config(text=f"URL: http://{new_ip}:{self.backend_port}")
+                ))
+
+            threading.Thread(target=_worker, daemon=True).start()
+
+        ttk.Button(btn_frame, text="123/#", command=switch_layout).pack(side="left", padx=(0, 5))
+        ttk.Button(btn_frame, text="Caps", command=toggle_caps).pack(side="left", padx=(0, 5))
         ttk.Button(btn_frame, text="Connect", command=connect).pack(side="left")
 
-        # Keyboard container
+        # QWERTY keyboard
         kb_container = ttk.Frame(wifi_frame)
         kb_container.pack(fill="x", anchor="center", pady=10)
-
-        # QWERTY layout
         qwerty_frame = ttk.Frame(kb_container)
         qwerty_buttons = []
         rows = ["q w e r t y u i o p", "a s d f g h j k l", "z x c v b n m"]
@@ -367,31 +430,28 @@ class PhotoFrame(tk.Frame, iFrame):
                     width=4,
                     height=2,
                     command=lambda ch=ch: pwd_ent.insert(
-                        tk.END,
-                        ch.upper() if layout["caps"] else ch
+                        tk.END, ch.upper() if layout["caps"] else ch
                     )
                 )
                 btn.grid(row=r, column=c, padx=2, pady=2)
                 qwerty_buttons.append(btn)
-        space_btn = tk.Button(
+        tk.Button(
             qwerty_frame,
             text="Space",
             width=40,
             height=2,
-            command=lambda: pwd_ent.insert(tk.END, ' ')
-        )
-        space_btn.grid(row=3, column=2, columnspan=7, padx=2, pady=2)
-        back_btn = tk.Button(
+            command=lambda: pwd_ent.insert(tk.END, " ")
+        ).grid(row=3, column=2, columnspan=7, padx=2, pady=2)
+        tk.Button(
             qwerty_frame,
-            text="←",
+            text="<-",
             width=4,
             height=2,
             command=lambda: pwd_ent.delete(len(pwd_ent.get())-1, tk.END)
-        )
-        back_btn.grid(row=3, column=9, padx=2, pady=2)
+        ).grid(row=3, column=9, padx=2, pady=2)
         qwerty_frame.pack(anchor="center")
 
-        # Symbols+Numbers layout
+        # Symbols + numbers
         symnum_frame = ttk.Frame(kb_container)
         symbols = "~ ! @ # $ % ^ & * ( ) _ + - = [ ] { } | ; : ' \" , . / < > ?".split()
         for i, sym in enumerate(symbols[:20]):
@@ -415,7 +475,7 @@ class PhotoFrame(tk.Frame, iFrame):
             ).grid(row=r+2, column=c, padx=2, pady=2)
         tk.Button(
             symnum_frame,
-            text="←",
+            text="<-",
             width=4,
             height=2,
             command=lambda: pwd_ent.delete(len(pwd_ent.get())-1, tk.END)
@@ -428,14 +488,14 @@ class PhotoFrame(tk.Frame, iFrame):
             "this is a digital photo frame application\n"
             "that can display images on almost any platform using mjpeg streaming."
         )
-        ttk.Label(about_frame, text=about_text, wraplength=660, justify="left").pack(padx=10, pady=10)
+        ttk.Label(about_frame, text=about_text, wraplength=660, justify="left").pack(
+            padx=10, pady=10
+        )
 
-        form.update_idletasks()
         form.deiconify()
         form.grab_set()
-   
-   
-   
+    
+
    
    
     def weather_loop(self):
@@ -444,7 +504,7 @@ class PhotoFrame(tk.Frame, iFrame):
             time.sleep(600)  # Every 10 minutes
 
     def add_stats_to_frame(self, frame):
-        font_path = settings['font_name']
+        font_path = self.font_path
         font_size = settings['stats']['font_size']
         font_color = settings['stats']['font_color']
 
@@ -534,17 +594,16 @@ class PhotoFrame(tk.Frame, iFrame):
     def update_display(self):
         """
         Periodically updates the tkinter label with the latest frame.
-        This method is scheduled using after() to ensure updates occur in the GUI thread.
+        Pulls directly from the server.iFrame interface.
         """
-        if self.current_frame is not None:
-            # Convert the BGR image to RGB
+        frame = self.PhotoFrameServer.get_live_frame()
+        if frame is not None:
             overlay_frame = self.add_overlay_text(self.current_frame.copy())
             cv_img_rgb = cv2.cvtColor(overlay_frame, cv2.COLOR_BGR2RGB)
             pil_image = Image.fromarray(cv_img_rgb)
             image_tk = ImageTk.PhotoImage(pil_image)
             self.label.config(image=image_tk)
-            self.label.image = image_tk  # Keep a reference to avoid garbage collection
-        # Schedule the next update (about every 33 ms for ~30 FPS)
+            self.label.image = image_tk 
         self.after(33, self.update_display)
 
     def stop(self):
@@ -555,7 +614,7 @@ class PhotoFrame(tk.Frame, iFrame):
         current_time = time.strftime("%H:%M:%S")
         current_date = time.strftime("%d/%m/%y")
 
-        font_path = settings['font_name']
+        font_path = self.font_path
         time_font_size = settings['time_font_size']
         date_font_size = settings['date_font_size']
         margin_left = settings['margin_left']
@@ -638,8 +697,28 @@ class PhotoFrame(tk.Frame, iFrame):
             time.sleep(5)
 
 
+#region iFrame
+
+    def get_live_frame(self):
+        return self.current_frame
+
+    
+    def get_is_running(self):
+        return not self.stop_event.is_set()
+
+    
+    def update_images_list(self):
+        logging.info("update_images_list called – no action in desktop client")
+
+    
+    def update_frame_to_stream(self, frame):
+        self.current_frame = frame
+
+#endregion iFrame
+
 if __name__ == "__main__":
-    path = os.getcwd() + "/DigitalPhotoFrame/DesktopApp/photoframe_settings.json"
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    path = os.path.join(base_dir, "photoframe_settings.json")
     with open(path, "r") as f:
         settings = json.load(f)
 
