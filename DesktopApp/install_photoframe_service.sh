@@ -9,6 +9,10 @@ PYTHON="$VENV_DIR/bin/python"
 SERVICE_NAME="PhotoFrame_Desktop_App"
 SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
 POLKIT_RULE="/etc/polkit-1/rules.d/45-allow-nm-wifi-for-pi.rules"
+DESKTOP_DIR="/home/pi/Desktop"
+START_SH="$DESKTOP_DIR/StartPhotoFrame.sh"
+STOP_SH="$DESKTOP_DIR/StopPhotoFrame.sh"
+RESTART_SH="$DESKTOP_DIR/RestartPhotoFrame.sh"
 
 echo "[0/8] Installing NetworkManager + polkit (if missing)..."
 sudo apt-get update
@@ -23,18 +27,9 @@ sudo tee "$POLKIT_RULE" >/dev/null <<'EOF'
 /* Allow user 'pi' to scan and connect Wi-Fi via NetworkManager without password */
 polkit.addRule(function(action, subject) {
   if (subject.isInGroup("pi") || subject.user == "pi") {
-    // Wi-Fi scan
-    if (action.id == "org.freedesktop.NetworkManager.wifi.scan") {
-      return polkit.Result.YES;
-    }
-    // General network control (connect/disconnect)
-    if (action.id == "org.freedesktop.NetworkManager.network-control") {
-      return polkit.Result.YES;
-    }
-    // Allow creating/modifying the user's own wifi connections
-    if (action.id == "org.freedesktop.NetworkManager.settings.modify.own") {
-      return polkit.Result.YES;
-    }
+    if (action.id == "org.freedesktop.NetworkManager.wifi.scan") return polkit.Result.YES;
+    if (action.id == "org.freedesktop.NetworkManager.network-control") return polkit.Result.YES;
+    if (action.id == "org.freedesktop.NetworkManager.settings.modify.own") return polkit.Result.YES;
   }
 });
 EOF
@@ -62,7 +57,6 @@ if [ ! -f "$REQS_FILE" ]; then
 fi
 "$VENV_DIR/bin/pip" install -r "$REQS_FILE"
 
-# Detect XAUTHORITY if present (mostly for X11; Wayland+XWayland often works without it)
 XAUTH_LINE=""
 if [ -f "/home/pi/.Xauthority" ]; then
   XAUTH_LINE="Environment=XAUTHORITY=/home/pi/.Xauthority"
@@ -83,15 +77,11 @@ WorkingDirectory=$APP_DIR
 ExecStart=$PYTHON $APP_DIR/PhotoFrameDesktopApp.py
 Restart=always
 RestartSec=3
-
-# Environment for GUI apps (Tk / XWayland)
 Environment=DISPLAY=:0
 $XAUTH_LINE
 Environment=XDG_RUNTIME_DIR=/run/user/1000
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
 Environment=PYTHONUNBUFFERED=1
-
-# Hardening (relaxed so we can still read user files under /home/pi)
 NoNewPrivileges=yes
 ProtectSystem=full
 ProtectHome=no
@@ -118,9 +108,43 @@ else
   echo "No Wi-Fi interface detected."
 fi
 
+echo "[9/8] Creating Desktop control scripts..."
+mkdir -p "$DESKTOP_DIR"
+
+cat > "$START_SH" <<EOSTART
+#!/bin/bash
+set -e
+echo "Starting $SERVICE_NAME..."
+sudo systemctl start "$SERVICE_NAME"
+systemctl status "$SERVICE_NAME" --no-pager -l | sed -n '1,10p' || true
+EOSTART
+
+cat > "$STOP_SH" <<EOSTOP
+#!/bin/bash
+set -e
+echo "Stopping $SERVICE_NAME..."
+sudo systemctl stop "$SERVICE_NAME"
+systemctl status "$SERVICE_NAME" --no-pager -l | sed -n '1,10p' || true
+EOSTOP
+
+cat > "$RESTART_SH" <<EORESTART
+#!/bin/bash
+set -e
+echo "Restarting $SERVICE_NAME..."
+sudo systemctl restart "$SERVICE_NAME"
+systemctl status "$SERVICE_NAME" --no-pager -l | sed -n '1,10p' || true
+EORESTART
+
+chmod +x "$START_SH" "$STOP_SH" "$RESTART_SH"
+
 echo
 echo "Done."
 echo "Manage with:"
 echo "  sudo systemctl status  $SERVICE_NAME"
 echo "  sudo systemctl restart $SERVICE_NAME"
 echo "  sudo systemctl stop    $SERVICE_NAME"
+echo
+echo "Desktop scripts created:"
+echo "  $START_SH"
+echo "  $STOP_SH"
+echo "  $RESTART_SH"
