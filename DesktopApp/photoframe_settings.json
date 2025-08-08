@@ -1,5 +1,6 @@
 {
   "font_name": "arial.ttf",
+  "service_name": "PhotoFrame_Desktop_App",
   "time_font_size": 80,
   "date_font_size": 50,
   "margin_left": 80,

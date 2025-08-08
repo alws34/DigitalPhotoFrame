@@ -110,7 +110,7 @@ class PhotoFrame(tk.Frame, iFrame):
         self.last_tap_time = 0
         self.show_stats = False #settings.get("stats", {}).get("show", False)
         self.backend_port = settings.get("backend_configs", {}).get("server_port", 5001)
-        
+        self.service_name = settings.get("service_name", {}) 
         
 
         self.cached_stats = self.get_system_stats()
@@ -417,7 +417,7 @@ class PhotoFrame(tk.Frame, iFrame):
 
         def do_restart():
             try:
-                subprocess.run(["sudo", "systemctl", "restart", f"{service_name}.service"], check=True)
+                restart_service(service_name)
             except Exception as e:
                 messagebox.showerror("Restart failed", str(e))
 
@@ -436,7 +436,25 @@ class PhotoFrame(tk.Frame, iFrame):
                 return lines[0] if lines else "N/A"
             except Exception:
                 return "N/A"
+            
+        def restart_service(name):
+            # Try user service first
+            r = subprocess.run(
+                ["systemctl", "--user", "status", f"{name}.service"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+            if r.returncode in (0, 3):  # exists
+                subprocess.run(
+                    ["systemctl", "--user", "restart", f"{name}.service"], 
+                    check=True
+                )
+                return
 
+            # Try system service
+            subprocess.run(
+                ["sudo", "systemctl", "restart", f"{name}.service"], 
+                check=True
+            )
         temp_re = re.compile(r"(-?\d+(\.\d+)?)")
         def parse_num(s):
             m = temp_re.search(s or "")
