@@ -172,8 +172,13 @@ class PhotoFrame(tk.Frame, iFrame):
 
         threading.Thread(target=self.PhotoFrameServer.run_photoframe, daemon=True).start()
         
-        self.BackendAPI = BackendAPI(frame=self, settings=settings,
-                      image_dir=self.image_dir)
+        self.BackendAPI = BackendAPI(
+            frame=self.PhotoFrameServer,
+            settings=settings,
+            image_dir=self.image_dir
+        )
+        self.PhotoFrameServer.m_api = self.BackendAPI
+
         threading.Thread(target=self.BackendAPI.start, daemon=True).start()
 
         
@@ -240,6 +245,26 @@ class PhotoFrame(tk.Frame, iFrame):
             return
 
         service_name = getattr(self, "service_name", "photoframe")
+
+        # ------------- helpers: settings path + persistence -------------
+        def _settings_path():
+            return os.path.join(os.path.dirname(os.path.abspath(__file__)), "photoframe_settings.json")
+
+        def _ensure_screen_struct():
+            scr = settings.setdefault("screen", {})
+            scr.setdefault("orientation", "normal")
+            scr.setdefault("brightness", 100)
+            scr.setdefault("schedule_enabled", False)
+            scr.setdefault("off_hour", 0)
+            scr.setdefault("on_hour", 7)
+            return scr
+
+        def _save_settings():
+            try:
+                with open(_settings_path(), "w") as f:
+                    json.dump(settings, f, indent=2)
+            except Exception as e:
+                messagebox.showerror("Failed to save settings", str(e))
 
         # ---------------- sparkline (pretty, lightweight) ----------------
         class Sparkline:
@@ -347,9 +372,8 @@ class PhotoFrame(tk.Frame, iFrame):
         top = ttk.Frame(stats_frame)
         top.pack(fill="x", padx=4, pady=(4, 0))
 
-        # Center container for graphs + labels
         graphs_col = ttk.Frame(top)
-        graphs_col.pack(anchor="center")  # <-- center in the parent
+        graphs_col.pack(anchor="center")
 
         self.cpu_lbl = ttk.Label(graphs_col, text="CPU: Loading...")
         self.cpu_lbl.pack(anchor="center")
@@ -455,7 +479,7 @@ class PhotoFrame(tk.Frame, iFrame):
         threading.Thread(target=update_stats_loop, daemon=True).start()
 
         # ======================================================
-        # Wi-Fi tab - custom on-screen keyboard (true layout)
+        # Wi-Fi tab (unchanged except custom keyboard)
         # ======================================================
         ttk.Label(wifi_frame, text="Network:").pack(anchor="w", pady=(10, 0))
         ssid_cb = ttk.Combobox(wifi_frame, state="readonly")
@@ -639,7 +663,6 @@ class PhotoFrame(tk.Frame, iFrame):
 
         keyboard = CustomKeyboard(kb_container, pwd_ent)
 
-        # Wi-Fi scan/connect
         def scan():
             def _worker():
                 try:
@@ -680,26 +703,25 @@ class PhotoFrame(tk.Frame, iFrame):
         ttk.Button(left_btns, text="Connect", command=connect).pack(side="left", padx=(8, 0))
 
         # ======================================================
-        # Screen tab (no dropdowns) + JSON persistence
+        # Screen tab (orientation + brightness + schedule) with JSON persistence to main settings
         # ======================================================
-        CONFIG_PATH = os.path.expanduser("~/.config/photoframe/screen.json")
-        os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
+        scr_cfg = _ensure_screen_struct()
 
-        # UI
+        # ---- orientation UI ----
         scr_top = ttk.Frame(screen_frame); scr_top.pack(fill="x", pady=(10, 6))
         ttk.Label(scr_top, text="Orientation:").grid(row=0, column=0, sticky="w", padx=(0, 12))
-        orient_var = tk.StringVar(value="normal")
+        orient_var = tk.StringVar(value=scr_cfg.get("orientation", "normal"))
         orow = ttk.Frame(scr_top); orow.grid(row=0, column=1, sticky="w")
         for k, v in [("Normal", "normal"), ("Left (90)", "90"), ("Inverted (180)", "180"), ("Right (270)", "270")]:
             ttk.Radiobutton(orow, text=k, value=v, variable=orient_var).pack(side="left", padx=(0, 8))
         apply_orient_btn = ttk.Button(scr_top, text="Apply Orientation"); apply_orient_btn.grid(row=0, column=2, padx=(12, 0))
 
-        br_frame = ttk.LabelFrame(screen_frame, text="Brightness"); br_frame.pack(fill="x", pady=(8, 0))
-        br_frame.columnconfigure(1, weight=1)  # let the scale expand
+        # ---- brightness UI (wide, snap 10%) ----
+        br_frame = ttk.LabelFrame(screen_frame, text="Brightness"); br_frame.pack(fill="x", pady=(8, 6))
+        br_frame.columnconfigure(1, weight=1)
         ttk.Label(br_frame, text="Level:").grid(row=0, column=0, sticky="w", padx=(8, 8), pady=(8, 8))
-        br_val_lbl = ttk.Label(br_frame, text="100%"); br_val_lbl.grid(row=0, column=2, sticky="w", padx=(8, 0))
+        br_val_lbl = ttk.Label(br_frame, text=f"{int(scr_cfg.get('brightness', 100))}%"); br_val_lbl.grid(row=0, column=2, sticky="w", padx=(8, 0))
 
-        # Wider scale + snaps to 10% steps while dragging
         _snap_lock = {"updating": False}
         def _snap10_and_update(v):
             if _snap_lock["updating"]:
@@ -712,23 +734,91 @@ class PhotoFrame(tk.Frame, iFrame):
             br_val_lbl.config(text=f"{snapped}%")
             if snapped != int(raw):
                 _snap_lock["updating"] = True
-                br_scale.set(snapped)  # will re-enter, guard with lock
+                br_scale.set(snapped)
                 _snap_lock["updating"] = False
 
         br_scale = ttk.Scale(
             br_frame,
-            from_=10,
-            to=100,
+            from_=10, to=100,
             orient="horizontal",
-            length=620,                 # wider
-            command=_snap10_and_update  # snapping behavior
+            length=620,
+            command=_snap10_and_update
         )
-        br_scale.set(100)
+        br_scale.set(int(scr_cfg.get("brightness", 100)))
         br_scale.grid(row=0, column=1, sticky="we", pady=(8, 8))
-
         apply_br_btn = ttk.Button(br_frame, text="Apply Brightness"); apply_br_btn.grid(row=0, column=3, padx=(8, 8))
 
-        # Detect output/backlight automatically (no dropdowns)
+        # ---- auto on/off schedule UI (large sliders, no tiny spinboxes) ----
+        sched = ttk.LabelFrame(screen_frame, text="Auto screen on/off (hours only)")
+        sched.pack(fill="x", pady=(6, 0))
+        for c in (1, 4):  # allow scales to stretch
+            sched.columnconfigure(c, weight=1)
+
+        enable_var = tk.BooleanVar(value=bool(scr_cfg.get("schedule_enabled", False)))
+        ttk.Checkbutton(sched, text="Enable schedule", variable=enable_var).grid(row=0, column=0, sticky="w", padx=8, pady=(8, 4))
+
+        # OFF hour slider
+        ttk.Label(sched, text="Turn OFF at:").grid(row=1, column=0, sticky="w", padx=8, pady=4)
+        off_var = tk.IntVar(value=int(scr_cfg.get("off_hour", 0)))
+        off_val_lbl = ttk.Label(sched, text=f"{off_var.get():02d}:00")
+        off_val_lbl.grid(row=1, column=2, sticky="w", padx=8, pady=4)
+
+        _off_lock = {"updating": False}
+        def _off_snap(v):
+            if _off_lock["updating"]:
+                return
+            try:
+                raw = float(v)
+            except Exception:
+                raw = float(off_var.get())
+            snapped = int(round(raw))
+            snapped = max(0, min(23, snapped))
+            if snapped != int(raw):
+                _off_lock["updating"] = True
+                off_scale.set(snapped)
+                _off_lock["updating"] = False
+            off_var.set(snapped)
+            off_val_lbl.config(text=f"{snapped:02d}:00")
+
+        off_scale = ttk.Scale(
+            sched, from_=0, to=23, orient="horizontal", length=620, command=_off_snap
+        )
+        off_scale.set(off_var.get())
+        off_scale.grid(row=1, column=1, sticky="we", padx=(0, 8), pady=4)
+
+        # ON hour slider
+        ttk.Label(sched, text="Turn ON at:").grid(row=2, column=0, sticky="w", padx=8, pady=4)
+        on_var = tk.IntVar(value=int(scr_cfg.get("on_hour", 7)))
+        on_val_lbl = ttk.Label(sched, text=f"{on_var.get():02d}:00")
+        on_val_lbl.grid(row=2, column=2, sticky="w", padx=8, pady=4)
+
+        _on_lock = {"updating": False}
+        def _on_snap(v):
+            if _on_lock["updating"]:
+                return
+            try:
+                raw = float(v)
+            except Exception:
+                raw = float(on_var.get())
+            snapped = int(round(raw))
+            snapped = max(0, min(23, snapped))
+            if snapped != int(raw):
+                _on_lock["updating"] = True
+                on_scale.set(snapped)
+                _on_lock["updating"] = False
+            on_var.set(snapped)
+            on_val_lbl.config(text=f"{snapped:02d}:00")
+
+        on_scale = ttk.Scale(
+            sched, from_=0, to=23, orient="horizontal", length=620, command=_on_snap
+        )
+        on_scale.set(on_var.get())
+        on_scale.grid(row=2, column=1, sticky="we", padx=(0, 8), pady=4)
+
+        apply_sched_btn = ttk.Button(sched, text="Apply Schedule")
+        apply_sched_btn.grid(row=3, column=0, sticky="w", padx=8, pady=(8, 8))
+
+        # ---- platform helpers: output/backlight + actions ----
         def list_outputs():
             try:
                 out = subprocess.check_output(["wlr-randr"], universal_newlines=True, stderr=subprocess.DEVNULL)
@@ -772,26 +862,39 @@ class PhotoFrame(tk.Frame, iFrame):
             except Exception:
                 return None, None
 
-        def set_brightness_percent(dev, percent):
-            percent = max(10, min(100, int(percent)))
+        def _write_brightness_value(dev, value):
+            base = os.path.join("/sys/class/backlight", dev)
+            try:
+                with open(os.path.join(base, "brightness"), "w") as f:
+                    f.write(str(value))
+                return True
+            except PermissionError:
+                cmd = f"echo {value} | sudo tee {os.path.join(base, 'brightness')}"
+                try:
+                    subprocess.run(cmd, shell=True, check=True)
+                    return True
+                except subprocess.CalledProcessError as e:
+                    messagebox.showerror("Permission required", f"Failed to write brightness.\n\n{e}")
+                    return False
+            except Exception as e:
+                messagebox.showerror("Failed to set brightness", str(e))
+                return False
+
+        def set_brightness_percent(dev, percent, allow_zero=False):
+            percent = int(percent)
+            if not allow_zero:
+                percent = max(10, min(100, percent))
+            else:
+                percent = max(0, min(100, percent))
             base = os.path.join("/sys/class/backlight", dev)
             try:
                 with open(os.path.join(base, "max_brightness"), "r") as f:
                     maxb = int(f.read().strip())
-                value = int(round(percent * maxb / 100.0))
-                value = max(1, min(maxb, value))
-                try:
-                    with open(os.path.join(base, "brightness"), "w") as f:
-                        f.write(str(value))
-                except PermissionError:
-                    cmd = f"echo {value} | sudo tee {os.path.join(base, 'brightness')}"
-                    subprocess.run(cmd, shell=True, check=True)
-                return True
-            except subprocess.CalledProcessError as e:
-                messagebox.showerror("Permission required", f"Failed to write brightness. Run with permissions or add a udev rule.\n\n{e}")
-                return False
+                value = 0 if percent == 0 else int(round(percent * maxb / 100.0))
+                value = min(maxb, value)
+                return _write_brightness_value(dev, value)
             except Exception as e:
-                messagebox.showerror("Failed to set brightness", str(e))
+                messagebox.showerror("Failed to compute brightness", str(e))
                 return False
 
         def apply_orientation(transform):
@@ -806,27 +909,13 @@ class PhotoFrame(tk.Frame, iFrame):
                 messagebox.showerror("Failed to set orientation", str(e))
                 return False
 
-        # JSON persistence ------------------------------------------------
-        def load_screen_config():
-            try:
-                with open(CONFIG_PATH, "r") as f:
-                    return json.load(f)
-            except Exception:
-                return {}
-
-        def save_screen_config(orientation, brightness):
-            cfg = {"orientation": orientation, "brightness": int(brightness)}
-            try:
-                with open(CONFIG_PATH, "w") as f:
-                    json.dump(cfg, f, indent=2)
-            except Exception as e:
-                messagebox.showerror("Failed to save settings", str(e))
-
-        # Wire up actions
+        # ---- persist + wire actions ----
         def on_apply_orientation():
             transform = orient_var.get()
             if apply_orientation(transform):
-                save_screen_config(transform, int(float(br_scale.get())))
+                scr = _ensure_screen_struct()
+                scr["orientation"] = transform
+                _save_settings()
 
         def on_apply_brightness():
             dev = pick_default_backlight()
@@ -834,48 +923,119 @@ class PhotoFrame(tk.Frame, iFrame):
                 messagebox.showerror("No backlight", "No /sys/class/backlight device found.")
                 return
             pct = int(float(br_scale.get()))
-            if set_brightness_percent(dev, pct):
-                save_screen_config(orient_var.get(), pct)
+            if set_brightness_percent(dev, pct, allow_zero=False):
+                scr = _ensure_screen_struct()
+                scr["brightness"] = pct
+                br_val_lbl.config(text=f"{pct}%")
+                _save_settings()
+
+        def on_apply_schedule():
+            scr = _ensure_screen_struct()
+            scr["schedule_enabled"] = bool(enable_var.get())
+            scr["off_hour"] = int(off_var.get()) % 24
+            scr["on_hour"] = int(on_var.get()) % 24
+            _save_settings()
+            if hasattr(self, "_screen_sched_event") and self._screen_sched_event:
+                try:
+                    self._screen_sched_event.set()
+                except Exception:
+                    pass
 
         apply_orient_btn.config(command=on_apply_orientation)
         apply_br_btn.config(command=on_apply_brightness)
+        apply_sched_btn.config(command=on_apply_schedule)
 
-        # Apply previously saved settings (if any) when opening the dialog
+        # ---- apply saved on open ----
         def apply_saved_on_open():
-            cfg = load_screen_config()
-            orient = cfg.get("orientation")
+            scr = _ensure_screen_struct()
+            orient = scr.get("orientation")
             if orient in ("normal", "90", "180", "270"):
                 orient_var.set(orient)
                 apply_orientation(orient)
-            pct = cfg.get("brightness")
-            if isinstance(pct, int):
-                pct = max(10, min(100, pct))
-                br_scale.set(pct)
-                br_val_lbl.config(text=f"{pct}%")
-                dev = pick_default_backlight()
-                if dev:
-                    set_brightness_percent(dev, pct)
-            else:
-                dev = pick_default_backlight()
-                if dev:
-                    cur, maxb = read_brightness(dev)
-                    if cur is not None and maxb and maxb > 0:
-                        pct = max(10, min(100, int(round(cur * 100.0 / maxb))))
-                        br_scale.set(pct)
-                        br_val_lbl.config(text=f"{pct}%")
-
+            pct = int(scr.get("brightness", 100))
+            pct = max(10, min(100, pct))
+            br_scale.set(pct)
+            br_val_lbl.config(text=f"{pct}%")
+            dev = pick_default_backlight()
+            if dev:
+                set_brightness_percent(dev, pct, allow_zero=False)
+            off_scale.set(int(scr.get("off_hour", 0)))
+            off_var.set(int(scr.get("off_hour", 0)))
+            off_val_lbl.config(text=f"{off_var.get():02d}:00")
+            on_scale.set(int(scr.get("on_hour", 7)))
+            on_var.set(int(scr.get("on_hour", 7)))
+            on_val_lbl.config(text=f"{on_var.get():02d}:00")
         apply_saved_on_open()
+
+        # ---- tiny background scheduler (once per ~30s) ----
+        def _hour_now():
+            try:
+                return int(time.strftime("%H"))
+            except Exception:
+                return 0
+
+        def _in_off_period(now_h, off_h, on_h):
+            if off_h == on_h:
+                return False
+            if off_h < on_h:
+                return off_h <= now_h < on_h
+            else:
+                return now_h >= off_h or now_h < on_h
+
+        def _screen_power_worker():
+            self._screen_power_state = getattr(self, "_screen_power_state", "unknown")
+            self._last_user_brightness = None
+            ev = self._screen_sched_event
+            while True:
+                scr = _ensure_screen_struct()
+                enabled = bool(scr.get("schedule_enabled", False))
+                off_h = int(scr.get("off_hour", 0)) % 24
+                on_h  = int(scr.get("on_hour", 7)) % 24
+                now_h = _hour_now()
+
+                desired = "off" if (enabled and _in_off_period(now_h, off_h, on_h)) else "on"
+
+                try:
+                    dev = pick_default_backlight()
+                    if dev:
+                        cur, maxb = read_brightness(dev)
+                        cur_pct = int(round(cur * 100.0 / maxb)) if (cur is not None and maxb) else None
+
+                        if desired == "off" and self._screen_power_state != "off":
+                            self._last_user_brightness = int(settings.get("screen", {}).get("brightness", 100))
+                            if cur_pct is not None and cur_pct > 0:
+                                self._last_user_brightness = cur_pct
+                            set_brightness_percent(dev, 0, allow_zero=True)
+                            self._screen_power_state = "off"
+
+                        elif desired == "on" and self._screen_power_state != "on":
+                            restore = int(settings.get("screen", {}).get("brightness", 100))
+                            if isinstance(self._last_user_brightness, int):
+                                restore = max(10, min(100, self._last_user_brightness))
+                            set_brightness_percent(dev, restore, allow_zero=False)
+                            self._screen_power_state = "on"
+                except Exception:
+                    pass
+
+                if ev.wait(timeout=30.0):
+                    try:
+                        ev.clear()
+                    except Exception:
+                        pass
+
+        if not hasattr(self, "_screen_sched_thread"):
+            self._screen_sched_event = threading.Event()
+            self._screen_sched_thread = threading.Thread(target=_screen_power_worker, daemon=True)
+            self._screen_sched_thread.start()
 
         # ---------------- About tab ----------------
         about_cfg = settings.get("about", {}) if isinstance(settings, dict) else {}
         about_text = about_cfg.get("text", "Digital Photo Frame")
         about_image_path = about_cfg.get("image_path", "")
 
-        # Outer container fills the tab
         about_outer = ttk.Frame(about_frame)
         about_outer.pack(fill="both", expand=True)
 
-        # 3-column centering grid: content goes in the middle column
         about_outer.columnconfigure(0, weight=1)
         about_outer.columnconfigure(1, weight=0)
         about_outer.columnconfigure(2, weight=1)
@@ -886,18 +1046,15 @@ class PhotoFrame(tk.Frame, iFrame):
         content = ttk.Frame(about_outer)
         content.grid(row=1, column=1, sticky="n")
 
-        # Centered text with dynamic wraplength
         about_lbl = ttk.Label(content, text=about_text, justify="center")
         about_lbl.pack(anchor="center", padx=10, pady=(20, 10))
 
         def _update_wraplength(evt=None):
             w = max(300, int(content.winfo_width() * 0.9))
             about_lbl.configure(wraplength=w)
-
         content.bind("<Configure>", _update_wraplength)
 
-        # Optional image under the text (only if file exists)
-        self._about_img_ref = None  # keep reference
+        self._about_img_ref = None
         if isinstance(about_image_path, str) and about_image_path:
             try:
                 if os.path.isfile(about_image_path):
@@ -905,7 +1062,6 @@ class PhotoFrame(tk.Frame, iFrame):
                     im.thumbnail((700, 350), Image.Resampling.LANCZOS)
                     self._about_img_ref = ImageTk.PhotoImage(im)
                     ttk.Label(content, image=self._about_img_ref).pack(anchor="center", pady=(0, 20))
-                # else: no widget shown
             except Exception:
                 pass
 
