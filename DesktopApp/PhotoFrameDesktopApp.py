@@ -239,24 +239,19 @@ class PhotoFrame(tk.Frame, iFrame):
         if hasattr(self, "settings_form") and self.settings_form.winfo_exists():
             return
 
-        import re
-        import time
-        import threading
-        import subprocess
-        from collections import deque
-        from PIL import Image, ImageTk
-
         service_name = getattr(self, "service_name", "photoframe")
 
-        # ---- prettier sparkline canvas ----
+        # ---------------- sparkline (pretty, lightweight) ----------------
         class Sparkline:
-            def __init__(self, parent, width=480, height=70, maxlen=60):
+            def __init__(self, parent, width=560, height=70, maxlen=60):
                 self.width = width
                 self.height = height
                 self.pad = 6
                 self.data = deque(maxlen=maxlen)
-                self.canvas = tk.Canvas(parent, width=width, height=height, highlightthickness=1, highlightbackground="#bdbdbd", bg="#ffffff")
-                # pre-create static parts
+                self.canvas = tk.Canvas(
+                    parent, width=width, height=height,
+                    highlightthickness=1, highlightbackground="#bdbdbd", bg="#ffffff"
+                )
                 self._draw_grid()
 
             def widget(self):
@@ -266,13 +261,10 @@ class PhotoFrame(tk.Frame, iFrame):
                 c = self.canvas
                 c.delete("grid")
                 w, h, p = self.width, self.height, self.pad
-                # border
                 c.create_rectangle(0.5, 0.5, w-0.5, h-0.5, outline="#e0e0e0", tags="grid")
-                # vertical grid (5)
                 for i in range(1, 5):
                     x = p + i * (w - 2*p) / 5.0
                     c.create_line(x, p, x, h - p, fill="#f0f0f0", tags="grid")
-                # horizontal grid (3)
                 for i in range(1, 3):
                     y = p + i * (h - 2*p) / 3.0
                     c.create_line(p, y, w - p, y, fill="#f0f0f0", tags="grid")
@@ -305,22 +297,14 @@ class PhotoFrame(tk.Frame, iFrame):
                 pts, vmin, vmax = res
                 if len(pts) < 2:
                     return
-
-                # area fill under line
                 area = [(pts[0][0], self.height - self.pad)] + pts + [(pts[-1][0], self.height - self.pad)]
                 flat_area = [coord for pt in area for coord in pt]
                 c.create_polygon(*flat_area, fill="#e8f2ff", outline="", tags="plot")
-
-                # polyline
                 flat = [coord for pt in pts for coord in pt]
                 c.create_line(*flat, width=2, fill="#1976d2", tags="plot")
-
-                # last-point dot
                 x_last, y_last = pts[-1]
                 r = 2.5
                 c.create_oval(x_last - r, y_last - r, x_last + r, y_last + r, fill="#1e88e5", outline="", tags="plot")
-
-                # min/max labels at right
                 p = self.pad
                 c.create_text(self.width - p + 2, self.height - p, text=f"{vmin:.0f}", anchor="se", fill="#9e9e9e", font=("TkDefaultFont", 8), tags="plot")
                 c.create_text(self.width - p + 2, p, text=f"{vmax:.0f}", anchor="ne", fill="#9e9e9e", font=("TkDefaultFont", 8), tags="plot")
@@ -333,14 +317,14 @@ class PhotoFrame(tk.Frame, iFrame):
                 self.data.append(v)
                 self.draw()
 
-        # ---- window ----
+        # ---------------- window ----------------
         form = tk.Toplevel(self.parent)
         self.settings_form = form
         form.withdraw()
         form.title("Settings")
         form.transient(self.parent)
         form.resizable(False, False)
-        width, height = 760, 560
+        width, height = 800, 620
         sw, sh = self.parent.winfo_screenwidth(), self.parent.winfo_screenheight()
         x = (sw - width) // 2
         y = (sh - height) // 2
@@ -351,64 +335,57 @@ class PhotoFrame(tk.Frame, iFrame):
         notebook = ttk.Notebook(form)
         stats_frame = ttk.Frame(notebook)
         wifi_frame = ttk.Frame(notebook)
+        screen_frame = ttk.Frame(notebook)
         about_frame = ttk.Frame(notebook)
         notebook.add(stats_frame, text="Stats")
         notebook.add(wifi_frame, text="Wi-Fi")
+        notebook.add(screen_frame, text="Screen")
         notebook.add(about_frame, text="About")
         notebook.pack(fill="both", expand=True, padx=10, pady=10)
 
-        # ---- Stats tab layout using nested frames (pack) ----
-        # Top: labels + graphs side by side
+        # ---------------- Stats tab ----------------
         top = ttk.Frame(stats_frame)
         top.pack(fill="x", padx=4, pady=(4, 0))
 
-        left_col = ttk.Frame(top)
-        left_col.pack(side="left", anchor="n")
+        # Center container for graphs + labels
+        graphs_col = ttk.Frame(top)
+        graphs_col.pack(anchor="center")  # <-- center in the parent
 
-        # wider graphs
-        right_col = ttk.Frame(top)
-        right_col.pack(side="left", anchor="n", padx=(12, 0))
+        self.cpu_lbl = ttk.Label(graphs_col, text="CPU: Loading...")
+        self.cpu_lbl.pack(anchor="center")
+        self.cpu_graph = Sparkline(graphs_col, width=560, height=70, maxlen=60)
+        self.cpu_graph.widget().pack(anchor="center", pady=(0, 6))
 
-        self.cpu_lbl = ttk.Label(left_col, text="CPU: Loading...")
-        self.ram_lbl = ttk.Label(left_col, text="RAM: Loading...")
-        self.tmp_lbl = ttk.Label(left_col, text="Temp: Loading...")
-        self.cpu_lbl.pack(anchor="w", pady=(2, 2))
-        self.ram_lbl.pack(anchor="w", pady=2)
-        self.tmp_lbl.pack(anchor="w", pady=2)
+        self.ram_lbl = ttk.Label(graphs_col, text="RAM: Loading...")
+        self.ram_lbl.pack(anchor="center")
+        self.ram_graph = Sparkline(graphs_col, width=560, height=70, maxlen=60)
+        self.ram_graph.widget().pack(anchor="center", pady=(0, 6))
 
-        self.cpu_graph = Sparkline(right_col, width=520, height=70, maxlen=60)
-        self.ram_graph = Sparkline(right_col, width=520, height=70, maxlen=60)
-        self.tmp_graph = Sparkline(right_col, width=520, height=70, maxlen=60)
+        self.tmp_lbl = ttk.Label(graphs_col, text="Temp: Loading...")
+        self.tmp_lbl.pack(anchor="center")
+        self.tmp_graph = Sparkline(graphs_col, width=560, height=70, maxlen=60)
+        self.tmp_graph.widget().pack(anchor="center", pady=(0, 6))
 
-        self.cpu_graph.widget().pack(anchor="w", pady=(0, 6))
-        self.ram_graph.widget().pack(anchor="w", pady=(0, 6))
-        self.tmp_graph.widget().pack(anchor="w", pady=(0, 6))
-
-        # Center block: SSID, URL, QR centered
-        center = ttk.Frame(stats_frame)
-        center.pack(fill="x", pady=(8, 4))
-
+        center = ttk.Frame(stats_frame); center.pack(fill="x", pady=(8, 4))
         self.current_ssid_lbl = ttk.Label(center, text="SSID: Loading...")
+        self.more_settings_lbl = ttk.Label(center, text="For more settings and configuration, please scan the QR code with your phone")
         self.ip_lbl = ttk.Label(center, text="URL: Loading...")
         self.qr_lbl = ttk.Label(center)
-
         self.current_ssid_lbl.pack(anchor="center")
         self.ip_lbl.pack(anchor="center", pady=(2, 6))
         self.qr_lbl.pack(anchor="center")
+        self.more_settings_lbl.pack(anchor="center")
 
-        # Spacer expands, footer at bottom
         ttk.Frame(stats_frame).pack(fill="both", expand=True)
 
-        footer = ttk.Frame(stats_frame)
-        footer.pack(fill="x", pady=(8, 0))
-        ttk.Frame(footer).pack(side="left", fill="x", expand=True)  # spacer
+        footer = ttk.Frame(stats_frame); footer.pack(fill="x", pady=(8, 0))
+        ttk.Frame(footer).pack(side="left", fill="x", expand=True)
 
         def do_stop():
             try:
                 subprocess.run(["sudo", "systemctl", "stop", f"{service_name}.service"], check=True)
             except Exception:
                 pass
-            # Fallback to your existing close handler
             try:
                 self.on_closing()
             except Exception:
@@ -418,19 +395,12 @@ class PhotoFrame(tk.Frame, iFrame):
             try:
                 subprocess.run(["sudo", "systemctl", "restart", f"{service_name}.service"], check=True)
             except Exception as e:
-                # if restart fails, at least reflect error
-                try:
-                    from tkinter import messagebox
-                    messagebox.showerror("Restart failed", str(e))
-                except Exception:
-                    pass
+                messagebox.showerror("Restart failed", str(e))
 
-        restart_btn = ttk.Button(footer, text="Restart Service", command=do_restart)
-        close_btn = ttk.Button(footer, text="Close (Stop Service)", command=do_stop)
-        restart_btn.pack(side="right", padx=(0, 8))
-        close_btn.pack(side="right")
+        ttk.Button(footer, text="Restart Service", command=do_restart).pack(side="right", padx=(0, 8))
+        ttk.Button(footer, text="Close (Stop Service)", command=do_stop).pack(side="right")
 
-        # ---- helpers ----
+        # ---------------- helpers for stats ----------------
         def get_current_ssid():
             try:
                 out = subprocess.check_output(
@@ -444,7 +414,6 @@ class PhotoFrame(tk.Frame, iFrame):
                 return "N/A"
 
         temp_re = re.compile(r"(-?\d+(\.\d+)?)")
-
         def parse_num(s):
             m = temp_re.search(s or "")
             if not m:
@@ -454,7 +423,6 @@ class PhotoFrame(tk.Frame, iFrame):
             except Exception:
                 return None
 
-        # ---- background updater ----
         def update_stats_loop():
             while getattr(self, "settings_form", None) and form.winfo_exists():
                 try:
@@ -471,87 +439,221 @@ class PhotoFrame(tk.Frame, iFrame):
                     img = ImageTk.PhotoImage(qr)
 
                     def apply_updates():
-                        # left labels
                         self.cpu_lbl.config(text=s[0] if len(s) > 0 else "CPU: N/A")
                         self.ram_lbl.config(text=s[1] if len(s) > 1 else "RAM: N/A")
                         self.tmp_lbl.config(text=s[2] if len(s) > 2 else "Temp: N/A")
-                        # centered labels + QR
                         self.current_ssid_lbl.config(text=f"SSID: {ssid}")
                         self.ip_lbl.config(text=f"URL: http://{ip}:{self.backend_port}")
-                        self.qr_lbl.config(image=img)
-                        self.qr_lbl.image = img
-                        # graphs
-                        if cpu_pct is not None:
-                            self.cpu_graph.push(max(0.0, min(100.0, cpu_pct)))
-                        if ram_pct is not None:
-                            self.ram_graph.push(max(0.0, min(100.0, ram_pct)))
-                        if tmp_c is not None:
-                            self.tmp_graph.push(tmp_c)
-
+                        self.qr_lbl.config(image=img); self.qr_lbl.image = img
+                        if cpu_pct is not None: self.cpu_graph.push(max(0.0, min(100.0, cpu_pct)))
+                        if ram_pct is not None: self.ram_graph.push(max(0.0, min(100.0, ram_pct)))
+                        if tmp_c is not None: self.tmp_graph.push(tmp_c)
                     form.after(0, apply_updates)
                 except Exception:
                     pass
                 time.sleep(1)
-
         threading.Thread(target=update_stats_loop, daemon=True).start()
 
-        # ---- Wi-Fi tab (unchanged from your version) ----
+        # ======================================================
+        # Wi-Fi tab - custom on-screen keyboard (true layout)
+        # ======================================================
         ttk.Label(wifi_frame, text="Network:").pack(anchor="w", pady=(10, 0))
         ssid_cb = ttk.Combobox(wifi_frame, state="readonly")
         ssid_cb.pack(fill="x")
 
-        pw_frame = ttk.Frame(wifi_frame)
-        pw_frame.pack(fill="x", pady=(10, 0))
+        pw_frame = ttk.Frame(wifi_frame); pw_frame.pack(fill="x", pady=(10, 0))
         ttk.Label(pw_frame, text="Password:").pack(side="left")
         pwd_ent = ttk.Entry(pw_frame, show="*")
         pwd_ent.pack(side="left", fill="x", expand=True, padx=(5, 0))
         show_pwd_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(
-            pw_frame,
-            text="Show",
+            pw_frame, text="Show",
             variable=show_pwd_var,
             command=lambda: pwd_ent.config(show="" if show_pwd_var.get() else "*")
         ).pack(side="left", padx=(5, 0))
 
+        btns = ttk.Frame(wifi_frame); btns.pack(fill="x", pady=(8, 0))
+        left_btns = ttk.Frame(btns); left_btns.pack(side="left")
+        ttk.Frame(btns).pack(side="right", fill="x", expand=True)
+
+        kb_container = ttk.Frame(wifi_frame); kb_container.pack(fill="x", pady=(8, 0))
+
+        class CustomKeyboard:
+            def __init__(self, parent, target_entry: tk.Entry):
+                self.parent = parent
+                self.entry = target_entry
+                self.caps = False
+                self.shift = False
+                self.symbols = False
+                self.backspace_job = None
+                self.frame = ttk.Frame(parent)
+                self.frame.pack(fill="x")
+                for i in range(15):
+                    self.frame.columnconfigure(i, weight=1)
+                for i in range(6):
+                    self.frame.rowconfigure(i, weight=0)
+                self._build_rows()
+
+            def _letters_rows(self):
+                row0 = ["`","1","2","3","4","5","6","7","8","9","0","-","=","Backspace"]
+                row1 = ["Tab","q","w","e","r","t","y","u","i","o","p","[","]","\\"]
+                row2 = ["Caps","a","s","d","f","g","h","j","k","l",";","'","Enter"]
+                row3 = ["Shift","z","x","c","v","b","n","m",",",".","/","Shift"]
+                row4 = ["123/#","Space","Left","Right"]
+                return [row0,row1,row2,row3,row4]
+
+            def _symbols_rows(self):
+                row0 = ["~","!","@","#","$","%","^","&","*","(",")","_","+","Backspace"]
+                row1 = ["Tab","q","w","e","r","t","y","u","i","o","p","{","}","|"]
+                row2 = ["Caps","a","s","d","f","g","h","j","k","l",":","\"","Enter"]
+                row3 = ["Shift","z","x","c","v","b","n","m","<",">","?","Shift"]
+                row4 = ["ABC","Space","Left","Right"]
+                return [row0,row1,row2,row3,row4]
+
+            def _build_rows(self):
+                for child in self.frame.winfo_children():
+                    child.destroy()
+                rows = self._symbols_rows() if self.symbols else self._letters_rows()
+
+                c = 0
+                for key in rows[0]:
+                    w = self._make_key(key, width=4)
+                    span = 2 if key == "Backspace" else 1
+                    w.grid(row=0, column=c, columnspan=span, sticky="nsew", padx=2, pady=2); c += span
+
+                c = 0
+                for key in rows[1]:
+                    span = 2 if key == "Tab" else 1
+                    w = self._make_key(key, width=4 if key != "Tab" else 6)
+                    w.grid(row=1, column=c, columnspan=span, sticky="nsew", padx=2, pady=2); c += span
+
+                c = 0
+                for key in rows[2]:
+                    span = 2 if key in ("Caps","Enter") else 1
+                    w = self._make_key(key, width=4 if key not in ("Caps","Enter") else 7)
+                    w.grid(row=2, column=c, columnspan=span, sticky="nsew", padx=2, pady=2); c += span
+
+                c = 0
+                for key in rows[3]:
+                    span = 2 if key == "Shift" else 1
+                    w = self._make_key(key, width=4 if key != "Shift" else 7)
+                    w.grid(row=3, column=c, columnspan=span, sticky="nsew", padx=2, pady=2); c += span
+
+                sym_key, space_label, left_label, right_label = rows[4]
+                self._make_key(sym_key, width=6).grid(row=4, column=0, columnspan=2, sticky="nsew", padx=2, pady=2)
+                self._make_key(space_label, width=30).grid(row=4, column=2, columnspan=10, sticky="nsew", padx=2, pady=2)
+                self._make_key(left_label, width=4).grid(row=4, column=12, sticky="nsew", padx=2, pady=2)
+                self._make_key(right_label, width=4).grid(row=4, column=13, sticky="nsew", padx=2, pady=2)
+
+            def _make_key(self, label, width=4):
+                btn = tk.Button(self.frame, text=self._display_label(label), width=width, height=2,
+                                command=lambda l=label: self._on_key_press(l))
+                if label == "Backspace":
+                    btn.bind("<ButtonPress-1>", lambda e: self._start_backspace_repeat())
+                    btn.bind("<ButtonRelease-1>", lambda e: self._stop_backspace_repeat())
+                return btn
+
+            def _display_label(self, label):
+                if label in ("Space","Enter","Tab","Backspace","Left","Right","Caps","Shift","123/#","ABC"):
+                    return label
+                ch = label
+                if not self.symbols:
+                    ch = ch.upper() if (self.shift ^ self.caps) else ch.lower()
+                return ch
+
+            def _insert(self, s):
+                e = self.entry
+                try:
+                    idx = e.index(tk.INSERT)
+                    e.insert(idx, s)
+                except Exception:
+                    e.insert(tk.END, s)
+
+            def _backspace_once(self):
+                e = self.entry
+                try:
+                    idx = e.index(tk.INSERT)
+                    if idx > 0:
+                        e.delete(idx-1)
+                except Exception:
+                    pass
+
+            def _start_backspace_repeat(self):
+                self._backspace_once()
+                self._schedule_backspace(250)
+
+            def _schedule_backspace(self, delay):
+                self._cancel_backspace_timer()
+                self.backspace_job = self.frame.after(delay, self._backspace_repeat)
+
+            def _backspace_repeat(self):
+                self._backspace_once()
+                self._schedule_backspace(50)
+
+            def _stop_backspace_repeat(self):
+                self._cancel_backspace_timer()
+
+            def _cancel_backspace_timer(self):
+                if self.backspace_job:
+                    try:
+                        self.frame.after_cancel(self.backspace_job)
+                    except Exception:
+                        pass
+                    self.backspace_job = None
+
+            def _move_cursor(self, delta):
+                e = self.entry
+                try:
+                    idx = e.index(tk.INSERT)
+                    new_idx = max(0, idx + delta)
+                    e.icursor(new_idx)
+                except Exception:
+                    pass
+
+            def _on_key_press(self, label):
+                if label in ("123/#","ABC"):
+                    self.symbols = not self.symbols; self.shift = False; self._build_rows(); return
+                if label == "Caps":
+                    self.caps = not self.caps; self._build_rows(); return
+                if label == "Shift":
+                    self.shift = not self.shift; self._build_rows(); return
+                if label == "Space":
+                    self._insert(" "); self._after_char(); return
+                if label == "Tab":
+                    self._insert("\t"); self._after_char(); return
+                if label == "Enter":
+                    return
+                if label == "Backspace":
+                    self._backspace_once(); return
+                if label == "Left":
+                    self._move_cursor(-1); return
+                if label == "Right":
+                    self._move_cursor(+1); return
+                ch = self._display_label(label)
+                self._insert(ch); self._after_char()
+
+            def _after_char(self):
+                if self.shift:
+                    self.shift = False
+                    self._build_rows()
+
+        keyboard = CustomKeyboard(kb_container, pwd_ent)
+
+        # Wi-Fi scan/connect
         def scan():
             def _worker():
                 try:
                     out = subprocess.check_output(
                         "sudo iwlist wlan0 scanning | grep ESSID",
-                        shell=True,
-                        universal_newlines=True
+                        shell=True, universal_newlines=True
                     )
-                    ssids = [
-                        line.split('ESSID:')[1].strip().strip('"')
-                        for line in out.splitlines()
-                    ]
+                    ssids = [line.split('ESSID:')[1].strip().strip('\"') for line in out.splitlines()]
                     ssids = sorted(set(filter(None, ssids)))
                 except Exception:
                     ssids = []
                 form.after(0, lambda: ssid_cb.configure(values=ssids))
             threading.Thread(target=_worker, daemon=True).start()
-
         scan()
-
-        layout = {"mode": "qwerty", "caps": False}
-        btn_frame = ttk.Frame(wifi_frame)
-        btn_frame.pack(anchor="w", pady=5)
-
-        def switch_layout():
-            if layout["mode"] == "qwerty":
-                layout["mode"] = "symnum"
-                qwerty_frame.pack_forget()
-                symnum_frame.pack(anchor="center")
-            else:
-                layout["mode"] = "qwerty"
-                symnum_frame.pack_forget()
-                qwerty_frame.pack(anchor="center")
-
-        def toggle_caps():
-            layout["caps"] = not layout["caps"]
-            for b in qwerty_buttons:
-                ch = b.cget("text").lower()
-                b.config(text=ch.upper() if layout["caps"] else ch)
 
         def connect():
             ssid = ssid_cb.get().strip()
@@ -565,11 +667,7 @@ class PhotoFrame(tk.Frame, iFrame):
                         check=True
                     )
                 except subprocess.CalledProcessError as e:
-                    try:
-                        from tkinter import messagebox
-                        form.after(0, lambda: messagebox.showerror("Connection Failed", str(e)))
-                    except Exception:
-                        pass
+                    form.after(0, lambda: messagebox.showerror("Connection Failed", str(e)))
                     return
                 new_ip = get_local_ip()
                 form.after(0, lambda: (
@@ -578,51 +676,242 @@ class PhotoFrame(tk.Frame, iFrame):
                 ))
             threading.Thread(target=_worker, daemon=True).start()
 
-        ttk.Button(btn_frame, text="123/#", command=switch_layout).pack(side="left", padx=(0, 5))
-        ttk.Button(btn_frame, text="Caps", command=toggle_caps).pack(side="left", padx=(0, 5))
-        ttk.Button(btn_frame, text="Connect", command=connect).pack(side="left")
+        ttk.Button(left_btns, text="Rescan", command=scan).pack(side="left")
+        ttk.Button(left_btns, text="Connect", command=connect).pack(side="left", padx=(8, 0))
 
-        kb_container = ttk.Frame(wifi_frame)
-        kb_container.pack(fill="x", anchor="center", pady=10)
-        qwerty_frame = ttk.Frame(kb_container)
-        qwerty_buttons = []
-        rows = ["q w e r t y u i o p", "a s d f g h j k l", "z x c v b n m"]
-        for r, row in enumerate(rows):
-            for c, ch in enumerate(row.split()):
-                btn = tk.Button(
-                    qwerty_frame,
-                    text=ch,
-                    width=4,
-                    height=2,
-                    command=lambda ch=ch: pwd_ent.insert(tk.END, ch.upper() if layout["caps"] else ch)
-                )
-                btn.grid(row=r, column=c, padx=2, pady=2)
-                qwerty_buttons.append(btn)
-        tk.Button(qwerty_frame, text="Space", width=40, height=2, command=lambda: pwd_ent.insert(tk.END, " ")).grid(row=3, column=2, columnspan=7, padx=2, pady=2)
-        tk.Button(qwerty_frame, text="<-", width=4, height=2, command=lambda: pwd_ent.delete(len(pwd_ent.get())-1, tk.END)).grid(row=3, column=9, padx=2, pady=2)
-        qwerty_frame.pack(anchor="center")
+        # ======================================================
+        # Screen tab (no dropdowns) + JSON persistence
+        # ======================================================
+        CONFIG_PATH = os.path.expanduser("~/.config/photoframe/screen.json")
+        os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
 
-        symnum_frame = ttk.Frame(kb_container)
-        symbols = "~ ! @ # $ % ^ & * ( ) _ + - = [ ] { } | ; : ' \" , . / < > ?".split()
-        for i, sym in enumerate(symbols[:20]):
-            r, c = divmod(i, 10)
-            tk.Button(symnum_frame, text=sym, width=4, height=2, command=lambda s=sym: pwd_ent.insert(tk.END, s)).grid(row=r, column=c, padx=2, pady=2)
-        nums = list("1234567890")
-        for i, num in enumerate(nums):
-            r, c = divmod(i, 5)
-            tk.Button(symnum_frame, text=num, width=4, height=2, command=lambda n=num: pwd_ent.insert(tk.END, n)).grid(row=r+2, column=c, padx=2, pady=2)
-        tk.Button(symnum_frame, text="<-", width=4, height=2, command=lambda: pwd_ent.delete(len(pwd_ent.get())-1, tk.END)).grid(row=4, column=4, padx=2, pady=2)
-        symnum_frame.pack_forget()
+        # UI
+        scr_top = ttk.Frame(screen_frame); scr_top.pack(fill="x", pady=(10, 6))
+        ttk.Label(scr_top, text="Orientation:").grid(row=0, column=0, sticky="w", padx=(0, 12))
+        orient_var = tk.StringVar(value="normal")
+        orow = ttk.Frame(scr_top); orow.grid(row=0, column=1, sticky="w")
+        for k, v in [("Normal", "normal"), ("Left (90)", "90"), ("Inverted (180)", "180"), ("Right (270)", "270")]:
+            ttk.Radiobutton(orow, text=k, value=v, variable=orient_var).pack(side="left", padx=(0, 8))
+        apply_orient_btn = ttk.Button(scr_top, text="Apply Orientation"); apply_orient_btn.grid(row=0, column=2, padx=(12, 0))
 
-        about_text = (
-            "was created by alws34.\n"
-            "this is a digital photo frame application\n"
-            "that can display images on almost any platform using mjpeg streaming."
+        br_frame = ttk.LabelFrame(screen_frame, text="Brightness"); br_frame.pack(fill="x", pady=(8, 0))
+        br_frame.columnconfigure(1, weight=1)  # let the scale expand
+        ttk.Label(br_frame, text="Level:").grid(row=0, column=0, sticky="w", padx=(8, 8), pady=(8, 8))
+        br_val_lbl = ttk.Label(br_frame, text="100%"); br_val_lbl.grid(row=0, column=2, sticky="w", padx=(8, 0))
+
+        # Wider scale + snaps to 10% steps while dragging
+        _snap_lock = {"updating": False}
+        def _snap10_and_update(v):
+            if _snap_lock["updating"]:
+                return
+            try:
+                raw = float(v)
+            except Exception:
+                raw = 100.0
+            snapped = max(10, min(100, int(round(raw / 10.0) * 10)))
+            br_val_lbl.config(text=f"{snapped}%")
+            if snapped != int(raw):
+                _snap_lock["updating"] = True
+                br_scale.set(snapped)  # will re-enter, guard with lock
+                _snap_lock["updating"] = False
+
+        br_scale = ttk.Scale(
+            br_frame,
+            from_=10,
+            to=100,
+            orient="horizontal",
+            length=620,                 # wider
+            command=_snap10_and_update  # snapping behavior
         )
-        ttk.Label(about_frame, text=about_text, wraplength=660, justify="left").pack(padx=10, pady=10)
+        br_scale.set(100)
+        br_scale.grid(row=0, column=1, sticky="we", pady=(8, 8))
+
+        apply_br_btn = ttk.Button(br_frame, text="Apply Brightness"); apply_br_btn.grid(row=0, column=3, padx=(8, 8))
+
+        # Detect output/backlight automatically (no dropdowns)
+        def list_outputs():
+            try:
+                out = subprocess.check_output(["wlr-randr"], universal_newlines=True, stderr=subprocess.DEVNULL)
+            except Exception:
+                return []
+            names = []
+            for line in out.splitlines():
+                line = line.strip()
+                if not line or line.startswith(" "):
+                    continue
+                name = line.split()[0]
+                if name not in names:
+                    names.append(name)
+            return names
+
+        def pick_default_output():
+            outs = list_outputs()
+            outs.sort(key=lambda n: (0 if n.upper().startswith("DSI") else 1, n))
+            return outs[0] if outs else None
+
+        def list_backlights():
+            base = "/sys/class/backlight"
+            if not os.path.isdir(base):
+                return []
+            devs = [d for d in os.listdir(base) if os.path.isdir(os.path.join(base, d))]
+            devs.sort(key=lambda n: (0 if n.startswith("rpi") or "rpi_backlight" in n or "raspberry" in n else 1, n))
+            return devs
+
+        def pick_default_backlight():
+            bls = list_backlights()
+            return bls[0] if bls else None
+
+        def read_brightness(dev):
+            base = os.path.join("/sys/class/backlight", dev)
+            try:
+                with open(os.path.join(base, "max_brightness"), "r") as f:
+                    maxb = int(f.read().strip())
+                with open(os.path.join(base, "brightness"), "r") as f:
+                    cur = int(f.read().strip())
+                return cur, maxb
+            except Exception:
+                return None, None
+
+        def set_brightness_percent(dev, percent):
+            percent = max(10, min(100, int(percent)))
+            base = os.path.join("/sys/class/backlight", dev)
+            try:
+                with open(os.path.join(base, "max_brightness"), "r") as f:
+                    maxb = int(f.read().strip())
+                value = int(round(percent * maxb / 100.0))
+                value = max(1, min(maxb, value))
+                try:
+                    with open(os.path.join(base, "brightness"), "w") as f:
+                        f.write(str(value))
+                except PermissionError:
+                    cmd = f"echo {value} | sudo tee {os.path.join(base, 'brightness')}"
+                    subprocess.run(cmd, shell=True, check=True)
+                return True
+            except subprocess.CalledProcessError as e:
+                messagebox.showerror("Permission required", f"Failed to write brightness. Run with permissions or add a udev rule.\n\n{e}")
+                return False
+            except Exception as e:
+                messagebox.showerror("Failed to set brightness", str(e))
+                return False
+
+        def apply_orientation(transform):
+            output = pick_default_output()
+            if not output:
+                messagebox.showerror("No display", "Could not detect a Wayland output via wlr-randr.")
+                return False
+            try:
+                subprocess.run(["wlr-randr", "--output", output, "--transform", transform], check=True)
+                return True
+            except subprocess.CalledProcessError as e:
+                messagebox.showerror("Failed to set orientation", str(e))
+                return False
+
+        # JSON persistence ------------------------------------------------
+        def load_screen_config():
+            try:
+                with open(CONFIG_PATH, "r") as f:
+                    return json.load(f)
+            except Exception:
+                return {}
+
+        def save_screen_config(orientation, brightness):
+            cfg = {"orientation": orientation, "brightness": int(brightness)}
+            try:
+                with open(CONFIG_PATH, "w") as f:
+                    json.dump(cfg, f, indent=2)
+            except Exception as e:
+                messagebox.showerror("Failed to save settings", str(e))
+
+        # Wire up actions
+        def on_apply_orientation():
+            transform = orient_var.get()
+            if apply_orientation(transform):
+                save_screen_config(transform, int(float(br_scale.get())))
+
+        def on_apply_brightness():
+            dev = pick_default_backlight()
+            if not dev:
+                messagebox.showerror("No backlight", "No /sys/class/backlight device found.")
+                return
+            pct = int(float(br_scale.get()))
+            if set_brightness_percent(dev, pct):
+                save_screen_config(orient_var.get(), pct)
+
+        apply_orient_btn.config(command=on_apply_orientation)
+        apply_br_btn.config(command=on_apply_brightness)
+
+        # Apply previously saved settings (if any) when opening the dialog
+        def apply_saved_on_open():
+            cfg = load_screen_config()
+            orient = cfg.get("orientation")
+            if orient in ("normal", "90", "180", "270"):
+                orient_var.set(orient)
+                apply_orientation(orient)
+            pct = cfg.get("brightness")
+            if isinstance(pct, int):
+                pct = max(10, min(100, pct))
+                br_scale.set(pct)
+                br_val_lbl.config(text=f"{pct}%")
+                dev = pick_default_backlight()
+                if dev:
+                    set_brightness_percent(dev, pct)
+            else:
+                dev = pick_default_backlight()
+                if dev:
+                    cur, maxb = read_brightness(dev)
+                    if cur is not None and maxb and maxb > 0:
+                        pct = max(10, min(100, int(round(cur * 100.0 / maxb))))
+                        br_scale.set(pct)
+                        br_val_lbl.config(text=f"{pct}%")
+
+        apply_saved_on_open()
+
+        # ---------------- About tab ----------------
+        about_cfg = settings.get("about", {}) if isinstance(settings, dict) else {}
+        about_text = about_cfg.get("text", "Digital Photo Frame")
+        about_image_path = about_cfg.get("image_path", "")
+
+        # Outer container fills the tab
+        about_outer = ttk.Frame(about_frame)
+        about_outer.pack(fill="both", expand=True)
+
+        # 3-column centering grid: content goes in the middle column
+        about_outer.columnconfigure(0, weight=1)
+        about_outer.columnconfigure(1, weight=0)
+        about_outer.columnconfigure(2, weight=1)
+        about_outer.rowconfigure(0, weight=1)
+        about_outer.rowconfigure(1, weight=0)
+        about_outer.rowconfigure(2, weight=1)
+
+        content = ttk.Frame(about_outer)
+        content.grid(row=1, column=1, sticky="n")
+
+        # Centered text with dynamic wraplength
+        about_lbl = ttk.Label(content, text=about_text, justify="center")
+        about_lbl.pack(anchor="center", padx=10, pady=(20, 10))
+
+        def _update_wraplength(evt=None):
+            w = max(300, int(content.winfo_width() * 0.9))
+            about_lbl.configure(wraplength=w)
+
+        content.bind("<Configure>", _update_wraplength)
+
+        # Optional image under the text (only if file exists)
+        self._about_img_ref = None  # keep reference
+        if isinstance(about_image_path, str) and about_image_path:
+            try:
+                if os.path.isfile(about_image_path):
+                    im = Image.open(about_image_path)
+                    im.thumbnail((700, 350), Image.Resampling.LANCZOS)
+                    self._about_img_ref = ImageTk.PhotoImage(im)
+                    ttk.Label(content, image=self._about_img_ref).pack(anchor="center", pady=(0, 20))
+                # else: no widget shown
+            except Exception:
+                pass
 
         form.deiconify()
         form.grab_set()
+
 
     
 #endregion SettingsForm

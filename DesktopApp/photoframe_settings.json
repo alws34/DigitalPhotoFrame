@@ -26,5 +26,10 @@
     "delay_between_images": 10,
     "animation_fps": 30,       
     "allow_translucent_background": true,
-    "image_dir": "Images"
+    "image_dir": "Images",
+
+    "about": {
+        "text": "Digital Photo Frame by alws34. This app streams images over HTTP (MJPEG), overlays time/date/weather, and runs on Raspberry Pi or desktop. Use the Settings dialog to connect Wi-Fi, tweak screen options, and manage the service.",
+        "image_path": ""
+  }
 }
