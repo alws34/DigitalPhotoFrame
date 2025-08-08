@@ -368,7 +368,7 @@ class PhotoFrame(tk.Frame, iFrame):
 
         center = ttk.Frame(stats_frame); center.pack(fill="x", pady=(8, 4))
         self.current_ssid_lbl = ttk.Label(center, text="SSID: Loading...")
-        self.more_settings_lbl = ttk.Label(center, text="For more settings and configuration, please scan the QR code with your phone")
+        self.more_settings_lbl = ttk.Label(center, text="For more settings, configuration and image upload, please scan the QR code with your phone")
         self.ip_lbl = ttk.Label(center, text="URL: Loading...")
         self.qr_lbl = ttk.Label(center)
         self.current_ssid_lbl.pack(anchor="center")
