@@ -7,3 +7,4 @@ Images/*
 *__pycache__/*
 *.pyc
 WebServer/Images/*
+DesktopApp/Images/*

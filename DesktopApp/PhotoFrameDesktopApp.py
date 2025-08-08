@@ -538,16 +538,33 @@ class PhotoFrame(tk.Frame, iFrame):
                     img = ImageTk.PhotoImage(qr)
 
                     def apply_updates():
-                        self.cpu_lbl.config(text=s[0] if len(s) > 0 else "CPU: N/A")
-                        self.ram_lbl.config(text=s[1] if len(s) > 1 else "RAM: N/A")
-                        self.tmp_lbl.config(text=s[2] if len(s) > 2 else "Temp: N/A")
-                        self.current_ssid_lbl.config(text=f"Wifi network: {ssid}")
-                        self.ip_lbl.config(text=f"URL: http://{ip}:{self.backend_port}")
-                        self.qr_lbl.config(image=img); self.qr_lbl.image = img
-                        if cpu_pct is not None: self.cpu_graph.push(max(0.0, min(100.0, cpu_pct)))
-                        if ram_pct is not None: self.ram_graph.push(max(0.0, min(100.0, ram_pct)))
-                        if tmp_c is not None: self.tmp_graph.push(tmp_c)
-                    form.after(0, apply_updates)
+                        # bail if form or any widgets are gone
+                        if not (self.settings_form and form.winfo_exists()):
+                            return
+                        widgets = [self.cpu_lbl, self.ram_lbl, self.tmp_lbl,
+                                self.current_ssid_lbl, self.ip_lbl, self.qr_lbl]
+                        try:
+                            if not all(w.winfo_exists() for w in widgets):
+                                return
+                        except tk.TclError:
+                            return
+
+                        try:
+                            self.cpu_lbl.config(text=s[0] if len(s) > 0 else "CPU: N/A")
+                            self.ram_lbl.config(text=s[1] if len(s) > 1 else "RAM: N/A")
+                            self.tmp_lbl.config(text=s[2] if len(s) > 2 else "Temp: N/A")
+                            self.current_ssid_lbl.config(text=f"Wifi network: {ssid}")
+                            self.ip_lbl.config(text=f"URL: http://{ip}:{self.backend_port}")
+                            self.qr_lbl.config(image=img); self.qr_lbl.image = img
+                            if cpu_pct is not None: self.cpu_graph.push(max(0.0, min(100.0, cpu_pct)))
+                            if ram_pct is not None: self.ram_graph.push(max(0.0, min(100.0, ram_pct)))
+                            if tmp_c is not None: self.tmp_graph.push(tmp_c)
+                        except tk.TclError:
+                            # widgets died between exists-check and config; just stop
+                            return
+
+                    if self.settings_form and form.winfo_exists():
+                        form.after(0, apply_updates)
                 except Exception:
                     pass
                 time.sleep(1)
@@ -1395,19 +1412,18 @@ class PhotoFrame(tk.Frame, iFrame):
             time.sleep(1/30)
 
     def update_display(self):
-        """
-        Periodically updates the tkinter label with the latest frame.
-        Pulls directly from the server.iFrame interface.
-        """
         frame = self.PhotoFrameServer.get_live_frame()
         if frame is not None:
-            overlay_frame = self.add_overlay_text(self.current_frame.copy())
+            # use the frame we just got, and keep a copy in current_frame if you want
+            self.current_frame = frame
+            overlay_frame = self.add_overlay_text(frame.copy())
             cv_img_rgb = cv2.cvtColor(overlay_frame, cv2.COLOR_BGR2RGB)
             pil_image = Image.fromarray(cv_img_rgb)
             image_tk = ImageTk.PhotoImage(pil_image)
             self.label.config(image=image_tk)
-            self.label.image = image_tk 
+            self.label.image = image_tk
         self.after(33, self.update_display)
+
 
     def stop(self):
         """Stops the background frame fetching thread."""
