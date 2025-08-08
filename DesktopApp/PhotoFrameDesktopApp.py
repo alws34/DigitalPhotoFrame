@@ -342,6 +342,47 @@ class PhotoFrame(tk.Frame, iFrame):
                 self.data.append(v)
                 self.draw()
 
+        class ScrollFrame(ttk.Frame):
+            def __init__(self, parent, *args, **kwargs):
+                super().__init__(parent, *args, **kwargs)
+                self.canvas = tk.Canvas(self, highlightthickness=0)
+                self.vbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+                self.canvas.configure(yscrollcommand=self.vbar.set)
+
+                self.body = ttk.Frame(self.canvas)
+                self.body_id = self.canvas.create_window((0, 0), window=self.body, anchor="nw")
+
+                self.canvas.pack(side="left", fill="both", expand=True)
+                self.vbar.pack(side="right", fill="y")
+
+                # Resize scrollregion when content changes
+                self.body.bind("<Configure>", self._on_body_configure)
+                # Keep body width = visible width
+                self.canvas.bind("<Configure>", self._on_canvas_configure)
+
+                # Mouse wheel (Windows/macOS)
+                self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+                # Mouse wheel (X11)
+                self.canvas.bind_all("<Button-4>", self._on_mousewheel_linux)
+                self.canvas.bind_all("<Button-5>", self._on_mousewheel_linux)
+
+            def _on_body_configure(self, _):
+                self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+            def _on_canvas_configure(self, event):
+                self.canvas.itemconfigure(self.body_id, width=event.width)
+
+            def _on_mousewheel(self, event):
+                # event.delta positive = up on Windows/macOS
+                step = -1 if event.delta > 0 else 1
+                self.canvas.yview_scroll(step, "units")
+
+            def _on_mousewheel_linux(self, event):
+                # Button-4 = up, Button-5 = down
+                step = -1 if event.num == 4 else 1
+                self.canvas.yview_scroll(step, "units")
+
+
         # ---------------- window ----------------
         form = tk.Toplevel(self.parent)
         self.settings_form = form
@@ -351,9 +392,16 @@ class PhotoFrame(tk.Frame, iFrame):
         form.resizable(False, False)
         width, height = 800, 620
         sw, sh = self.parent.winfo_screenwidth(), self.parent.winfo_screenheight()
+        margin_w = int(sw * 0.1)  # 10% width margin
+        margin_h = int(sh * 0.1)  # 10% height margin
+        width = max(600, sw - margin_w)
+        height = max(400, sh - margin_h)
         x = (sw - width) // 2
         y = (sh - height) // 2
         form.geometry(f"{width}x{height}+{x}+{y}")
+        # form.update_idletasks()
+        # form.minsize(form.winfo_width(), form.winfo_height())
+
         form.lift()
         form.attributes("-topmost", True)
 
@@ -369,8 +417,12 @@ class PhotoFrame(tk.Frame, iFrame):
         notebook.pack(fill="both", expand=True, padx=10, pady=10)
 
         # ---------------- Stats tab ----------------
-        top = ttk.Frame(stats_frame)
-        top.pack(fill="x", padx=4, pady=(4, 0))
+        stats_sf = ScrollFrame(stats_frame)
+        stats_sf.pack(fill="both", expand=True, padx=4, pady=(4, 0))
+
+        # Use stats_sf.body as the parent for all previous Stats widgets
+        top = ttk.Frame(stats_sf.body)
+        top.pack(fill="x")
 
         graphs_col = ttk.Frame(top)
         graphs_col.pack(anchor="center")
@@ -390,8 +442,9 @@ class PhotoFrame(tk.Frame, iFrame):
         self.tmp_graph = Sparkline(graphs_col, width=560, height=70, maxlen=60)
         self.tmp_graph.widget().pack(anchor="center", pady=(0, 6))
 
-        center = ttk.Frame(stats_frame); center.pack(fill="x", pady=(8, 4))
-        self.current_ssid_lbl = ttk.Label(center, text="SSID: Loading...")
+        center = ttk.Frame(stats_sf.body)
+        center.pack(fill="x", pady=(8, 4))
+        self.current_ssid_lbl = ttk.Label(center, text="Wifi network: Loading...")
         self.more_settings_lbl = ttk.Label(center, text="For more settings, configuration and image upload, please scan the QR code with your phone")
         self.ip_lbl = ttk.Label(center, text="URL: Loading...")
         self.qr_lbl = ttk.Label(center)
@@ -400,9 +453,11 @@ class PhotoFrame(tk.Frame, iFrame):
         self.qr_lbl.pack(anchor="center")
         self.more_settings_lbl.pack(anchor="center")
 
-        ttk.Frame(stats_frame).pack(fill="both", expand=True)
+        # Spacer and footer stay inside the scrollable body
+        ttk.Frame(stats_sf.body).pack(fill="both", expand=True)
 
-        footer = ttk.Frame(stats_frame); footer.pack(fill="x", pady=(8, 0))
+        footer = ttk.Frame(stats_sf.body)
+        footer.pack(fill="x", pady=(8, 0))
         ttk.Frame(footer).pack(side="left", fill="x", expand=True)
 
         def do_stop():
@@ -423,6 +478,8 @@ class PhotoFrame(tk.Frame, iFrame):
 
         ttk.Button(footer, text="Restart Service", command=do_restart).pack(side="right", padx=(0, 8))
         ttk.Button(footer, text="Close (Stop Service)", command=do_stop).pack(side="right")
+
+        
 
         # ---------------- helpers for stats ----------------
         def get_current_ssid():
@@ -484,7 +541,7 @@ class PhotoFrame(tk.Frame, iFrame):
                         self.cpu_lbl.config(text=s[0] if len(s) > 0 else "CPU: N/A")
                         self.ram_lbl.config(text=s[1] if len(s) > 1 else "RAM: N/A")
                         self.tmp_lbl.config(text=s[2] if len(s) > 2 else "Temp: N/A")
-                        self.current_ssid_lbl.config(text=f"SSID: {ssid}")
+                        self.current_ssid_lbl.config(text=f"Wifi network: {ssid}")
                         self.ip_lbl.config(text=f"URL: http://{ip}:{self.backend_port}")
                         self.qr_lbl.config(image=img); self.qr_lbl.image = img
                         if cpu_pct is not None: self.cpu_graph.push(max(0.0, min(100.0, cpu_pct)))
@@ -499,7 +556,7 @@ class PhotoFrame(tk.Frame, iFrame):
         # ======================================================
         # Wi-Fi tab (unchanged except custom keyboard)
         # ======================================================
-        ttk.Label(wifi_frame, text="Network:").pack(anchor="w", pady=(10, 0))
+        ttk.Label(wifi_frame, text=f"Network: (current: {get_current_ssid()})").pack(anchor="w", pady=(10, 0))
         ssid_cb = ttk.Combobox(wifi_frame, state="readonly")
         ssid_cb.pack(fill="x")
 
@@ -682,44 +739,197 @@ class PhotoFrame(tk.Frame, iFrame):
         keyboard = CustomKeyboard(kb_container, pwd_ent)
 
         def scan():
+            """
+            Populate the SSID combobox using nmcli (no sudo).
+            Dedup by SSID, keep the best signal, log details to AppLog.log.
+            """
             def _worker():
+                nm = shutil.which("nmcli") or "/usr/bin/nmcli"
+                ssids = []
                 try:
+                    # Force a rescan (ignore errors if unsupported)
+                    try:
+                        subprocess.run([nm, "device", "wifi", "rescan"], check=False,
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+                        time.sleep(0.8)
+                    except Exception:
+                        pass
+
+                    # Get list: IN-USE, SSID, SECURITY, SIGNAL
                     out = subprocess.check_output(
-                        "sudo iwlist wlan0 scanning | grep ESSID",
-                        shell=True, universal_newlines=True
+                        [nm, "-t", "-f", "IN-USE,SSID,SECURITY,SIGNAL", "device", "wifi", "list"],
+                        universal_newlines=True, stderr=subprocess.DEVNULL, timeout=8
                     )
-                    ssids = [line.split('ESSID:')[1].strip().strip('\"') for line in out.splitlines()]
-                    ssids = sorted(set(filter(None, ssids)))
-                except Exception:
-                    ssids = []
-                form.after(0, lambda: ssid_cb.configure(values=ssids))
+
+                    rows = []
+                    for line in out.splitlines():
+                        if not line:
+                            continue
+                        # nmcli uses ":" as field sep, SECURITY itself may contain multiple tokens but no colons
+                        parts = (line.split(":") + ["", "", "", ""])[:4]
+                        inuse, ssid, sec, sigs = parts
+                        if not ssid:
+                            continue  # skip hidden/blank
+                        try:
+                            sig = int(sigs)
+                        except Exception:
+                            sig = -1
+                        rows.append((ssid, sec, sig, inuse))
+
+                    # pick best signal per SSID
+                    by_ssid = {}
+                    for ssid, sec, sig, inuse in rows:
+                        cur = by_ssid.get(ssid)
+                        if cur is None or sig > cur[1]:
+                            by_ssid[ssid] = (sec, sig, inuse)
+
+                    ordered = sorted(by_ssid.items(), key=lambda kv: -kv[1][1])
+                    ssids = [ssid for ssid, (_sec, _sig, _inuse) in ordered]
+
+                    logging.info(f"Wi-Fi scan: found {len(ssids)} SSIDs: {ssids}")
+
+                except subprocess.CalledProcessError as e:
+                    logging.error(f"nmcli scan failed: {e}")
+                except Exception as e:
+                    logging.exception(f"scan() unexpected error: {e}")
+
+                def ui():
+                    # Always update the combobox values
+                    try:
+                        ssid_cb["values"] = ssids
+                    except Exception as e:
+                        logging.error(f"Failed to set combobox values: {e}")
+                    # Preselect the first found network (optional)
+                    if ssids and not ssid_cb.get():
+                        try:
+                            ssid_cb.current(0)
+                        except Exception:
+                            pass
+                    if not ssids:
+                        # Surface a gentle hint so you can see it quickly
+                        self.current_ssid_lbl.config(text="SSID: N/A (no networks found)")
+                form.after(0, ui)
+
             threading.Thread(target=_worker, daemon=True).start()
+        
         scan()
 
         def connect():
             ssid = ssid_cb.get().strip()
             if not ssid:
+                messagebox.showerror("Connection failed", "Please select a network.")
                 return
             pwd = pwd_ent.get()
+
             def _worker():
+                nm = shutil.which("nmcli") or "nmcli"
+
+                # Find Wi-Fi interface (wlan0/wlan1/…)
                 try:
-                    subprocess.run(
-                        ["sudo", "nmcli", "device", "wifi", "connect", ssid, "password", pwd],
-                        check=True
+                    out = subprocess.check_output(
+                        [nm, "-t", "-f", "DEVICE,TYPE,STATE", "device"],
+                        universal_newlines=True, stderr=subprocess.DEVNULL, timeout=5
                     )
-                except subprocess.CalledProcessError as e:
-                    form.after(0, lambda: messagebox.showerror("Connection Failed", str(e)))
+                    iface = None
+                    cands = []
+                    for line in out.splitlines():
+                        if not line:
+                            continue
+                        dev, typ, state = (line.split(":") + ["", "", ""])[:3]
+                        if typ == "wifi":
+                            prio = 0 if state == "connected" else (1 if state == "disconnected" else 2)
+                            cands.append((prio, dev))
+                    cands.sort()
+                    iface = cands[0][1] if cands else None
+                except Exception as e:
+                    iface = None
+
+                if not iface:
+                    form.after(0, lambda: messagebox.showerror("Connection failed", "No Wi-Fi interface found."))
                     return
+
+                # Ensure radio is on (best effort)
+                try:
+                    subprocess.run([nm, "radio", "wifi", "on"], check=False,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+                except Exception:
+                    pass
+
+                # Check if SSID appears in scan and whether it is open or secured
+                try:
+                    scan_out = subprocess.check_output(
+                        [nm, "-t", "-f", "SSID,SECURITY", "device", "wifi", "list", "ifname", iface],
+                        universal_newlines=True, stderr=subprocess.DEVNULL, timeout=10
+                    )
+                    sec_map = {}
+                    for line in scan_out.splitlines():
+                        if not line:
+                            continue
+                        p = (line.split(":") + ["", ""])[:2]
+                        nm_ssid, nm_sec = p
+                        if nm_ssid:
+                            sec_map[nm_ssid] = nm_sec
+                    nm_sec = sec_map.get(ssid, "")
+                    is_open = (nm_sec == "" or nm_sec == "--")
+                    hidden_flag = [] if ssid in sec_map else ["hidden", "yes"]
+                except Exception:
+                    # If we cannot determine, assume secured; if SSID not in list, assume hidden
+                    is_open = False
+                    hidden_flag = ["hidden", "yes"]
+
+                # Build nmcli command
+                cmd = [nm, "-w", "30", "device", "wifi", "connect", ssid, "ifname", iface] + hidden_flag
+                if not is_open:
+                    if not pwd:
+                        form.after(0, lambda: messagebox.showerror("Connection failed", "Password is required for this network."))
+                        return
+                    cmd += ["password", pwd]
+
+                # Try connect; if fails due to stale profile, delete and retry once
+                def run_connect():
+                    try:
+                        res = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                            text=True, timeout=60)
+                        return True, (res.stdout.strip() or res.stderr.strip())
+                    except subprocess.CalledProcessError as e:
+                        return False, (e.stdout or "") + "\n" + (e.stderr or "")
+
+                ok, msg = run_connect()
+                if not ok:
+                    # Delete saved connection profile with same name (SSID) if present and retry once
+                    try:
+                        saved = subprocess.check_output(
+                            [nm, "-t", "-f", "NAME,TYPE", "connection"],
+                            universal_newlines=True, stderr=subprocess.DEVNULL, timeout=5
+                        )
+                        for line in saved.splitlines():
+                            if not line:
+                                continue
+                            name, typ = (line.split(":") + ["", ""])[:2]
+                            if typ == "wifi" and name == ssid:
+                                subprocess.run([nm, "connection", "delete", name], check=False,
+                                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+                                break
+                    except Exception:
+                        pass
+                    ok, msg = run_connect()
+
+                if not ok:
+                    form.after(0, lambda: messagebox.showerror("Connection failed", msg.strip() or "Unknown error"))
+                    return
+
                 new_ip = get_local_ip()
                 form.after(0, lambda: (
                     self.current_ssid_lbl.config(text=f"SSID: {ssid}"),
                     self.ip_lbl.config(text=f"URL: http://{new_ip}:{self.backend_port}")
                 ))
+
             threading.Thread(target=_worker, daemon=True).start()
+
 
         ttk.Button(left_btns, text="Rescan", command=scan).pack(side="left")
         ttk.Button(left_btns, text="Connect", command=connect).pack(side="left", padx=(8, 0))
-
+        
         # ======================================================
         # Screen tab (orientation + brightness + schedule) with JSON persistence to main settings
         # ======================================================
