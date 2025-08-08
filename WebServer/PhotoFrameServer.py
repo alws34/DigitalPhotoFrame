@@ -47,18 +47,18 @@ class AnimationStatus(Enum):
     ANIMATION_ERROR = 2
 
 
-class PhotoFrame(iFrame):
-    def __init__(self, width=1920, height=1080):
+class PhotoFrameServer(iFrame):
+    def __init__(self, width=1920, height=1080, iframe: iFrame = None, images_dir = None):
         self.set_logger(logging)
         self.settings = SettingsHandler(SETTINGS_PATH, logging)
-        if not self.set_images_dir():
+        if not self.set_images_dir(images_dir=images_dir):
             logging.error("Failed to set images directory. Exiting.")
             raise FileNotFoundError("Images directory not found and could not be created.")
 
         self.EffectHandler = EffectHandler()
         self.image_handler = Image_Utils(settings=self.settings)
         self.effects = self.EffectHandler.get_effects()
-
+        self._gui_frame = iframe
         self.update_images_list()
         self.current_image_idx = -1
         self.current_effect_idx = -1
@@ -70,7 +70,7 @@ class PhotoFrame(iFrame):
         self.is_running = True
 
         # start filesystem observer
-        self.Observer = ImagesObserver(frame=self)
+        self.Observer = ImagesObserver(frame=self, images_dir= self.IMAGE_DIR)
         self.Observer.start_observer()
 
     def start_monitor_thread(self, pid, interval=1.0):
@@ -114,7 +114,14 @@ class PhotoFrame(iFrame):
             logging.error("settings.json not found. Exiting.")
             raise
     
-    def set_images_dir(self):
+    def set_images_dir(self,  images_dir = None):
+        if images_dir != None:
+            self.IMAGE_DIR = images_dir
+            if not os.path.exists(self.IMAGE_DIR):
+                os.makedirs(self.IMAGE_DIR, exist_ok=True)
+                logging.warning(f"'{self.IMAGE_DIR}' directory not found. Created a new one.")
+            return True
+        
         images_dir = self.settings.get("images_dir") or "Images"
 
         self.IMAGE_DIR = os.path.abspath(
@@ -147,7 +154,9 @@ class PhotoFrame(iFrame):
         self.frame_to_stream = frame
         if hasattr(self, 'm_api'):
             self.m_api._new_frame_ev.set()
-
+        if self._gui_frame:
+            self._gui_frame.update_frame_to_stream(frame)    
+            
     def get_live_frame(self):
         return self.frame_to_stream
 
@@ -271,5 +280,5 @@ class PhotoFrame(iFrame):
 
 if __name__ == "__main__":
     
-    frame = PhotoFrame()
+    frame = PhotoFrameServer()
     frame.main()

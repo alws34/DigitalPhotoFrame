@@ -116,8 +116,14 @@ class Backend:
                         last_jpeg = jpg.tobytes()
 
             if last_jpeg is None:
-                time.sleep(0.1)
-                continue
+                frame = self.Frame.get_live_frame()
+                if isinstance(frame, ndarray) and frame.size:
+                    ok, jpg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, self.encoding_quality])
+                    if ok:
+                        last_jpeg = jpg.tobytes()
+                if last_jpeg is None:
+                    time.sleep(0.1)
+                    continue
 
             try:
                 self._jpeg_queue.put(last_jpeg, timeout=0.5)
