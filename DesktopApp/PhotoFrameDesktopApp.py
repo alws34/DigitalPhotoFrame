@@ -18,6 +18,8 @@ import qrcode
 import platform
 import shutil
 import re
+from collections import deque
+from tkinter import messagebox
 
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -231,20 +233,114 @@ class PhotoFrame(tk.Frame, iFrame):
             self._tap_count = 0
     
     
-
+#region SettingsForm
     # ---- settings form ----
     def open_settings_form(self):
         if hasattr(self, "settings_form") and self.settings_form.winfo_exists():
             return
 
-        # Create and center the form immediately
+        import re
+        import time
+        import threading
+        import subprocess
+        from collections import deque
+        from PIL import Image, ImageTk
+
+        service_name = getattr(self, "service_name", "photoframe")
+
+        # ---- prettier sparkline canvas ----
+        class Sparkline:
+            def __init__(self, parent, width=480, height=70, maxlen=60):
+                self.width = width
+                self.height = height
+                self.pad = 6
+                self.data = deque(maxlen=maxlen)
+                self.canvas = tk.Canvas(parent, width=width, height=height, highlightthickness=1, highlightbackground="#bdbdbd", bg="#ffffff")
+                # pre-create static parts
+                self._draw_grid()
+
+            def widget(self):
+                return self.canvas
+
+            def _draw_grid(self):
+                c = self.canvas
+                c.delete("grid")
+                w, h, p = self.width, self.height, self.pad
+                # border
+                c.create_rectangle(0.5, 0.5, w-0.5, h-0.5, outline="#e0e0e0", tags="grid")
+                # vertical grid (5)
+                for i in range(1, 5):
+                    x = p + i * (w - 2*p) / 5.0
+                    c.create_line(x, p, x, h - p, fill="#f0f0f0", tags="grid")
+                # horizontal grid (3)
+                for i in range(1, 3):
+                    y = p + i * (h - 2*p) / 3.0
+                    c.create_line(p, y, w - p, y, fill="#f0f0f0", tags="grid")
+
+            def _scaled_points(self):
+                if not self.data:
+                    return []
+                vals = list(self.data)
+                vmin = min(vals)
+                vmax = max(vals)
+                rng = (vmax - vmin) if (vmax > vmin) else 1.0
+                w, h, p = self.width, self.height, self.pad
+                usable_w = w - 2 * p
+                usable_h = h - 2 * p
+                n = len(vals)
+                pts = []
+                for i, v in enumerate(vals):
+                    x = p + (i * usable_w / max(1, n - 1))
+                    y_norm = (v - vmin) / rng
+                    y = h - p - y_norm * usable_h
+                    pts.append((x, y))
+                return pts, vmin, vmax
+
+            def draw(self):
+                c = self.canvas
+                c.delete("plot")
+                res = self._scaled_points()
+                if not res:
+                    return
+                pts, vmin, vmax = res
+                if len(pts) < 2:
+                    return
+
+                # area fill under line
+                area = [(pts[0][0], self.height - self.pad)] + pts + [(pts[-1][0], self.height - self.pad)]
+                flat_area = [coord for pt in area for coord in pt]
+                c.create_polygon(*flat_area, fill="#e8f2ff", outline="", tags="plot")
+
+                # polyline
+                flat = [coord for pt in pts for coord in pt]
+                c.create_line(*flat, width=2, fill="#1976d2", tags="plot")
+
+                # last-point dot
+                x_last, y_last = pts[-1]
+                r = 2.5
+                c.create_oval(x_last - r, y_last - r, x_last + r, y_last + r, fill="#1e88e5", outline="", tags="plot")
+
+                # min/max labels at right
+                p = self.pad
+                c.create_text(self.width - p + 2, self.height - p, text=f"{vmin:.0f}", anchor="se", fill="#9e9e9e", font=("TkDefaultFont", 8), tags="plot")
+                c.create_text(self.width - p + 2, p, text=f"{vmax:.0f}", anchor="ne", fill="#9e9e9e", font=("TkDefaultFont", 8), tags="plot")
+
+            def push(self, value):
+                try:
+                    v = float(value)
+                except Exception:
+                    return
+                self.data.append(v)
+                self.draw()
+
+        # ---- window ----
         form = tk.Toplevel(self.parent)
         self.settings_form = form
         form.withdraw()
         form.title("Settings")
         form.transient(self.parent)
         form.resizable(False, False)
-        width, height = 700, 450
+        width, height = 760, 560
         sw, sh = self.parent.winfo_screenwidth(), self.parent.winfo_screenheight()
         x = (sw - width) // 2
         y = (sh - height) // 2
@@ -252,7 +348,6 @@ class PhotoFrame(tk.Frame, iFrame):
         form.lift()
         form.attributes("-topmost", True)
 
-        # Tabs
         notebook = ttk.Notebook(form)
         stats_frame = ttk.Frame(notebook)
         wifi_frame = ttk.Frame(notebook)
@@ -262,27 +357,80 @@ class PhotoFrame(tk.Frame, iFrame):
         notebook.add(about_frame, text="About")
         notebook.pack(fill="both", expand=True, padx=10, pady=10)
 
-        # -- Stats tab widgets --
-        self.cpu_lbl = ttk.Label(stats_frame, text="CPU: Loading...")
-        self.ram_lbl = ttk.Label(stats_frame, text="RAM: Loading...")
-        self.tmp_lbl = ttk.Label(stats_frame, text="Temp: Loading...")
-        self.ip_lbl = ttk.Label(stats_frame, text="URL: Loading...")
-        self.current_ssid_lbl = ttk.Label(stats_frame, text="SSID: Loading...")
-        self.qr_lbl = ttk.Label(stats_frame)
+        # ---- Stats tab layout using nested frames (pack) ----
+        # Top: labels + graphs side by side
+        top = ttk.Frame(stats_frame)
+        top.pack(fill="x", padx=4, pady=(4, 0))
 
-        for lbl in (
-            self.cpu_lbl,
-            self.ram_lbl,
-            self.tmp_lbl,
-            self.ip_lbl,
-            self.current_ssid_lbl
-        ):
-            lbl.pack(anchor="w")
-        self.ip_lbl.pack_configure(pady=(5, 15))
-        self.qr_lbl.pack()
-        ttk.Button(stats_frame, text="Close Application", command=self.on_closing).pack(pady=10)
+        left_col = ttk.Frame(top)
+        left_col.pack(side="left", anchor="n")
 
-        # Helper to get current SSID
+        # wider graphs
+        right_col = ttk.Frame(top)
+        right_col.pack(side="left", anchor="n", padx=(12, 0))
+
+        self.cpu_lbl = ttk.Label(left_col, text="CPU: Loading...")
+        self.ram_lbl = ttk.Label(left_col, text="RAM: Loading...")
+        self.tmp_lbl = ttk.Label(left_col, text="Temp: Loading...")
+        self.cpu_lbl.pack(anchor="w", pady=(2, 2))
+        self.ram_lbl.pack(anchor="w", pady=2)
+        self.tmp_lbl.pack(anchor="w", pady=2)
+
+        self.cpu_graph = Sparkline(right_col, width=520, height=70, maxlen=60)
+        self.ram_graph = Sparkline(right_col, width=520, height=70, maxlen=60)
+        self.tmp_graph = Sparkline(right_col, width=520, height=70, maxlen=60)
+
+        self.cpu_graph.widget().pack(anchor="w", pady=(0, 6))
+        self.ram_graph.widget().pack(anchor="w", pady=(0, 6))
+        self.tmp_graph.widget().pack(anchor="w", pady=(0, 6))
+
+        # Center block: SSID, URL, QR centered
+        center = ttk.Frame(stats_frame)
+        center.pack(fill="x", pady=(8, 4))
+
+        self.current_ssid_lbl = ttk.Label(center, text="SSID: Loading...")
+        self.ip_lbl = ttk.Label(center, text="URL: Loading...")
+        self.qr_lbl = ttk.Label(center)
+
+        self.current_ssid_lbl.pack(anchor="center")
+        self.ip_lbl.pack(anchor="center", pady=(2, 6))
+        self.qr_lbl.pack(anchor="center")
+
+        # Spacer expands, footer at bottom
+        ttk.Frame(stats_frame).pack(fill="both", expand=True)
+
+        footer = ttk.Frame(stats_frame)
+        footer.pack(fill="x", pady=(8, 0))
+        ttk.Frame(footer).pack(side="left", fill="x", expand=True)  # spacer
+
+        def do_stop():
+            try:
+                subprocess.run(["sudo", "systemctl", "stop", f"{service_name}.service"], check=True)
+            except Exception:
+                pass
+            # Fallback to your existing close handler
+            try:
+                self.on_closing()
+            except Exception:
+                form.destroy()
+
+        def do_restart():
+            try:
+                subprocess.run(["sudo", "systemctl", "restart", f"{service_name}.service"], check=True)
+            except Exception as e:
+                # if restart fails, at least reflect error
+                try:
+                    from tkinter import messagebox
+                    messagebox.showerror("Restart failed", str(e))
+                except Exception:
+                    pass
+
+        restart_btn = ttk.Button(footer, text="Restart Service", command=do_restart)
+        close_btn = ttk.Button(footer, text="Close (Stop Service)", command=do_stop)
+        restart_btn.pack(side="right", padx=(0, 8))
+        close_btn.pack(side="right")
+
+        # ---- helpers ----
         def get_current_ssid():
             try:
                 out = subprocess.check_output(
@@ -292,42 +440,62 @@ class PhotoFrame(tk.Frame, iFrame):
                 )
                 lines = [l for l in out.splitlines() if l]
                 return lines[0] if lines else "N/A"
-            except:
+            except Exception:
                 return "N/A"
 
-        # -- Background thread to update stats & QR code every second --
+        temp_re = re.compile(r"(-?\d+(\.\d+)?)")
+
+        def parse_num(s):
+            m = temp_re.search(s or "")
+            if not m:
+                return None
+            try:
+                return float(m.group(1))
+            except Exception:
+                return None
+
+        # ---- background updater ----
         def update_stats_loop():
             while getattr(self, "settings_form", None) and form.winfo_exists():
                 try:
-                    # System stats
                     s = self.get_system_stats().split("\n")
+                    cpu_pct = parse_num(s[0]) if len(s) >= 1 else None
+                    ram_pct = parse_num(s[1]) if len(s) >= 2 else None
+                    tmp_c = parse_num(s[2]) if len(s) >= 3 else None
+
                     ip = get_local_ip()
                     ssid = get_current_ssid()
 
-                    # Generate QR code
                     qr = qrcode.make(f"http://{ip}:{self.backend_port}")
-                    qr = qr.resize((150, 150), Image.Resampling.LANCZOS)
+                    qr = qr.resize((160, 160), Image.Resampling.LANCZOS)
                     img = ImageTk.PhotoImage(qr)
 
-                    # Schedule GUI update on main thread
                     def apply_updates():
-                        self.cpu_lbl.config(text=s[0])
-                        self.ram_lbl.config(text=s[1])
-                        self.tmp_lbl.config(text=s[2])
-                        self.ip_lbl.config(text=f"URL: http://{ip}:{self.backend_port}")
+                        # left labels
+                        self.cpu_lbl.config(text=s[0] if len(s) > 0 else "CPU: N/A")
+                        self.ram_lbl.config(text=s[1] if len(s) > 1 else "RAM: N/A")
+                        self.tmp_lbl.config(text=s[2] if len(s) > 2 else "Temp: N/A")
+                        # centered labels + QR
                         self.current_ssid_lbl.config(text=f"SSID: {ssid}")
+                        self.ip_lbl.config(text=f"URL: http://{ip}:{self.backend_port}")
                         self.qr_lbl.config(image=img)
-                        self.qr_lbl.image = img  # prevent GC
+                        self.qr_lbl.image = img
+                        # graphs
+                        if cpu_pct is not None:
+                            self.cpu_graph.push(max(0.0, min(100.0, cpu_pct)))
+                        if ram_pct is not None:
+                            self.ram_graph.push(max(0.0, min(100.0, ram_pct)))
+                        if tmp_c is not None:
+                            self.tmp_graph.push(tmp_c)
 
                     form.after(0, apply_updates)
-                except:
+                except Exception:
                     pass
-
                 time.sleep(1)
 
         threading.Thread(target=update_stats_loop, daemon=True).start()
 
-        # -- Wi-Fi tab widgets --
+        # ---- Wi-Fi tab (unchanged from your version) ----
         ttk.Label(wifi_frame, text="Network:").pack(anchor="w", pady=(10, 0))
         ssid_cb = ttk.Combobox(wifi_frame, state="readonly")
         ssid_cb.pack(fill="x")
@@ -345,7 +513,6 @@ class PhotoFrame(tk.Frame, iFrame):
             command=lambda: pwd_ent.config(show="" if show_pwd_var.get() else "*")
         ).pack(side="left", padx=(5, 0))
 
-        # Async SSID scan
         def scan():
             def _worker():
                 try:
@@ -359,15 +526,13 @@ class PhotoFrame(tk.Frame, iFrame):
                         for line in out.splitlines()
                     ]
                     ssids = sorted(set(filter(None, ssids)))
-                except:
+                except Exception:
                     ssids = []
                 form.after(0, lambda: ssid_cb.configure(values=ssids))
-
             threading.Thread(target=_worker, daemon=True).start()
 
         scan()
 
-        # Keyboard & connect controls
         layout = {"mode": "qwerty", "caps": False}
         btn_frame = ttk.Frame(wifi_frame)
         btn_frame.pack(anchor="w", pady=5)
@@ -393,7 +558,6 @@ class PhotoFrame(tk.Frame, iFrame):
             if not ssid:
                 return
             pwd = pwd_ent.get()
-
             def _worker():
                 try:
                     subprocess.run(
@@ -401,22 +565,23 @@ class PhotoFrame(tk.Frame, iFrame):
                         check=True
                     )
                 except subprocess.CalledProcessError as e:
-                    form.after(0, lambda: messagebox.showerror("Connection Failed", str(e)))
+                    try:
+                        from tkinter import messagebox
+                        form.after(0, lambda: messagebox.showerror("Connection Failed", str(e)))
+                    except Exception:
+                        pass
                     return
-
                 new_ip = get_local_ip()
                 form.after(0, lambda: (
                     self.current_ssid_lbl.config(text=f"SSID: {ssid}"),
                     self.ip_lbl.config(text=f"URL: http://{new_ip}:{self.backend_port}")
                 ))
-
             threading.Thread(target=_worker, daemon=True).start()
 
         ttk.Button(btn_frame, text="123/#", command=switch_layout).pack(side="left", padx=(0, 5))
         ttk.Button(btn_frame, text="Caps", command=toggle_caps).pack(side="left", padx=(0, 5))
         ttk.Button(btn_frame, text="Connect", command=connect).pack(side="left")
 
-        # QWERTY keyboard
         kb_container = ttk.Frame(wifi_frame)
         kb_container.pack(fill="x", anchor="center", pady=10)
         qwerty_frame = ttk.Frame(kb_container)
@@ -429,73 +594,38 @@ class PhotoFrame(tk.Frame, iFrame):
                     text=ch,
                     width=4,
                     height=2,
-                    command=lambda ch=ch: pwd_ent.insert(
-                        tk.END, ch.upper() if layout["caps"] else ch
-                    )
+                    command=lambda ch=ch: pwd_ent.insert(tk.END, ch.upper() if layout["caps"] else ch)
                 )
                 btn.grid(row=r, column=c, padx=2, pady=2)
                 qwerty_buttons.append(btn)
-        tk.Button(
-            qwerty_frame,
-            text="Space",
-            width=40,
-            height=2,
-            command=lambda: pwd_ent.insert(tk.END, " ")
-        ).grid(row=3, column=2, columnspan=7, padx=2, pady=2)
-        tk.Button(
-            qwerty_frame,
-            text="<-",
-            width=4,
-            height=2,
-            command=lambda: pwd_ent.delete(len(pwd_ent.get())-1, tk.END)
-        ).grid(row=3, column=9, padx=2, pady=2)
+        tk.Button(qwerty_frame, text="Space", width=40, height=2, command=lambda: pwd_ent.insert(tk.END, " ")).grid(row=3, column=2, columnspan=7, padx=2, pady=2)
+        tk.Button(qwerty_frame, text="<-", width=4, height=2, command=lambda: pwd_ent.delete(len(pwd_ent.get())-1, tk.END)).grid(row=3, column=9, padx=2, pady=2)
         qwerty_frame.pack(anchor="center")
 
-        # Symbols + numbers
         symnum_frame = ttk.Frame(kb_container)
         symbols = "~ ! @ # $ % ^ & * ( ) _ + - = [ ] { } | ; : ' \" , . / < > ?".split()
         for i, sym in enumerate(symbols[:20]):
             r, c = divmod(i, 10)
-            tk.Button(
-                symnum_frame,
-                text=sym,
-                width=4,
-                height=2,
-                command=lambda s=sym: pwd_ent.insert(tk.END, s)
-            ).grid(row=r, column=c, padx=2, pady=2)
+            tk.Button(symnum_frame, text=sym, width=4, height=2, command=lambda s=sym: pwd_ent.insert(tk.END, s)).grid(row=r, column=c, padx=2, pady=2)
         nums = list("1234567890")
         for i, num in enumerate(nums):
             r, c = divmod(i, 5)
-            tk.Button(
-                symnum_frame,
-                text=num,
-                width=4,
-                height=2,
-                command=lambda n=num: pwd_ent.insert(tk.END, n)
-            ).grid(row=r+2, column=c, padx=2, pady=2)
-        tk.Button(
-            symnum_frame,
-            text="<-",
-            width=4,
-            height=2,
-            command=lambda: pwd_ent.delete(len(pwd_ent.get())-1, tk.END)
-        ).grid(row=4, column=4, padx=2, pady=2)
+            tk.Button(symnum_frame, text=num, width=4, height=2, command=lambda n=num: pwd_ent.insert(tk.END, n)).grid(row=r+2, column=c, padx=2, pady=2)
+        tk.Button(symnum_frame, text="<-", width=4, height=2, command=lambda: pwd_ent.delete(len(pwd_ent.get())-1, tk.END)).grid(row=4, column=4, padx=2, pady=2)
         symnum_frame.pack_forget()
 
-        # -- About tab --
         about_text = (
             "was created by alws34.\n"
             "this is a digital photo frame application\n"
             "that can display images on almost any platform using mjpeg streaming."
         )
-        ttk.Label(about_frame, text=about_text, wraplength=660, justify="left").pack(
-            padx=10, pady=10
-        )
+        ttk.Label(about_frame, text=about_text, wraplength=660, justify="left").pack(padx=10, pady=10)
 
         form.deiconify()
         form.grab_set()
-    
 
+    
+#endregion SettingsForm
    
    
     def weather_loop(self):
