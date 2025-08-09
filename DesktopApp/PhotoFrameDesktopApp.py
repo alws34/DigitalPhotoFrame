@@ -20,7 +20,7 @@ import shutil
 import re
 from collections import deque
 from tkinter import messagebox
-
+from PIL import ImageSequence
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from Handlers.weather_handler import weather_handler
@@ -243,10 +243,9 @@ class PhotoFrame(tk.Frame, iFrame):
     def open_settings_form(self):
         if hasattr(self, "settings_form") and self.settings_form.winfo_exists():
             return
-
         service_name = getattr(self, "service_name", "photoframe")
 
-        # ------------- helpers: settings path + persistence -------------
+        # ---------- helpers: settings path + persistence ----------
         def _settings_path():
             return os.path.join(os.path.dirname(os.path.abspath(__file__)), "photoframe_settings.json")
 
@@ -264,9 +263,10 @@ class PhotoFrame(tk.Frame, iFrame):
                 with open(_settings_path(), "w") as f:
                     json.dump(settings, f, indent=2)
             except Exception as e:
+                logging.exception("Failed to save settings")
                 messagebox.showerror("Failed to save settings", str(e))
 
-        # ---------------- sparkline (pretty, lightweight) ----------------
+        # ---------- sparkline ----------
         class Sparkline:
             def __init__(self, parent, width=560, height=70, maxlen=60):
                 self.width = width
@@ -355,14 +355,10 @@ class PhotoFrame(tk.Frame, iFrame):
                 self.canvas.pack(side="left", fill="both", expand=True)
                 self.vbar.pack(side="right", fill="y")
 
-                # Resize scrollregion when content changes
                 self.body.bind("<Configure>", self._on_body_configure)
-                # Keep body width = visible width
                 self.canvas.bind("<Configure>", self._on_canvas_configure)
 
-                # Mouse wheel (Windows/macOS)
                 self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
-                # Mouse wheel (X11)
                 self.canvas.bind_all("<Button-4>", self._on_mousewheel_linux)
                 self.canvas.bind_all("<Button-5>", self._on_mousewheel_linux)
 
@@ -373,38 +369,34 @@ class PhotoFrame(tk.Frame, iFrame):
                 self.canvas.itemconfigure(self.body_id, width=event.width)
 
             def _on_mousewheel(self, event):
-                # event.delta positive = up on Windows/macOS
                 step = -1 if event.delta > 0 else 1
                 self.canvas.yview_scroll(step, "units")
 
             def _on_mousewheel_linux(self, event):
-                # Button-4 = up, Button-5 = down
                 step = -1 if event.num == 4 else 1
                 self.canvas.yview_scroll(step, "units")
 
-
-        # ---------------- window ----------------
+        # ---------- window ----------
         form = tk.Toplevel(self.parent)
         self.settings_form = form
         form.withdraw()
         form.title("Settings")
         form.transient(self.parent)
         form.resizable(False, False)
-        width, height = 800, 620
+
         sw, sh = self.parent.winfo_screenwidth(), self.parent.winfo_screenheight()
-        margin_w = int(sw * 0.1)  # 10% width margin
-        margin_h = int(sh * 0.1)  # 10% height margin
+        margin_w = int(sw * 0.1)
+        margin_h = int(sh * 0.1)
         width = max(600, sw - margin_w)
         height = max(400, sh - margin_h)
         x = (sw - width) // 2
         y = (sh - height) // 2
         form.geometry(f"{width}x{height}+{x}+{y}")
-        # form.update_idletasks()
-        # form.minsize(form.winfo_width(), form.winfo_height())
 
         form.lift()
         form.attributes("-topmost", True)
 
+        # Build notebook early and show the shell so exceptions later do not hide the window
         notebook = ttk.Notebook(form)
         stats_frame = ttk.Frame(notebook)
         wifi_frame = ttk.Frame(notebook)
@@ -416,14 +408,26 @@ class PhotoFrame(tk.Frame, iFrame):
         notebook.add(about_frame, text="About")
         notebook.pack(fill="both", expand=True, padx=10, pady=10)
 
+        # Important: deiconify now, before any heavy/fragile setup below
+        form.deiconify()
+
         # ---------------- Stats tab ----------------
         stats_sf = ScrollFrame(stats_frame)
         stats_sf.pack(fill="both", expand=True, padx=4, pady=(4, 0))
 
-        # Use stats_sf.body as the parent for all previous Stats widgets
+        center = ttk.Frame(stats_sf.body)
+        center.pack(fill="x", pady=(8, 4))
+        self.current_ssid_lbl = ttk.Label(center, text="Wifi network: Loading...")
+        self.more_settings_lbl = ttk.Label(center, text="For more settings, configuration and image upload, please scan the QR code with your phone\n\n")
+        self.ip_lbl = ttk.Label(center, text="URL: Loading...")
+        self.qr_lbl = ttk.Label(center)
+        self.current_ssid_lbl.pack(anchor="center")
+        self.ip_lbl.pack(anchor="center", pady=(2, 6))
+        self.qr_lbl.pack(anchor="center")
+        self.more_settings_lbl.pack(anchor="center")
+
         top = ttk.Frame(stats_sf.body)
         top.pack(fill="x")
-
         graphs_col = ttk.Frame(top)
         graphs_col.pack(anchor="center")
 
@@ -442,23 +446,21 @@ class PhotoFrame(tk.Frame, iFrame):
         self.tmp_graph = Sparkline(graphs_col, width=560, height=70, maxlen=60)
         self.tmp_graph.widget().pack(anchor="center", pady=(0, 6))
 
-        center = ttk.Frame(stats_sf.body)
-        center.pack(fill="x", pady=(8, 4))
-        self.current_ssid_lbl = ttk.Label(center, text="Wifi network: Loading...")
-        self.more_settings_lbl = ttk.Label(center, text="For more settings, configuration and image upload, please scan the QR code with your phone")
-        self.ip_lbl = ttk.Label(center, text="URL: Loading...")
-        self.qr_lbl = ttk.Label(center)
-        self.current_ssid_lbl.pack(anchor="center")
-        self.ip_lbl.pack(anchor="center", pady=(2, 6))
-        self.qr_lbl.pack(anchor="center")
-        self.more_settings_lbl.pack(anchor="center")
-
-        # Spacer and footer stay inside the scrollable body
         ttk.Frame(stats_sf.body).pack(fill="both", expand=True)
-
         footer = ttk.Frame(stats_sf.body)
         footer.pack(fill="x", pady=(8, 0))
         ttk.Frame(footer).pack(side="left", fill="x", expand=True)
+
+
+        def restart_service(name):
+            r = subprocess.run(
+                ["systemctl", "--user", "status", f"{name}.service"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+            if r.returncode in (0, 3):
+                subprocess.run(["systemctl", "--user", "restart", f"{name}.service"], check=True)
+                return
+            subprocess.run(["sudo", "systemctl", "restart", f"{name}.service"], check=True)
 
         def do_stop():
             try:
@@ -479,8 +481,6 @@ class PhotoFrame(tk.Frame, iFrame):
         ttk.Button(footer, text="Restart Service", command=do_restart).pack(side="right", padx=(0, 8))
         ttk.Button(footer, text="Close (Stop Service)", command=do_stop).pack(side="right")
 
-        
-
         # ---------------- helpers for stats ----------------
         def get_current_ssid():
             try:
@@ -493,25 +493,7 @@ class PhotoFrame(tk.Frame, iFrame):
                 return lines[0] if lines else "N/A"
             except Exception:
                 return "N/A"
-            
-        def restart_service(name):
-            # Try user service first
-            r = subprocess.run(
-                ["systemctl", "--user", "status", f"{name}.service"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-            )
-            if r.returncode in (0, 3):  # exists
-                subprocess.run(
-                    ["systemctl", "--user", "restart", f"{name}.service"], 
-                    check=True
-                )
-                return
 
-            # Try system service
-            subprocess.run(
-                ["sudo", "systemctl", "restart", f"{name}.service"], 
-                check=True
-            )
         temp_re = re.compile(r"(-?\d+(\.\d+)?)")
         def parse_num(s):
             m = temp_re.search(s or "")
@@ -522,7 +504,7 @@ class PhotoFrame(tk.Frame, iFrame):
             except Exception:
                 return None
 
-        def update_stats_loop():
+        def _stats_updater_loop():
             while getattr(self, "settings_form", None) and form.winfo_exists():
                 try:
                     s = self.get_system_stats().split("\n")
@@ -538,7 +520,6 @@ class PhotoFrame(tk.Frame, iFrame):
                     img = ImageTk.PhotoImage(qr)
 
                     def apply_updates():
-                        # bail if form or any widgets are gone
                         if not (self.settings_form and form.winfo_exists()):
                             return
                         widgets = [self.cpu_lbl, self.ram_lbl, self.tmp_lbl,
@@ -548,7 +529,6 @@ class PhotoFrame(tk.Frame, iFrame):
                                 return
                         except tk.TclError:
                             return
-
                         try:
                             self.cpu_lbl.config(text=s[0] if len(s) > 0 else "CPU: N/A")
                             self.ram_lbl.config(text=s[1] if len(s) > 1 else "RAM: N/A")
@@ -560,18 +540,17 @@ class PhotoFrame(tk.Frame, iFrame):
                             if ram_pct is not None: self.ram_graph.push(max(0.0, min(100.0, ram_pct)))
                             if tmp_c is not None: self.tmp_graph.push(tmp_c)
                         except tk.TclError:
-                            # widgets died between exists-check and config; just stop
                             return
 
-                    if self.settings_form and form.winfo_exists():
-                        form.after(0, apply_updates)
+                    form.after(0, apply_updates)
                 except Exception:
-                    pass
+                    logging.exception("update_stats_loop failed")
                 time.sleep(1)
-        threading.Thread(target=update_stats_loop, daemon=True).start()
+
+        threading.Thread(target=_stats_updater_loop, daemon=True).start()
 
         # ======================================================
-        # Wi-Fi tab (unchanged except custom keyboard)
+        # Wi-Fi tab
         # ======================================================
         ttk.Label(wifi_frame, text=f"Network: (current: {get_current_ssid()})").pack(anchor="w", pady=(10, 0))
         ssid_cb = ttk.Combobox(wifi_frame, state="readonly")
@@ -756,15 +735,10 @@ class PhotoFrame(tk.Frame, iFrame):
         keyboard = CustomKeyboard(kb_container, pwd_ent)
 
         def scan():
-            """
-            Populate the SSID combobox using nmcli (no sudo).
-            Dedup by SSID, keep the best signal, log details to AppLog.log.
-            """
             def _worker():
                 nm = shutil.which("nmcli") or "/usr/bin/nmcli"
                 ssids = []
                 try:
-                    # Force a rescan (ignore errors if unsupported)
                     try:
                         subprocess.run([nm, "device", "wifi", "rescan"], check=False,
                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
@@ -772,7 +746,6 @@ class PhotoFrame(tk.Frame, iFrame):
                     except Exception:
                         pass
 
-                    # Get list: IN-USE, SSID, SECURITY, SIGNAL
                     out = subprocess.check_output(
                         [nm, "-t", "-f", "IN-USE,SSID,SECURITY,SIGNAL", "device", "wifi", "list"],
                         universal_newlines=True, stderr=subprocess.DEVNULL, timeout=8
@@ -782,18 +755,16 @@ class PhotoFrame(tk.Frame, iFrame):
                     for line in out.splitlines():
                         if not line:
                             continue
-                        # nmcli uses ":" as field sep, SECURITY itself may contain multiple tokens but no colons
                         parts = (line.split(":") + ["", "", "", ""])[:4]
                         inuse, ssid, sec, sigs = parts
                         if not ssid:
-                            continue  # skip hidden/blank
+                            continue
                         try:
                             sig = int(sigs)
                         except Exception:
                             sig = -1
                         rows.append((ssid, sec, sig, inuse))
 
-                    # pick best signal per SSID
                     by_ssid = {}
                     for ssid, sec, sig, inuse in rows:
                         cur = by_ssid.get(ssid)
@@ -811,25 +782,20 @@ class PhotoFrame(tk.Frame, iFrame):
                     logging.exception(f"scan() unexpected error: {e}")
 
                 def ui():
-                    # Always update the combobox values
                     try:
                         ssid_cb["values"] = ssids
                     except Exception as e:
                         logging.error(f"Failed to set combobox values: {e}")
-                    # Preselect the first found network (optional)
                     if ssids and not ssid_cb.get():
                         try:
                             ssid_cb.current(0)
                         except Exception:
                             pass
                     if not ssids:
-                        # Surface a gentle hint so you can see it quickly
                         self.current_ssid_lbl.config(text="SSID: N/A (no networks found)")
                 form.after(0, ui)
 
             threading.Thread(target=_worker, daemon=True).start()
-        
-        scan()
 
         def connect():
             ssid = ssid_cb.get().strip()
@@ -840,8 +806,6 @@ class PhotoFrame(tk.Frame, iFrame):
 
             def _worker():
                 nm = shutil.which("nmcli") or "nmcli"
-
-                # Find Wi-Fi interface (wlan0/wlan1/…)
                 try:
                     out = subprocess.check_output(
                         [nm, "-t", "-f", "DEVICE,TYPE,STATE", "device"],
@@ -858,21 +822,19 @@ class PhotoFrame(tk.Frame, iFrame):
                             cands.append((prio, dev))
                     cands.sort()
                     iface = cands[0][1] if cands else None
-                except Exception as e:
+                except Exception:
                     iface = None
 
                 if not iface:
                     form.after(0, lambda: messagebox.showerror("Connection failed", "No Wi-Fi interface found."))
                     return
 
-                # Ensure radio is on (best effort)
                 try:
                     subprocess.run([nm, "radio", "wifi", "on"], check=False,
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
                 except Exception:
                     pass
 
-                # Check if SSID appears in scan and whether it is open or secured
                 try:
                     scan_out = subprocess.check_output(
                         [nm, "-t", "-f", "SSID,SECURITY", "device", "wifi", "list", "ifname", iface],
@@ -890,11 +852,9 @@ class PhotoFrame(tk.Frame, iFrame):
                     is_open = (nm_sec == "" or nm_sec == "--")
                     hidden_flag = [] if ssid in sec_map else ["hidden", "yes"]
                 except Exception:
-                    # If we cannot determine, assume secured; if SSID not in list, assume hidden
                     is_open = False
                     hidden_flag = ["hidden", "yes"]
 
-                # Build nmcli command
                 cmd = [nm, "-w", "30", "device", "wifi", "connect", ssid, "ifname", iface] + hidden_flag
                 if not is_open:
                     if not pwd:
@@ -902,7 +862,6 @@ class PhotoFrame(tk.Frame, iFrame):
                         return
                     cmd += ["password", pwd]
 
-                # Try connect; if fails due to stale profile, delete and retry once
                 def run_connect():
                     try:
                         res = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -913,7 +872,6 @@ class PhotoFrame(tk.Frame, iFrame):
 
                 ok, msg = run_connect()
                 if not ok:
-                    # Delete saved connection profile with same name (SSID) if present and retry once
                     try:
                         saved = subprocess.check_output(
                             [nm, "-t", "-f", "NAME,TYPE", "connection"],
@@ -943,16 +901,15 @@ class PhotoFrame(tk.Frame, iFrame):
 
             threading.Thread(target=_worker, daemon=True).start()
 
-
         ttk.Button(left_btns, text="Rescan", command=scan).pack(side="left")
         ttk.Button(left_btns, text="Connect", command=connect).pack(side="left", padx=(8, 0))
-        
+        scan()
+
         # ======================================================
-        # Screen tab (orientation + brightness + schedule) with JSON persistence to main settings
+        # Screen tab
         # ======================================================
         scr_cfg = _ensure_screen_struct()
 
-        # ---- orientation UI ----
         scr_top = ttk.Frame(screen_frame); scr_top.pack(fill="x", pady=(10, 6))
         ttk.Label(scr_top, text="Orientation:").grid(row=0, column=0, sticky="w", padx=(0, 12))
         orient_var = tk.StringVar(value=scr_cfg.get("orientation", "normal"))
@@ -961,7 +918,6 @@ class PhotoFrame(tk.Frame, iFrame):
             ttk.Radiobutton(orow, text=k, value=v, variable=orient_var).pack(side="left", padx=(0, 8))
         apply_orient_btn = ttk.Button(scr_top, text="Apply Orientation"); apply_orient_btn.grid(row=0, column=2, padx=(12, 0))
 
-        # ---- brightness UI (wide, snap 10%) ----
         br_frame = ttk.LabelFrame(screen_frame, text="Brightness"); br_frame.pack(fill="x", pady=(8, 6))
         br_frame.columnconfigure(1, weight=1)
         ttk.Label(br_frame, text="Level:").grid(row=0, column=0, sticky="w", padx=(8, 8), pady=(8, 8))
@@ -983,26 +939,20 @@ class PhotoFrame(tk.Frame, iFrame):
                 _snap_lock["updating"] = False
 
         br_scale = ttk.Scale(
-            br_frame,
-            from_=10, to=100,
-            orient="horizontal",
-            length=620,
-            command=_snap10_and_update
+            br_frame, from_=10, to=100, orient="horizontal", length=620, command=_snap10_and_update
         )
         br_scale.set(int(scr_cfg.get("brightness", 100)))
         br_scale.grid(row=0, column=1, sticky="we", pady=(8, 8))
         apply_br_btn = ttk.Button(br_frame, text="Apply Brightness"); apply_br_btn.grid(row=0, column=3, padx=(8, 8))
 
-        # ---- auto on/off schedule UI (large sliders, no tiny spinboxes) ----
         sched = ttk.LabelFrame(screen_frame, text="Auto screen on/off (hours only)")
         sched.pack(fill="x", pady=(6, 0))
-        for c in (1, 4):  # allow scales to stretch
+        for c in (1, 4):
             sched.columnconfigure(c, weight=1)
 
         enable_var = tk.BooleanVar(value=bool(scr_cfg.get("schedule_enabled", False)))
         ttk.Checkbutton(sched, text="Enable schedule", variable=enable_var).grid(row=0, column=0, sticky="w", padx=8, pady=(8, 4))
 
-        # OFF hour slider
         ttk.Label(sched, text="Turn OFF at:").grid(row=1, column=0, sticky="w", padx=8, pady=4)
         off_var = tk.IntVar(value=int(scr_cfg.get("off_hour", 0)))
         off_val_lbl = ttk.Label(sched, text=f"{off_var.get():02d}:00")
@@ -1025,13 +975,10 @@ class PhotoFrame(tk.Frame, iFrame):
             off_var.set(snapped)
             off_val_lbl.config(text=f"{snapped:02d}:00")
 
-        off_scale = ttk.Scale(
-            sched, from_=0, to=23, orient="horizontal", length=620, command=_off_snap
-        )
+        off_scale = ttk.Scale(sched, from_=0, to=23, orient="horizontal", length=620, command=_off_snap)
         off_scale.set(off_var.get())
         off_scale.grid(row=1, column=1, sticky="we", padx=(0, 8), pady=4)
 
-        # ON hour slider
         ttk.Label(sched, text="Turn ON at:").grid(row=2, column=0, sticky="w", padx=8, pady=4)
         on_var = tk.IntVar(value=int(scr_cfg.get("on_hour", 7)))
         on_val_lbl = ttk.Label(sched, text=f"{on_var.get():02d}:00")
@@ -1054,16 +1001,14 @@ class PhotoFrame(tk.Frame, iFrame):
             on_var.set(snapped)
             on_val_lbl.config(text=f"{snapped:02d}:00")
 
-        on_scale = ttk.Scale(
-            sched, from_=0, to=23, orient="horizontal", length=620, command=_on_snap
-        )
+        on_scale = ttk.Scale(sched, from_=0, to=23, orient="horizontal", length=620, command=_on_snap)
         on_scale.set(on_var.get())
         on_scale.grid(row=2, column=1, sticky="we", padx=(0, 8), pady=4)
 
         apply_sched_btn = ttk.Button(sched, text="Apply Schedule")
         apply_sched_btn.grid(row=3, column=0, sticky="w", padx=8, pady=(8, 8))
 
-        # ---- platform helpers: output/backlight + actions ----
+        # ---------- platform helpers ----------
         def list_outputs():
             try:
                 out = subprocess.check_output(["wlr-randr"], universal_newlines=True, stderr=subprocess.DEVNULL)
@@ -1154,7 +1099,6 @@ class PhotoFrame(tk.Frame, iFrame):
                 messagebox.showerror("Failed to set orientation", str(e))
                 return False
 
-        # ---- persist + wire actions ----
         def on_apply_orientation():
             transform = orient_var.get()
             if apply_orientation(transform):
@@ -1190,7 +1134,6 @@ class PhotoFrame(tk.Frame, iFrame):
         apply_br_btn.config(command=on_apply_brightness)
         apply_sched_btn.config(command=on_apply_schedule)
 
-        # ---- apply saved on open ----
         def apply_saved_on_open():
             scr = _ensure_screen_struct()
             orient = scr.get("orientation")
@@ -1204,15 +1147,13 @@ class PhotoFrame(tk.Frame, iFrame):
             dev = pick_default_backlight()
             if dev:
                 set_brightness_percent(dev, pct, allow_zero=False)
-            off_scale.set(int(scr.get("off_hour", 0)))
-            off_var.set(int(scr.get("off_hour", 0)))
-            off_val_lbl.config(text=f"{off_var.get():02d}:00")
-            on_scale.set(int(scr.get("on_hour", 7)))
-            on_var.set(int(scr.get("on_hour", 7)))
-            on_val_lbl.config(text=f"{on_var.get():02d}:00")
+            off = int(scr.get("off_hour", 0))
+            onv = int(scr.get("on_hour", 7))
+            off_scale.set(off); off_var.set(off); off_val_lbl.config(text=f"{off:02d}:00")
+            on_scale.set(onv); on_var.set(onv); on_val_lbl.config(text=f"{onv:02d}:00")
+
         apply_saved_on_open()
 
-        # ---- tiny background scheduler (once per ~30s) ----
         def _hour_now():
             try:
                 return int(time.strftime("%H"))
@@ -1260,7 +1201,7 @@ class PhotoFrame(tk.Frame, iFrame):
                             set_brightness_percent(dev, restore, allow_zero=False)
                             self._screen_power_state = "on"
                 except Exception:
-                    pass
+                    logging.exception("screen power worker tick failed")
 
                 if ev.wait(timeout=30.0):
                     try:
@@ -1274,44 +1215,76 @@ class PhotoFrame(tk.Frame, iFrame):
             self._screen_sched_thread.start()
 
         # ---------------- About tab ----------------
-        about_cfg = settings.get("about", {}) if isinstance(settings, dict) else {}
-        about_text = about_cfg.get("text", "Digital Photo Frame")
-        about_image_path = about_cfg.get("image_path", "")
+        try:
+            about_cfg = settings.get("about", {}) if isinstance(settings, dict) else {}
+            about_text = about_cfg.get("text", "Digital Photo Frame")
+            about_image_path = about_cfg.get("image_path", "")
 
-        about_outer = ttk.Frame(about_frame)
-        about_outer.pack(fill="both", expand=True)
+            about_outer = ttk.Frame(about_frame)
+            about_outer.pack(fill="both", expand=True)
 
-        about_outer.columnconfigure(0, weight=1)
-        about_outer.columnconfigure(1, weight=0)
-        about_outer.columnconfigure(2, weight=1)
-        about_outer.rowconfigure(0, weight=1)
-        about_outer.rowconfigure(1, weight=0)
-        about_outer.rowconfigure(2, weight=1)
+            about_outer.columnconfigure(0, weight=1)
+            about_outer.columnconfigure(1, weight=0)
+            about_outer.columnconfigure(2, weight=1)
+            about_outer.rowconfigure(0, weight=1)
+            about_outer.rowconfigure(1, weight=0)
+            about_outer.rowconfigure(2, weight=1)
 
-        content = ttk.Frame(about_outer)
-        content.grid(row=1, column=1, sticky="n")
+            content = ttk.Frame(about_outer)
+            content.grid(row=1, column=1, sticky="n")
 
-        about_lbl = ttk.Label(content, text=about_text, justify="center")
-        about_lbl.pack(anchor="center", padx=10, pady=(20, 10))
+            about_lbl = ttk.Label(content, text=about_text, justify="center")
+            about_lbl.pack(anchor="center", padx=10, pady=(20, 10))
 
-        def _update_wraplength(evt=None):
-            w = max(300, int(content.winfo_width() * 0.9))
-            about_lbl.configure(wraplength=w)
-        content.bind("<Configure>", _update_wraplength)
+            def _update_wraplength(evt=None):
+                try:
+                    w = max(300, int(content.winfo_width() * 0.9))
+                    about_lbl.configure(wraplength=w)
+                except Exception:
+                    pass
+            content.bind("<Configure>", _update_wraplength)
 
-        self._about_img_ref = None
-        if isinstance(about_image_path, str) and about_image_path:
+            self._about_img_ref = None
+            if isinstance(about_image_path, str) and about_image_path:
+                try:
+                    if os.path.isfile(about_image_path):
+                        im = Image.open(about_image_path)
+
+                        # If GIF, keep animation
+                        if getattr(im, "is_animated", False):
+                            frames = [frame.copy().resize((250, 250), Image.Resampling.LANCZOS)
+                                    for frame in ImageSequence.Iterator(im)]
+                            self._about_img_ref = [ImageTk.PhotoImage(f) for f in frames]
+
+                            gif_lbl = ttk.Label(content)
+                            gif_lbl.pack(anchor="center", pady=(0, 20))
+
+                            def _animate(frame_idx=0):
+                                gif_lbl.configure(image=self._about_img_ref[frame_idx])
+                                next_idx = (frame_idx + 1) % len(self._about_img_ref)
+                                gif_lbl.after(im.info.get("duration", 100), _animate, next_idx)
+
+                            _animate()
+
+                        else:
+                            im = im.resize((300, 300), Image.Resampling.LANCZOS)
+                            self._about_img_ref = ImageTk.PhotoImage(im)
+                            ttk.Label(content, image=self._about_img_ref).pack(anchor="center", pady=(0, 20))
+                except Exception:
+                    logging.exception("Failed to load About image")
+        except Exception:
+            logging.exception("Building About tab failed")
+            # Leave a small fallback so the tab is not empty
             try:
-                if os.path.isfile(about_image_path):
-                    im = Image.open(about_image_path)
-                    im.thumbnail((700, 350), Image.Resampling.LANCZOS)
-                    self._about_img_ref = ImageTk.PhotoImage(im)
-                    ttk.Label(content, image=self._about_img_ref).pack(anchor="center", pady=(0, 20))
+                ttk.Label(about_frame, text="About information unavailable (see AppLog.log).").pack(pady=20)
             except Exception:
                 pass
 
-        form.deiconify()
-        form.grab_set()
+        # Finalize modal behavior
+        try:
+            form.grab_set()
+        except Exception:
+            pass
 
 
     

@@ -22,17 +22,27 @@ echo "[0.1/8] Enabling NetworkManager and making sure it's running..."
 sudo systemctl enable NetworkManager
 sudo systemctl restart NetworkManager
 
-echo "[0.2/8] Creating polkit rule to allow 'pi' to control Wi-Fi without sudo..."
+echo "[0.2/8] Creating polkit rule to allow members of 'netdev' to manage Wi-Fi without sudo..."
 sudo tee "$POLKIT_RULE" >/dev/null <<'EOF'
-/* Allow user 'pi' to scan and connect Wi-Fi via NetworkManager without password */
+/* Allow Wi-Fi scan/connect and system connection changes for netdev group */
 polkit.addRule(function(action, subject) {
-  if (subject.isInGroup("pi") || subject.user == "pi") {
-    if (action.id == "org.freedesktop.NetworkManager.wifi.scan") return polkit.Result.YES;
-    if (action.id == "org.freedesktop.NetworkManager.network-control") return polkit.Result.YES;
-    if (action.id == "org.freedesktop.NetworkManager.settings.modify.own") return polkit.Result.YES;
+  if (subject.isInGroup("netdev")) {
+    switch (action.id) {
+      case "org.freedesktop.NetworkManager.wifi.scan":
+      case "org.freedesktop.NetworkManager.enable-disable-wifi":
+      case "org.freedesktop.NetworkManager.network-control":
+      case "org.freedesktop.NetworkManager.settings.modify.system":
+      case "org.freedesktop.NetworkManager.wifi.share.open":
+      case "org.freedesktop.NetworkManager.wifi.share.protected":
+        return polkit.Result.YES;
+    }
   }
 });
 EOF
+
+echo "[0.21/8] Adding 'pi' to netdev group..."
+sudo usermod -aG netdev pi
+
 
 echo "[0.3/8] Reloading polkit (best effort)..."
 sudo systemctl restart polkit || true
