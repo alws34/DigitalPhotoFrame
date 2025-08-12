@@ -181,8 +181,22 @@ class PhotoFrame(tk.Frame, iFrame):
 
         threading.Thread(target=self.BackendAPI.start, daemon=True).start()
 
-        
-        
+        self.start_screen_scheduler()
+        self._screen_sched_event.set()
+        scr = self._ensure_screen_struct()
+        now_h = self._hour_now()
+        should_be_on = (not scr.get("schedule_enabled", False)) or not self._in_off_period(
+            now_h,
+            int(scr.get("off_hour", 0)),
+            int(scr.get("on_hour", 7)),
+        )
+        if should_be_on:
+            dev = self._pick_default_backlight()
+            if dev:
+                pct = max(10, min(100, int(scr.get("brightness", 100))))
+                self._set_brightness_percent(dev, pct, allow_zero=False)
+
+
         self.update_display()
 
     def send_log_message(self, msg, logger: logging):
@@ -237,7 +251,144 @@ class PhotoFrame(tk.Frame, iFrame):
             self.open_settings_form()
             self._tap_count = 0
     
-    
+
+#region screen_scheduler
+    def _ensure_screen_struct(self):
+        scr = settings.setdefault("screen", {})
+        scr.setdefault("orientation", "normal")
+        scr.setdefault("brightness", 100)
+        scr.setdefault("schedule_enabled", False)
+        scr.setdefault("off_hour", 0)
+        scr.setdefault("on_hour", 7)
+        return scr
+
+    def _hour_now(self):
+        try:
+            return int(time.strftime("%H"))
+        except Exception:
+            return 0
+
+    def _in_off_period(self, now_h, off_h, on_h):
+        now_h = int(now_h) % 24
+        off_h = int(off_h) % 24
+        on_h  = int(on_h)  % 24
+        if off_h == on_h:
+            return False
+        if off_h < on_h:
+            return off_h <= now_h < on_h
+        else:
+            return now_h >= off_h or now_h < on_h
+
+    def _list_backlights(self):
+        base = "/sys/class/backlight"
+        if not os.path.isdir(base):
+            return []
+        devs = [d for d in os.listdir(base) if os.path.isdir(os.path.join(base, d))]
+        devs.sort(key=lambda n: (0 if n.startswith("rpi") or "rpi_backlight" in n or "raspberry" in n else 1, n))
+        return devs
+
+    def _pick_default_backlight(self):
+        bls = self._list_backlights()
+        return bls[0] if bls else None
+
+    def _read_brightness(self, dev):
+        base = os.path.join("/sys/class/backlight", dev)
+        try:
+            with open(os.path.join(base, "max_brightness"), "r") as f:
+                maxb = int(f.read().strip())
+            with open(os.path.join(base, "brightness"), "r") as f:
+                cur = int(f.read().strip())
+            return cur, maxb
+        except Exception:
+            return None, None
+
+    def _write_brightness_value(self, dev, value):
+        base = os.path.join("/sys/class/backlight", dev)
+        path = os.path.join(base, "brightness")
+        try:
+            with open(path, "w") as f:
+                f.write(str(value))
+            return True
+        except PermissionError:
+            cmd = f"echo {value} | sudo tee {path}"
+            try:
+                subprocess.run(cmd, shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return True
+            except subprocess.CalledProcessError:
+                return False
+        except Exception:
+            return False
+
+    def _set_brightness_percent(self, dev, percent, allow_zero=False):
+        percent = int(percent)
+        if not allow_zero:
+            percent = max(10, min(100, percent))
+        else:
+            percent = max(0, min(100, percent))
+        cur, maxb = self._read_brightness(dev)
+        if maxb in (None, 0):
+            return False
+        value = 0 if percent == 0 else int(round(percent * maxb / 100.0))
+        value = min(maxb, value)
+        return self._write_brightness_value(dev, value)
+
+    def _screen_power_worker(self):
+        self._screen_power_state = getattr(self, "_screen_power_state", "unknown")
+        self._last_user_brightness = None
+        ev = self._screen_sched_event
+
+        while not self.stop_event.is_set():
+            try:
+                scr = self._ensure_screen_struct()
+                enabled = bool(scr.get("schedule_enabled", False))
+                off_h = int(scr.get("off_hour", 0)) % 24
+                on_h  = int(scr.get("on_hour", 7)) % 24
+                now_h = self._hour_now()
+
+                desired = "off" if (enabled and self._in_off_period(now_h, off_h, on_h)) else "on"
+
+                dev = self._pick_default_backlight()
+                if not dev:
+                    if ev.wait(timeout=30.0):
+                        ev.clear()
+                    continue
+
+                cur, maxb = self._read_brightness(dev)
+                cur_pct = int(round(cur * 100.0 / maxb)) if (cur is not None and maxb) else None
+
+                if desired == "off" and self._screen_power_state != "off":
+                    self._last_user_brightness = cur_pct if cur_pct is not None else int(settings.get("screen", {}).get("brightness", 100))
+                    self._set_brightness_percent(dev, 0, allow_zero=True)
+                    self._screen_power_state = "off"
+
+                elif desired == "on" and self._screen_power_state != "on":
+                    # Always restore to the configured brightness in settings
+                    scr = self._ensure_screen_struct()
+                    restore = int(scr.get("brightness", 100))
+                    restore = max(10, min(100, restore))
+                    dev = self._pick_default_backlight()
+                    if dev:
+                        self._set_brightness_percent(dev, restore, allow_zero=False)
+                    self._screen_power_state = "on"
+
+            except Exception:
+                logging.exception("screen power worker tick failed")
+
+            if ev.wait(timeout=30.0):
+                ev.clear()
+
+    def start_screen_scheduler(self):
+        if getattr(self, "_screen_sched_thread", None):
+            return
+        self._screen_sched_event = threading.Event()
+        self._screen_sched_thread = threading.Thread(target=self._screen_power_worker, daemon=True)
+        self._screen_sched_thread.start()
+#endregion
+
+
+
+
+
 #region SettingsForm
     # ---- settings form ----
     def open_settings_form(self):
@@ -245,7 +396,6 @@ class PhotoFrame(tk.Frame, iFrame):
             return
         service_name = getattr(self, "service_name", "photoframe")
 
-        # ---------- helpers: settings path + persistence ----------
         def _settings_path():
             return os.path.join(os.path.dirname(os.path.abspath(__file__)), "photoframe_settings.json")
 
@@ -266,6 +416,7 @@ class PhotoFrame(tk.Frame, iFrame):
                 logging.exception("Failed to save settings")
                 messagebox.showerror("Failed to save settings", str(e))
 
+#region sparkline
         # ---------- sparkline ----------
         class Sparkline:
             def __init__(self, parent, width=560, height=70, maxlen=60):
@@ -410,7 +561,9 @@ class PhotoFrame(tk.Frame, iFrame):
 
         # Important: deiconify now, before any heavy/fragile setup below
         form.deiconify()
+#endregion sparkline
 
+#region stats_tab
         # ---------------- Stats tab ----------------
         stats_sf = ScrollFrame(stats_frame)
         stats_sf.pack(fill="both", expand=True, padx=4, pady=(4, 0))
@@ -548,10 +701,9 @@ class PhotoFrame(tk.Frame, iFrame):
                 time.sleep(1)
 
         threading.Thread(target=_stats_updater_loop, daemon=True).start()
+#endregion stats_tab
 
-        # ======================================================
-        # Wi-Fi tab
-        # ======================================================
+#region wifi_tab
         ttk.Label(wifi_frame, text=f"Network: (current: {get_current_ssid()})").pack(anchor="w", pady=(10, 0))
         ssid_cb = ttk.Combobox(wifi_frame, state="readonly")
         ssid_cb.pack(fill="x")
@@ -905,9 +1057,9 @@ class PhotoFrame(tk.Frame, iFrame):
         ttk.Button(left_btns, text="Connect", command=connect).pack(side="left", padx=(8, 0))
         scan()
 
-        # ======================================================
-        # Screen tab
-        # ======================================================
+#endregion wifi_tab
+
+#region screen_tab
         scr_cfg = _ensure_screen_struct()
 
         scr_top = ttk.Frame(screen_frame); scr_top.pack(fill="x", pady=(10, 6))
@@ -1008,6 +1160,9 @@ class PhotoFrame(tk.Frame, iFrame):
         apply_sched_btn = ttk.Button(sched, text="Apply Schedule")
         apply_sched_btn.grid(row=3, column=0, sticky="w", padx=8, pady=(8, 8))
 
+#endregion screen_tab
+
+#region helpers
         # ---------- platform helpers ----------
         def list_outputs():
             try:
@@ -1107,35 +1262,34 @@ class PhotoFrame(tk.Frame, iFrame):
                 _save_settings()
 
         def on_apply_brightness():
-            dev = pick_default_backlight()
+            dev = self._pick_default_backlight()
             if not dev:
                 messagebox.showerror("No backlight", "No /sys/class/backlight device found.")
                 return
             pct = int(float(br_scale.get()))
-            if set_brightness_percent(dev, pct, allow_zero=False):
-                scr = _ensure_screen_struct()
+            if self._set_brightness_percent(dev, pct, allow_zero=False):
+                scr = self._ensure_screen_struct()
                 scr["brightness"] = pct
                 br_val_lbl.config(text=f"{pct}%")
                 _save_settings()
+                if hasattr(self, "_screen_sched_event") and self._screen_sched_event:
+                    self._screen_sched_event.set()
 
         def on_apply_schedule():
-            scr = _ensure_screen_struct()
+            scr = self._ensure_screen_struct()
             scr["schedule_enabled"] = bool(enable_var.get())
             scr["off_hour"] = int(off_var.get()) % 24
             scr["on_hour"] = int(on_var.get()) % 24
             _save_settings()
             if hasattr(self, "_screen_sched_event") and self._screen_sched_event:
-                try:
-                    self._screen_sched_event.set()
-                except Exception:
-                    pass
+                self._screen_sched_event.set()
 
         apply_orient_btn.config(command=on_apply_orientation)
         apply_br_btn.config(command=on_apply_brightness)
         apply_sched_btn.config(command=on_apply_schedule)
 
         def apply_saved_on_open():
-            scr = _ensure_screen_struct()
+            scr = self._ensure_screen_struct()
             orient = scr.get("orientation")
             if orient in ("normal", "90", "180", "270"):
                 orient_var.set(orient)
@@ -1144,9 +1298,9 @@ class PhotoFrame(tk.Frame, iFrame):
             pct = max(10, min(100, pct))
             br_scale.set(pct)
             br_val_lbl.config(text=f"{pct}%")
-            dev = pick_default_backlight()
+            dev = self._pick_default_backlight()
             if dev:
-                set_brightness_percent(dev, pct, allow_zero=False)
+                self._set_brightness_percent(dev, pct, allow_zero=False)
             off = int(scr.get("off_hour", 0))
             onv = int(scr.get("on_hour", 7))
             off_scale.set(off); off_var.set(off); off_val_lbl.config(text=f"{off:02d}:00")
@@ -1209,11 +1363,9 @@ class PhotoFrame(tk.Frame, iFrame):
                     except Exception:
                         pass
 
-        if not hasattr(self, "_screen_sched_thread"):
-            self._screen_sched_event = threading.Event()
-            self._screen_sched_thread = threading.Thread(target=_screen_power_worker, daemon=True)
-            self._screen_sched_thread.start()
+#endregion helpers
 
+#region about_tab
         # ---------------- About tab ----------------
         try:
             about_cfg = settings.get("about", {}) if isinstance(settings, dict) else {}
@@ -1285,7 +1437,7 @@ class PhotoFrame(tk.Frame, iFrame):
             form.grab_set()
         except Exception:
             pass
-
+#endregion about_tab
 
     
 #endregion SettingsForm
