@@ -394,8 +394,10 @@ class PhotoFrame(tk.Frame, iFrame):
     def open_settings_form(self):
         if hasattr(self, "settings_form") and self.settings_form.winfo_exists():
             return
+
         service_name = getattr(self, "service_name", "photoframe")
 
+        # -------- settings helpers --------
         def _settings_path():
             return os.path.join(os.path.dirname(os.path.abspath(__file__)), "photoframe_settings.json")
 
@@ -406,6 +408,14 @@ class PhotoFrame(tk.Frame, iFrame):
             scr.setdefault("schedule_enabled", False)
             scr.setdefault("off_hour", 0)
             scr.setdefault("on_hour", 7)
+            # new multi-schedule list
+            if "schedules" not in scr or not isinstance(scr["schedules"], list):
+                scr["schedules"] = [{
+                    "enabled": False,
+                    "off_hour": 0,
+                    "on_hour": 7,
+                    "days": [0,1,2,3,4,5,6]  # Mon..Sun (tm_wday)
+                }]
             return scr
 
         def _save_settings():
@@ -416,8 +426,27 @@ class PhotoFrame(tk.Frame, iFrame):
                 logging.exception("Failed to save settings")
                 messagebox.showerror("Failed to save settings", str(e))
 
-#region sparkline
-        # ---------- sparkline ----------
+        def _mirror_first_enabled_schedule_to_legacy(scr):
+            # Best-effort mirror for existing single-window worker:
+            # if there is an enabled schedule, mirror the first one into legacy fields.
+            # Otherwise, disable legacy schedule.
+            sch = [s for s in scr.get("schedules", []) if s.get("enabled")]
+            if sch:
+                first = sch[0]
+                scr["schedule_enabled"] = True
+                scr["off_hour"] = int(first.get("off_hour", 0)) % 24
+                scr["on_hour"] = int(first.get("on_hour", 7)) % 24
+            else:
+                scr["schedule_enabled"] = False
+
+        def _wake_worker():
+            try:
+                if hasattr(self, "_screen_sched_event") and self._screen_sched_event:
+                    self._screen_sched_event.set()
+            except Exception:
+                pass
+
+        # -------- mini-widgets --------
         class Sparkline:
             def __init__(self, parent, width=560, height=70, maxlen=60):
                 self.width = width
@@ -499,16 +528,12 @@ class PhotoFrame(tk.Frame, iFrame):
                 self.canvas = tk.Canvas(self, highlightthickness=0)
                 self.vbar = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
                 self.canvas.configure(yscrollcommand=self.vbar.set)
-
                 self.body = ttk.Frame(self.canvas)
                 self.body_id = self.canvas.create_window((0, 0), window=self.body, anchor="nw")
-
                 self.canvas.pack(side="left", fill="both", expand=True)
                 self.vbar.pack(side="right", fill="y")
-
                 self.body.bind("<Configure>", self._on_body_configure)
                 self.canvas.bind("<Configure>", self._on_canvas_configure)
-
                 self.canvas.bind_all("<MouseWheel>", self._on_mousewheel)
                 self.canvas.bind_all("<Button-4>", self._on_mousewheel_linux)
                 self.canvas.bind_all("<Button-5>", self._on_mousewheel_linux)
@@ -527,7 +552,7 @@ class PhotoFrame(tk.Frame, iFrame):
                 step = -1 if event.num == 4 else 1
                 self.canvas.yview_scroll(step, "units")
 
-        # ---------- window ----------
+        # -------- window shell --------
         form = tk.Toplevel(self.parent)
         self.settings_form = form
         form.withdraw()
@@ -543,11 +568,9 @@ class PhotoFrame(tk.Frame, iFrame):
         x = (sw - width) // 2
         y = (sh - height) // 2
         form.geometry(f"{width}x{height}+{x}+{y}")
-
         form.lift()
         form.attributes("-topmost", True)
 
-        # Build notebook early and show the shell so exceptions later do not hide the window
         notebook = ttk.Notebook(form)
         stats_frame = ttk.Frame(notebook)
         wifi_frame = ttk.Frame(notebook)
@@ -559,12 +582,9 @@ class PhotoFrame(tk.Frame, iFrame):
         notebook.add(about_frame, text="About")
         notebook.pack(fill="both", expand=True, padx=10, pady=10)
 
-        # Important: deiconify now, before any heavy/fragile setup below
         form.deiconify()
-#endregion sparkline
 
-#region stats_tab
-        # ---------------- Stats tab ----------------
+        # ===================== Stats tab =====================
         stats_sf = ScrollFrame(stats_frame)
         stats_sf.pack(fill="both", expand=True, padx=4, pady=(4, 0))
 
@@ -579,31 +599,21 @@ class PhotoFrame(tk.Frame, iFrame):
         self.qr_lbl.pack(anchor="center")
         self.more_settings_lbl.pack(anchor="center")
 
-        top = ttk.Frame(stats_sf.body)
-        top.pack(fill="x")
-        graphs_col = ttk.Frame(top)
-        graphs_col.pack(anchor="center")
+        top = ttk.Frame(stats_sf.body); top.pack(fill="x")
+        graphs_col = ttk.Frame(top); graphs_col.pack(anchor="center")
 
-        self.cpu_lbl = ttk.Label(graphs_col, text="CPU: Loading...")
-        self.cpu_lbl.pack(anchor="center")
-        self.cpu_graph = Sparkline(graphs_col, width=560, height=70, maxlen=60)
-        self.cpu_graph.widget().pack(anchor="center", pady=(0, 6))
+        self.cpu_lbl = ttk.Label(graphs_col, text="CPU: Loading..."); self.cpu_lbl.pack(anchor="center")
+        self.cpu_graph = Sparkline(graphs_col, width=560, height=70, maxlen=60); self.cpu_graph.widget().pack(anchor="center", pady=(0, 6))
 
-        self.ram_lbl = ttk.Label(graphs_col, text="RAM: Loading...")
-        self.ram_lbl.pack(anchor="center")
-        self.ram_graph = Sparkline(graphs_col, width=560, height=70, maxlen=60)
-        self.ram_graph.widget().pack(anchor="center", pady=(0, 6))
+        self.ram_lbl = ttk.Label(graphs_col, text="RAM: Loading..."); self.ram_lbl.pack(anchor="center")
+        self.ram_graph = Sparkline(graphs_col, width=560, height=70, maxlen=60); self.ram_graph.widget().pack(anchor="center", pady=(0, 6))
 
-        self.tmp_lbl = ttk.Label(graphs_col, text="Temp: Loading...")
-        self.tmp_lbl.pack(anchor="center")
-        self.tmp_graph = Sparkline(graphs_col, width=560, height=70, maxlen=60)
-        self.tmp_graph.widget().pack(anchor="center", pady=(0, 6))
+        self.tmp_lbl = ttk.Label(graphs_col, text="Temp: Loading..."); self.tmp_lbl.pack(anchor="center")
+        self.tmp_graph = Sparkline(graphs_col, width=560, height=70, maxlen=60); self.tmp_graph.widget().pack(anchor="center", pady=(0, 6))
 
         ttk.Frame(stats_sf.body).pack(fill="both", expand=True)
-        footer = ttk.Frame(stats_sf.body)
-        footer.pack(fill="x", pady=(8, 0))
+        footer = ttk.Frame(stats_sf.body); footer.pack(fill="x", pady=(8, 0))
         ttk.Frame(footer).pack(side="left", fill="x", expand=True)
-
 
         def restart_service(name):
             r = subprocess.run(
@@ -634,7 +644,6 @@ class PhotoFrame(tk.Frame, iFrame):
         ttk.Button(footer, text="Restart Service", command=do_restart).pack(side="right", padx=(0, 8))
         ttk.Button(footer, text="Close (Stop Service)", command=do_stop).pack(side="right")
 
-        # ---------------- helpers for stats ----------------
         def get_current_ssid():
             try:
                 out = subprocess.check_output(
@@ -701,9 +710,8 @@ class PhotoFrame(tk.Frame, iFrame):
                 time.sleep(1)
 
         threading.Thread(target=_stats_updater_loop, daemon=True).start()
-#endregion stats_tab
 
-#region wifi_tab
+        # ===================== Wi-Fi tab =====================
         ttk.Label(wifi_frame, text=f"Network: (current: {get_current_ssid()})").pack(anchor="w", pady=(10, 0))
         ssid_cb = ttk.Combobox(wifi_frame, state="readonly")
         ssid_cb.pack(fill="x")
@@ -722,7 +730,6 @@ class PhotoFrame(tk.Frame, iFrame):
         btns = ttk.Frame(wifi_frame); btns.pack(fill="x", pady=(8, 0))
         left_btns = ttk.Frame(btns); left_btns.pack(side="left")
         ttk.Frame(btns).pack(side="right", fill="x", expand=True)
-
         kb_container = ttk.Frame(wifi_frame); kb_container.pack(fill="x", pady=(8, 0))
 
         class CustomKeyboard:
@@ -761,31 +768,26 @@ class PhotoFrame(tk.Frame, iFrame):
                 for child in self.frame.winfo_children():
                     child.destroy()
                 rows = self._symbols_rows() if self.symbols else self._letters_rows()
-
                 c = 0
                 for key in rows[0]:
                     w = self._make_key(key, width=4)
                     span = 2 if key == "Backspace" else 1
                     w.grid(row=0, column=c, columnspan=span, sticky="nsew", padx=2, pady=2); c += span
-
                 c = 0
                 for key in rows[1]:
                     span = 2 if key == "Tab" else 1
                     w = self._make_key(key, width=4 if key != "Tab" else 6)
                     w.grid(row=1, column=c, columnspan=span, sticky="nsew", padx=2, pady=2); c += span
-
                 c = 0
                 for key in rows[2]:
                     span = 2 if key in ("Caps","Enter") else 1
                     w = self._make_key(key, width=4 if key not in ("Caps","Enter") else 7)
                     w.grid(row=2, column=c, columnspan=span, sticky="nsew", padx=2, pady=2); c += span
-
                 c = 0
                 for key in rows[3]:
                     span = 2 if key == "Shift" else 1
                     w = self._make_key(key, width=4 if key != "Shift" else 7)
                     w.grid(row=3, column=c, columnspan=span, sticky="nsew", padx=2, pady=2); c += span
-
                 sym_key, space_label, left_label, right_label = rows[4]
                 self._make_key(sym_key, width=6).grid(row=4, column=0, columnspan=2, sticky="nsew", padx=2, pady=2)
                 self._make_key(space_label, width=30).grid(row=4, column=2, columnspan=10, sticky="nsew", padx=2, pady=2)
@@ -1057,9 +1059,7 @@ class PhotoFrame(tk.Frame, iFrame):
         ttk.Button(left_btns, text="Connect", command=connect).pack(side="left", padx=(8, 0))
         scan()
 
-#endregion wifi_tab
-
-#region screen_tab
+        # ===================== Screen tab =====================
         scr_cfg = _ensure_screen_struct()
 
         scr_top = ttk.Frame(screen_frame); scr_top.pack(fill="x", pady=(10, 6))
@@ -1097,73 +1097,150 @@ class PhotoFrame(tk.Frame, iFrame):
         br_scale.grid(row=0, column=1, sticky="we", pady=(8, 8))
         apply_br_btn = ttk.Button(br_frame, text="Apply Brightness"); apply_br_btn.grid(row=0, column=3, padx=(8, 8))
 
-        sched = ttk.LabelFrame(screen_frame, text="Auto screen on/off (hours only)")
-        sched.pack(fill="x", pady=(6, 0))
-        for c in (1, 4):
-            sched.columnconfigure(c, weight=1)
+        # Dynamic Schedules
+        sched_frame = ttk.LabelFrame(screen_frame, text="Auto screen on/off schedules (any matching schedule turns screen OFF during its window)")
+        sched_frame.pack(fill="both", expand=True, pady=(6, 0))
+        sched_frame.columnconfigure(0, weight=1)
 
-        enable_var = tk.BooleanVar(value=bool(scr_cfg.get("schedule_enabled", False)))
-        ttk.Checkbutton(sched, text="Enable schedule", variable=enable_var).grid(row=0, column=0, sticky="w", padx=8, pady=(8, 4))
+        days_labels = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]  # tm_wday: Mon=0..Sun=6
 
-        ttk.Label(sched, text="Turn OFF at:").grid(row=1, column=0, sticky="w", padx=8, pady=4)
-        off_var = tk.IntVar(value=int(scr_cfg.get("off_hour", 0)))
-        off_val_lbl = ttk.Label(sched, text=f"{off_var.get():02d}:00")
-        off_val_lbl.grid(row=1, column=2, sticky="w", padx=8, pady=4)
+        rows_container = ttk.Frame(sched_frame)
+        rows_container.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
+        rows_container.columnconfigure(0, weight=1)
 
-        _off_lock = {"updating": False}
-        def _off_snap(v):
-            if _off_lock["updating"]:
-                return
-            try:
-                raw = float(v)
-            except Exception:
-                raw = float(off_var.get())
-            snapped = int(round(raw))
-            snapped = max(0, min(23, snapped))
-            if snapped != int(raw):
-                _off_lock["updating"] = True
-                off_scale.set(snapped)
-                _off_lock["updating"] = False
-            off_var.set(snapped)
-            off_val_lbl.config(text=f"{snapped:02d}:00")
+        def _render_schedules():
+            for child in rows_container.winfo_children():
+                child.destroy()
 
-        off_scale = ttk.Scale(sched, from_=0, to=23, orient="horizontal", length=620, command=_off_snap)
-        off_scale.set(off_var.get())
-        off_scale.grid(row=1, column=1, sticky="we", padx=(0, 8), pady=4)
+            header = ttk.Frame(rows_container)
+            header.grid(row=0, column=0, sticky="we")
+            ttk.Label(header, text="Enabled", width=8).grid(row=0, column=0, padx=(0,8))
+            ttk.Label(header, text="Days").grid(row=0, column=1, padx=(0,8))
+            ttk.Label(header, text="OFF at").grid(row=0, column=2, padx=(0,8))
+            ttk.Label(header, text="ON at").grid(row=0, column=3, padx=(0,8))
+            ttk.Label(header, text="Window").grid(row=0, column=4, padx=(0,8))
+            ttk.Label(header, text="").grid(row=0, column=5)
 
-        ttk.Label(sched, text="Turn ON at:").grid(row=2, column=0, sticky="w", padx=8, pady=4)
-        on_var = tk.IntVar(value=int(scr_cfg.get("on_hour", 7)))
-        on_val_lbl = ttk.Label(sched, text=f"{on_var.get():02d}:00")
-        on_val_lbl.grid(row=2, column=2, sticky="w", padx=8, pady=4)
+            for idx, item in enumerate(scr_cfg.get("schedules", []), start=1):
+                row = ttk.Frame(rows_container)
+                row.grid(row=idx, column=0, sticky="we", pady=4)
+                row.columnconfigure(1, weight=1)
+                row.columnconfigure(2, weight=0)
+                row.columnconfigure(3, weight=0)
+                row.columnconfigure(4, weight=0)
 
-        _on_lock = {"updating": False}
-        def _on_snap(v):
-            if _on_lock["updating"]:
-                return
-            try:
-                raw = float(v)
-            except Exception:
-                raw = float(on_var.get())
-            snapped = int(round(raw))
-            snapped = max(0, min(23, snapped))
-            if snapped != int(raw):
-                _on_lock["updating"] = True
-                on_scale.set(snapped)
-                _on_lock["updating"] = False
-            on_var.set(snapped)
-            on_val_lbl.config(text=f"{snapped:02d}:00")
+                enabled_var = tk.BooleanVar(value=bool(item.get("enabled", False)))
+                ttk.Checkbutton(row, variable=enabled_var).grid(row=0, column=0, padx=(0,8))
 
-        on_scale = ttk.Scale(sched, from_=0, to=23, orient="horizontal", length=620, command=_on_snap)
-        on_scale.set(on_var.get())
-        on_scale.grid(row=2, column=1, sticky="we", padx=(0, 8), pady=4)
+                # days picker: 7 toggles
+                days_frame = ttk.Frame(row); days_frame.grid(row=0, column=1, sticky="w", padx=(0,8))
+                day_vars = []
+                chosen = set(int(d) for d in item.get("days", []))
+                for d in range(7):
+                    v = tk.BooleanVar(value=(d in chosen))
+                    cb = ttk.Checkbutton(days_frame, text=days_labels[d], variable=v)
+                    cb.pack(side="left", padx=2)
+                    day_vars.append(v)
 
-        apply_sched_btn = ttk.Button(sched, text="Apply Schedule")
-        apply_sched_btn.grid(row=3, column=0, sticky="w", padx=8, pady=(8, 8))
+                # container with scale + live label so the time is visible
+                def _mk_hour_cell(parent, init_val, on_change):
+                    cell = ttk.Frame(parent)
+                    cell.columnconfigure(0, weight=1)
+                    sc = ttk.Scale(cell, from_=0, to=23, orient="horizontal", length=180)
+                    sc.grid(row=0, column=0, sticky="we")
+                    lbl = ttk.Label(cell, text=f"{int(init_val):02d}:00")
+                    lbl.grid(row=0, column=1, sticky="w", padx=(6,0))
 
-#endregion screen_tab
+                    var = tk.IntVar(value=int(init_val))
+                    lock = {"updating": False}
 
-#region helpers
-        # ---------- platform helpers ----------
+                    def _snap(v):
+                        if lock["updating"]: return
+                        try: raw = float(v)
+                        except: raw = float(var.get())
+                        snapped = int(round(raw))
+                        snapped = max(0, min(23, snapped))
+                        if snapped != int(raw):
+                            lock["updating"] = True
+                            sc.set(snapped)
+                            lock["updating"] = False
+                        var.set(snapped)
+                        lbl.config(text=f"{snapped:02d}:00")
+                        try:
+                            on_change()
+                        except Exception:
+                            pass
+
+                    sc.configure(command=_snap)
+                    sc.set(int(init_val))
+                    return cell, sc, var, lbl
+
+                off = int(item.get("off_hour", 0)) % 24
+                on  = int(item.get("on_hour", 7)) % 24
+
+                # summary window label
+                window_lbl = ttk.Label(row, text=f"{off:02d}:00 -> {on:02d}:00")
+                window_lbl.grid(row=0, column=4, sticky="w", padx=(0,8))
+
+                def _update_window_label():
+                    window_lbl.config(text=f"{int(off_var.get()):02d}:00 -> {int(on_var.get()):02d}:00")
+
+                off_cell, off_sc, off_var, _off_lbl = _mk_hour_cell(row, off, _update_window_label)
+                on_cell,  on_sc,  on_var,  _on_lbl  = _mk_hour_cell(row, on,  _update_window_label)
+                off_cell.grid(row=0, column=2, sticky="we", padx=(0,8))
+                on_cell.grid(row=0, column=3, sticky="we", padx=(0,8))
+
+                def _delete_schedule(i=idx-1):
+                    try:
+                        scr_cfg["schedules"].pop(i)
+                    except Exception:
+                        pass
+                    _mirror_first_enabled_schedule_to_legacy(scr_cfg)
+                    _save_settings()
+                    _render_schedules()
+                    _wake_worker()
+
+                ttk.Button(row, text="Delete", command=_delete_schedule).grid(row=0, column=5)
+
+                def _commit_row(i=idx-1):
+                    days = [d for d, v in enumerate(day_vars) if v.get()]
+                    scr_cfg["schedules"][i] = {
+                        "enabled": bool(enabled_var.get()),
+                        "off_hour": int(off_var.get()),
+                        "on_hour": int(on_var.get()),
+                        "days": days
+                    }
+                    _mirror_first_enabled_schedule_to_legacy(scr_cfg)
+                    _save_settings()
+                    _wake_worker()
+                    _update_window_label()
+
+                enabled_var.trace_add("write", lambda *_: _commit_row())
+                for v in day_vars: v.trace_add("write", lambda *_: _commit_row())
+                off_sc.bind("<ButtonRelease-1>", lambda _e: _commit_row())
+                on_sc.bind("<ButtonRelease-1>",  lambda _e: _commit_row())
+
+                # initialize summary label text in case values were normalized
+                _update_window_label()
+
+        _render_schedules()
+
+        def _add_schedule():
+            scr_cfg["schedules"].append({
+                "enabled": True,
+                "off_hour": 0,
+                "on_hour": 7,
+                "days": [0,1,2,3,4,5,6]
+            })
+            _mirror_first_enabled_schedule_to_legacy(scr_cfg)
+            _save_settings()
+            _render_schedules()
+            _wake_worker()
+
+        add_row = ttk.Frame(sched_frame); add_row.grid(row=1, column=0, sticky="we", padx=8, pady=(0,8))
+        ttk.Button(add_row, text="Add schedule", command=_add_schedule).pack(side="left")
+
+        # ===================== Screen helpers =====================
         def list_outputs():
             try:
                 out = subprocess.check_output(["wlr-randr"], universal_newlines=True, stderr=subprocess.DEVNULL)
@@ -1183,64 +1260,6 @@ class PhotoFrame(tk.Frame, iFrame):
             outs = list_outputs()
             outs.sort(key=lambda n: (0 if n.upper().startswith("DSI") else 1, n))
             return outs[0] if outs else None
-
-        def list_backlights():
-            base = "/sys/class/backlight"
-            if not os.path.isdir(base):
-                return []
-            devs = [d for d in os.listdir(base) if os.path.isdir(os.path.join(base, d))]
-            devs.sort(key=lambda n: (0 if n.startswith("rpi") or "rpi_backlight" in n or "raspberry" in n else 1, n))
-            return devs
-
-        def pick_default_backlight():
-            bls = list_backlights()
-            return bls[0] if bls else None
-
-        def read_brightness(dev):
-            base = os.path.join("/sys/class/backlight", dev)
-            try:
-                with open(os.path.join(base, "max_brightness"), "r") as f:
-                    maxb = int(f.read().strip())
-                with open(os.path.join(base, "brightness"), "r") as f:
-                    cur = int(f.read().strip())
-                return cur, maxb
-            except Exception:
-                return None, None
-
-        def _write_brightness_value(dev, value):
-            base = os.path.join("/sys/class/backlight", dev)
-            try:
-                with open(os.path.join(base, "brightness"), "w") as f:
-                    f.write(str(value))
-                return True
-            except PermissionError:
-                cmd = f"echo {value} | sudo tee {os.path.join(base, 'brightness')}"
-                try:
-                    subprocess.run(cmd, shell=True, check=True)
-                    return True
-                except subprocess.CalledProcessError as e:
-                    messagebox.showerror("Permission required", f"Failed to write brightness.\n\n{e}")
-                    return False
-            except Exception as e:
-                messagebox.showerror("Failed to set brightness", str(e))
-                return False
-
-        def set_brightness_percent(dev, percent, allow_zero=False):
-            percent = int(percent)
-            if not allow_zero:
-                percent = max(10, min(100, percent))
-            else:
-                percent = max(0, min(100, percent))
-            base = os.path.join("/sys/class/backlight", dev)
-            try:
-                with open(os.path.join(base, "max_brightness"), "r") as f:
-                    maxb = int(f.read().strip())
-                value = 0 if percent == 0 else int(round(percent * maxb / 100.0))
-                value = min(maxb, value)
-                return _write_brightness_value(dev, value)
-            except Exception as e:
-                messagebox.showerror("Failed to compute brightness", str(e))
-                return False
 
         def apply_orientation(transform):
             output = pick_default_output()
@@ -1266,30 +1285,22 @@ class PhotoFrame(tk.Frame, iFrame):
             if not dev:
                 messagebox.showerror("No backlight", "No /sys/class/backlight device found.")
                 return
-            pct = int(float(br_scale.get()))
+            try:
+                pct = int(float(br_scale.get()))
+            except Exception:
+                pct = int(scr_cfg.get("brightness", 100))
             if self._set_brightness_percent(dev, pct, allow_zero=False):
-                scr = self._ensure_screen_struct()
-                scr["brightness"] = pct
-                br_val_lbl.config(text=f"{pct}%")
+                scr = _ensure_screen_struct()
+                scr["brightness"] = max(10, min(100, pct))
+                br_val_lbl.config(text=f"{scr['brightness']}%")
                 _save_settings()
-                if hasattr(self, "_screen_sched_event") and self._screen_sched_event:
-                    self._screen_sched_event.set()
-
-        def on_apply_schedule():
-            scr = self._ensure_screen_struct()
-            scr["schedule_enabled"] = bool(enable_var.get())
-            scr["off_hour"] = int(off_var.get()) % 24
-            scr["on_hour"] = int(on_var.get()) % 24
-            _save_settings()
-            if hasattr(self, "_screen_sched_event") and self._screen_sched_event:
-                self._screen_sched_event.set()
+                _wake_worker()
 
         apply_orient_btn.config(command=on_apply_orientation)
         apply_br_btn.config(command=on_apply_brightness)
-        apply_sched_btn.config(command=on_apply_schedule)
 
         def apply_saved_on_open():
-            scr = self._ensure_screen_struct()
+            scr = _ensure_screen_struct()
             orient = scr.get("orientation")
             if orient in ("normal", "90", "180", "270"):
                 orient_var.set(orient)
@@ -1301,92 +1312,21 @@ class PhotoFrame(tk.Frame, iFrame):
             dev = self._pick_default_backlight()
             if dev:
                 self._set_brightness_percent(dev, pct, allow_zero=False)
-            off = int(scr.get("off_hour", 0))
-            onv = int(scr.get("on_hour", 7))
-            off_scale.set(off); off_var.set(off); off_val_lbl.config(text=f"{off:02d}:00")
-            on_scale.set(onv); on_var.set(onv); on_val_lbl.config(text=f"{onv:02d}:00")
 
         apply_saved_on_open()
 
-        def _hour_now():
-            try:
-                return int(time.strftime("%H"))
-            except Exception:
-                return 0
-
-        def _in_off_period(now_h, off_h, on_h):
-            if off_h == on_h:
-                return False
-            if off_h < on_h:
-                return off_h <= now_h < on_h
-            else:
-                return now_h >= off_h or now_h < on_h
-
-        def _screen_power_worker():
-            self._screen_power_state = getattr(self, "_screen_power_state", "unknown")
-            self._last_user_brightness = None
-            ev = self._screen_sched_event
-            while True:
-                scr = _ensure_screen_struct()
-                enabled = bool(scr.get("schedule_enabled", False))
-                off_h = int(scr.get("off_hour", 0)) % 24
-                on_h  = int(scr.get("on_hour", 7)) % 24
-                now_h = _hour_now()
-
-                desired = "off" if (enabled and _in_off_period(now_h, off_h, on_h)) else "on"
-
-                try:
-                    dev = pick_default_backlight()
-                    if dev:
-                        cur, maxb = read_brightness(dev)
-                        cur_pct = int(round(cur * 100.0 / maxb)) if (cur is not None and maxb) else None
-
-                        if desired == "off" and self._screen_power_state != "off":
-                            self._last_user_brightness = int(settings.get("screen", {}).get("brightness", 100))
-                            if cur_pct is not None and cur_pct > 0:
-                                self._last_user_brightness = cur_pct
-                            set_brightness_percent(dev, 0, allow_zero=True)
-                            self._screen_power_state = "off"
-
-                        elif desired == "on" and self._screen_power_state != "on":
-                            restore = int(settings.get("screen", {}).get("brightness", 100))
-                            if isinstance(self._last_user_brightness, int):
-                                restore = max(10, min(100, self._last_user_brightness))
-                            set_brightness_percent(dev, restore, allow_zero=False)
-                            self._screen_power_state = "on"
-                except Exception:
-                    logging.exception("screen power worker tick failed")
-
-                if ev.wait(timeout=30.0):
-                    try:
-                        ev.clear()
-                    except Exception:
-                        pass
-
-#endregion helpers
-
-#region about_tab
-        # ---------------- About tab ----------------
+        # ===================== About tab =====================
         try:
             about_cfg = settings.get("about", {}) if isinstance(settings, dict) else {}
             about_text = about_cfg.get("text", "Digital Photo Frame")
             about_image_path = about_cfg.get("image_path", "")
 
-            about_outer = ttk.Frame(about_frame)
-            about_outer.pack(fill="both", expand=True)
+            about_outer = ttk.Frame(about_frame); about_outer.pack(fill="both", expand=True)
+            for c in (0,1,2): about_outer.columnconfigure(c, weight=1 if c != 1 else 0)
+            for r in (0,1,2): about_outer.rowconfigure(r, weight=1 if r != 1 else 0)
 
-            about_outer.columnconfigure(0, weight=1)
-            about_outer.columnconfigure(1, weight=0)
-            about_outer.columnconfigure(2, weight=1)
-            about_outer.rowconfigure(0, weight=1)
-            about_outer.rowconfigure(1, weight=0)
-            about_outer.rowconfigure(2, weight=1)
-
-            content = ttk.Frame(about_outer)
-            content.grid(row=1, column=1, sticky="n")
-
-            about_lbl = ttk.Label(content, text=about_text, justify="center")
-            about_lbl.pack(anchor="center", padx=10, pady=(20, 10))
+            content = ttk.Frame(about_outer); content.grid(row=1, column=1, sticky="n")
+            about_lbl = ttk.Label(content, text=about_text, justify="center"); about_lbl.pack(anchor="center", padx=10, pady=(20, 10))
 
             def _update_wraplength(evt=None):
                 try:
@@ -1401,23 +1341,16 @@ class PhotoFrame(tk.Frame, iFrame):
                 try:
                     if os.path.isfile(about_image_path):
                         im = Image.open(about_image_path)
-
-                        # If GIF, keep animation
                         if getattr(im, "is_animated", False):
                             frames = [frame.copy().resize((250, 250), Image.Resampling.LANCZOS)
                                     for frame in ImageSequence.Iterator(im)]
                             self._about_img_ref = [ImageTk.PhotoImage(f) for f in frames]
-
-                            gif_lbl = ttk.Label(content)
-                            gif_lbl.pack(anchor="center", pady=(0, 20))
-
+                            gif_lbl = ttk.Label(content); gif_lbl.pack(anchor="center", pady=(0, 20))
                             def _animate(frame_idx=0):
                                 gif_lbl.configure(image=self._about_img_ref[frame_idx])
                                 next_idx = (frame_idx + 1) % len(self._about_img_ref)
                                 gif_lbl.after(im.info.get("duration", 100), _animate, next_idx)
-
                             _animate()
-
                         else:
                             im = im.resize((300, 300), Image.Resampling.LANCZOS)
                             self._about_img_ref = ImageTk.PhotoImage(im)
@@ -1426,18 +1359,17 @@ class PhotoFrame(tk.Frame, iFrame):
                     logging.exception("Failed to load About image")
         except Exception:
             logging.exception("Building About tab failed")
-            # Leave a small fallback so the tab is not empty
             try:
                 ttk.Label(about_frame, text="About information unavailable (see AppLog.log).").pack(pady=20)
             except Exception:
                 pass
 
-        # Finalize modal behavior
+        # finalize modal behavior
         try:
             form.grab_set()
         except Exception:
             pass
-#endregion about_tab
+
 
     
 #endregion SettingsForm
