@@ -196,7 +196,9 @@ class PhotoFrame(tk.Frame, iFrame):
                 pct = max(10, min(100, int(scr.get("brightness", 100))))
                 self._set_brightness_percent(dev, pct, allow_zero=False)
 
-
+        self._ensure_autoupdate_struct()
+        self.start_autoupdate_scheduler()
+        
         self.update_display()
 
     def send_log_message(self, msg, logger: logging):
@@ -386,6 +388,117 @@ class PhotoFrame(tk.Frame, iFrame):
 #endregion
 
 
+#region auto_update
+    def _ensure_autoupdate_struct(self):
+        au = settings.setdefault("autoupdate", {})
+        au.setdefault("enabled", True)
+        au.setdefault("hour", 4)         # 04:00 local time
+        au.setdefault("minute", 0)
+        au.setdefault("repo_path", os.path.dirname(os.path.abspath(__file__)))
+        au.setdefault("remote", "origin")
+        # If branch is None, we auto-detect the current checked out branch
+        au.setdefault("branch", None)
+        return au
+
+    def _git_pull(self, repo_path=None, remote="origin", branch=None, timeout=180):
+        """
+        Run 'git pull --ff-only' in repo_path. Returns (ok, message).
+        Safe to call from a background thread.
+        """
+        try:
+            repo_path = repo_path or os.path.dirname(os.path.abspath(__file__))
+
+            if not shutil.which("git"):
+                msg = "git executable not found in PATH"
+                logging.warning(f"[AutoUpdate] {msg}")
+                return False, msg
+
+            if not os.path.isdir(os.path.join(repo_path, ".git")):
+                msg = f"Not a git repository: {repo_path}"
+                logging.info(f"[AutoUpdate] {msg}")
+                return False, msg
+
+            # Detect current branch if not provided
+            if not branch:
+                res = subprocess.run(
+                    ["git", "-C", repo_path, "rev-parse", "--abbrev-ref", "HEAD"],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=10
+                )
+                if res.returncode == 0:
+                    branch = res.stdout.strip() or None
+
+            cmd = ["git", "-C", repo_path, "pull", "--ff-only"]
+            if remote and branch:
+                cmd = ["git", "-C", repo_path, "pull", "--ff-only", remote, branch]
+
+            res = subprocess.run(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout
+            )
+            ok = (res.returncode == 0)
+            out = (res.stdout or "") + (res.stderr or "")
+            out = out.strip()
+            logging.info(f"[AutoUpdate] git pull {'succeeded' if ok else 'failed'}.\n{out}")
+            self._last_git_pull = {"ok": ok, "ts": time.time(), "msg": out}
+            return ok, out
+        except subprocess.TimeoutExpired:
+            msg = "git pull timed out"
+            logging.error(f"[AutoUpdate] {msg}")
+            return False, msg
+        except Exception as e:
+            msg = f"git pull error: {e}"
+            logging.exception(f"[AutoUpdate] {msg}")
+            return False, msg
+
+    def _compute_next_run_ts(self, hour, minute):
+        now = time.localtime()
+        # Construct today at HH:MM:00
+        target = time.struct_time((
+            now.tm_year, now.tm_mon, now.tm_mday, int(hour), int(minute), 0,
+            now.tm_wday, now.tm_yday, now.tm_isdst
+        ))
+        now_ts = time.time()
+        target_ts = time.mktime(target)
+        if target_ts <= now_ts:
+            target_ts += 24 * 60 * 60  # next day
+        return target_ts
+
+    def _autoupdate_worker(self):
+        # Run forever (until stop_event is set). Sleep in small chunks so we can exit promptly.
+        while not self.stop_event.is_set():
+            au = self._ensure_autoupdate_struct()
+            if not au.get("enabled", True):
+                # Check again in an hour if disabled
+                if self.stop_event.wait(timeout=3600):
+                    return
+                continue
+
+            next_ts = self._compute_next_run_ts(au.get("hour", 4), au.get("minute", 0))
+            while True:
+                if self.stop_event.is_set():
+                    return
+                remaining = next_ts - time.time()
+                if remaining <= 0:
+                    break
+                # Sleep in up-to-60s chunks so shutdown is responsive
+                self.stop_event.wait(timeout=min(remaining, 60))
+
+            # Time reached: do the pull
+            try:
+                self._git_pull(
+                    repo_path=au.get("repo_path"),
+                    remote=au.get("remote", "origin"),
+                    branch=au.get("branch")
+                )
+            except Exception:
+                # Logged inside _git_pull
+                pass
+
+    def start_autoupdate_scheduler(self):
+        if getattr(self, "_autoupdate_thread", None):
+            return
+        self._autoupdate_thread = threading.Thread(target=self._autoupdate_worker, daemon=True)
+        self._autoupdate_thread.start()
+#endregion auto_update
 
 
 
@@ -636,10 +749,37 @@ class PhotoFrame(tk.Frame, iFrame):
                 form.destroy()
 
         def do_restart():
-            try:
-                restart_service(service_name)
-            except Exception as e:
-                messagebox.showerror("Restart failed", str(e))
+            def _worker():
+                # Attempt a pull first (best-effort; always try to restart after)
+                try:
+                    au = self._ensure_autoupdate_struct()
+                    ok, msg = self._git_pull(
+                        repo_path=au.get("repo_path"),
+                        remote=au.get("remote", "origin"),
+                        branch=au.get("branch")
+                    )
+                    logging.info(f"[Pre-Restart] git pull {'OK' if ok else 'FAILED'}")
+                    if not ok:
+                        # Show a non-blocking heads-up in the UI (restart still proceeds)
+                        form.after(0, lambda: messagebox.showwarning(
+                            "Git pull failed",
+                            f"Proceeding with restart.\n\nDetails:\n{msg[:2000]}"
+                        ))
+                except Exception as e:
+                    logging.exception("[Pre-Restart] git pull error")
+                    form.after(0, lambda: messagebox.showwarning(
+                        "Git pull exception",
+                        f"Proceeding with restart.\n\nDetails:\n{e}"
+                    ))
+
+                # Now restart the service
+                try:
+                    restart_service(service_name)
+                except Exception as e:
+                    form.after(0, lambda: messagebox.showerror("Restart failed", str(e)))
+
+            threading.Thread(target=_worker, daemon=True).start()
+
 
         ttk.Button(footer, text="Restart Service", command=do_restart).pack(side="right", padx=(0, 8))
         ttk.Button(footer, text="Close (Stop Service)", command=do_stop).pack(side="right")
