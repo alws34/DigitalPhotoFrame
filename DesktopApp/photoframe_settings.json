@@ -1,14 +1,25 @@
 {
   "font_name": "arial.ttf",
   "service_name": "PhotoFrame_Desktop_App",
-  "time_font_size": 80,
-  "date_font_size": 50,
+  "time_font_size": 120,
+  "date_font_size": 80,
   "margin_left": 80,
-  "margin_bottom": 80,
+  "margin_bottom": 30,
   "margin_right": 50,
   "spacing_between": 50,
-  "weather_api_key": "YOUR_ACCUWEATHER_API_KEY",
-  "location_key": "YOUR_LOCATION_KEY",
+
+  "accuweather_api_key": "",
+  "accuweather_location_key": "",
+
+  "open_meteo": {
+    "latitude": 32.0853,
+    "longitude": 34.7818,
+    "units": "metric",         
+    "timezone": "auto",   
+    "temperature_unit": "celsius",
+    "windspeed_unit": "kmh"
+  },
+
   "backend_configs": {
     "host": "0.0.0.0",
     "server_port": 5002,
@@ -17,6 +28,7 @@
     "stream_fps": 30,
     "supersecretkey": "YOUR_SUPERSECRET_KEY"
   },
+
   "stats": {
     "show": true,
     "font_size": 20,
@@ -37,6 +49,22 @@
     "brightness": 100,
     "schedule_enabled": true,
     "off_hour": 0,
-    "on_hour": 7
+    "on_hour": 7,
+    "schedules": [
+      {
+        "enabled": true,
+        "off_hour": 0,
+        "on_hour": 7,
+        "days": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ]
+      }
+    ]
   }
 }

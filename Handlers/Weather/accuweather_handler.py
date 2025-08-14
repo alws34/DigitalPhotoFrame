@@ -10,7 +10,7 @@ from PIL import Image
 import requests
 from iFrame import iFrame
 
-class weather_handler():
+class accuweather_handler():
 
     def __init__(self, frame: iFrame, settings: dict):
         self.Frame = frame
@@ -58,8 +58,8 @@ class weather_handler():
             self.Frame.send_log_message("Fetching weather data...", logging.info)
 
             # Retrieve API key and location key from settings
-            api_key = self.settings.get("weather_api_key", "")
-            location_key = self.settings.get("location_key", "")
+            api_key = self.settings.get("accuweather_api_key", "")
+            location_key = self.settings.get("accuweather_location_key", "")
 
             if not api_key or not location_key:
                 self.Frame.send_log_message("AccuWeather API key or location key is missing.", logging.error)

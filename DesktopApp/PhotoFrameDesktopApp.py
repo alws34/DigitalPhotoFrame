@@ -23,7 +23,8 @@ from tkinter import messagebox
 from PIL import ImageSequence
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from Handlers.weather_handler import weather_handler
+from Handlers.Weather.accuweather_handler import accuweather_handler
+from Handlers.Weather.open_meteo_handler import OpenMeteoWeatherHandler
 from WebServer.API import Backend as BackendAPI
 from WebServer.PhotoFrameServer import PhotoFrameServer
 from iFrame import iFrame
@@ -157,7 +158,7 @@ class PhotoFrame(tk.Frame, iFrame):
         # self.fetch_thread = threading.Thread(target=self.frame_fetch_loop, daemon=True)
         # self.fetch_thread.start()
 
-        self.weather_client = weather_handler(frame = self, settings= settings)
+        self.weather_client = self.create_weather_client(self, settings)
         self.weather_thread = threading.Thread(target=self.weather_loop, daemon=True)
         self.weather_thread.start()
         self.stats_thread = threading.Thread(target=self.update_stats_loop, daemon=True)
@@ -253,6 +254,29 @@ class PhotoFrame(tk.Frame, iFrame):
             self.open_settings_form()
             self._tap_count = 0
     
+    def has_accuweather_keys(self, settings: dict) -> bool:
+        """Detect AccuWeather credentials (support both old & new key names)."""
+        if not isinstance(settings, dict):
+            return False
+        api_key = settings.get("accuweather_api_key") or settings.get("weather_api_key")
+        loc_key = settings.get("accuweather_location_key") or settings.get("location_key")
+        return bool(api_key and loc_key)
+
+    def create_weather_client(self, frame, settings: dict):
+        """
+        If AccuWeather keys exist -> use AccuWeather.
+        Else -> use Open-Meteo.
+        Also mirrors accuweather_* keys to the legacy names your handler expects.
+        """
+        if self.has_accuweather_keys(settings):
+            # Mirror to legacy keys expected by weather_handler
+            settings.setdefault("weather_api_key", settings.get("accuweather_api_key", ""))
+            settings.setdefault("location_key", settings.get("accuweather_location_key", ""))
+            frame.send_log_message("Weather: using AccuWeather (API key found).", logging.info)
+            return accuweather_handler(frame=frame, settings=settings)
+
+        frame.send_log_message("Weather: using Open-Meteo (no AccuWeather key).", logging.info)
+        return OpenMeteoWeatherHandler(frame=frame, settings=settings)
 
 #region screen_scheduler
     def _ensure_screen_struct(self):
@@ -1630,9 +1654,6 @@ class PhotoFrame(tk.Frame, iFrame):
         current_time = time.strftime("%H:%M:%S")
         current_date = time.strftime("%d/%m/%y")
 
-        font_path = self.font_path
-        time_font_size = settings['time_font_size']
-        date_font_size = settings['date_font_size']
         margin_left = settings['margin_left']
         margin_bottom = settings['margin_bottom']
         spacing = settings['spacing_between']
@@ -1642,43 +1663,70 @@ class PhotoFrame(tk.Frame, iFrame):
         pil_img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
         draw = ImageDraw.Draw(pil_img)
 
-        # Draw time and date
+        # --- Sizes ---
         time_bbox = draw.textbbox((0, 0), current_time, font=self.time_font)
         date_bbox = draw.textbbox((0, 0), current_date, font=self.date_font)
+        time_w, time_h = time_bbox[2] - time_bbox[0], time_bbox[3] - time_bbox[1]
+        date_w, date_h = date_bbox[2] - date_bbox[0], date_bbox[3] - date_bbox[1]
 
+        # Single baseline for bottom alignment
+        baseline_y = self.desired_height - margin_bottom
+
+        # --- Left side: time above date, both bottom-aligned to the same baseline ---
         x_date = margin_left
-        x_time = x_date + (date_bbox[2] - date_bbox[0] - (time_bbox[2] - time_bbox[0])) // 2
-        y_date = self.desired_height - margin_bottom
-        y_time = y_date - (date_bbox[3] - date_bbox[1]) - spacing
+        y_date_top = baseline_y - date_h
+        x_time = x_date + (date_w - time_w) // 2
+        y_time_top = y_date_top - spacing - time_h
 
-        draw.text((x_time, y_time), current_time, font=self.time_font, fill=font_color)
-        draw.text((x_date, y_date), current_date, font=self.date_font, fill=font_color)
+        draw.text((x_time, y_time_top), current_time, font=self.time_font, fill=font_color)
+        draw.text((x_date, y_date_top), current_date, font=self.date_font, fill=font_color)
 
-        # Draw weather if available
+        # --- Right side: Weather (text-only), bottom-aligned to the same baseline ---
         weather = self.weather_client.get_weather_data()
-        icon = self.weather_client.get_weather_icon()
+        if weather:
+            temp_text = f"{weather.get('temp', '--')}°{weather.get('unit', '')}"
+            desc_text = str(weather.get('description', '')).strip()
+            line1 = f"{temp_text}  •  {desc_text}" if desc_text else temp_text
 
-        if weather and icon:
-            temp_text = f"{weather['temp']}°{weather['unit']}"
-            desc_text = weather['description']
+            extras = []
+            wind = weather.get("wind_speed") or weather.get("wind_kmh") or weather.get("wind_mph")
+            if wind is not None:
+                wu = (weather.get("wind_unit") or "").lower()
+                wind_str = f"Wind: {wind}"
+                if "wind_kmh" in weather or wu == "kmh":
+                    extras.append(f"{wind_str} km/h")
+                elif "wind_mph" in weather or wu == "mph":
+                    extras.append(f"{wind_str} mph")
+                elif wu == "ms":
+                    extras.append(f"{wind_str} m/s")
+                elif wu == "kn":
+                    extras.append(f"{wind_str} kn")
+                else:
+                    extras.append(wind_str)
 
-            temp_bbox = draw.textbbox((0, 0), temp_text, font=self.time_font)
-            desc_bbox = draw.textbbox((0, 0), desc_text, font=self.font_desc)
+            humidity = weather.get("humidity")
+            if humidity is not None:
+                extras.append(f"Humidity {humidity}%")
 
-            icon_size = 100
-            x_icon = self.desired_width - margin_right - icon_size
-            y_icon = self.desired_height - margin_bottom - icon_size
+            line2 = " • ".join(extras) if extras else None
+            lines = [line1] + ([line2] if line2 else [])
 
-            x_temp = x_icon - spacing - (temp_bbox[2] - temp_bbox[0])
-            y_temp = y_icon + (icon_size - (temp_bbox[3] - temp_bbox[1])) // 2
+            # Measure and bottom-align the whole block to baseline_y
+            line_spacing = 6
+            line_bboxes = [draw.textbbox((0, 0), ln, font=self.date_font) for ln in lines]
+            line_heights = [bb[3] - bb[1] for bb in line_bboxes]
+            block_height = sum(line_heights) + (len(lines) - 1) * line_spacing
 
-            x_desc = x_temp
-            y_desc = y_temp + (temp_bbox[3] - temp_bbox[1]) + 10
+            x_right = self.desired_width - margin_right
+            y_top = baseline_y - block_height  # <-- bottom of block = baseline_y
 
-            icon_resized = icon.resize((icon_size, icon_size), Image.Resampling.LANCZOS)
-            pil_img.paste(icon_resized, (x_icon, y_icon), icon_resized)
-            draw.text((x_temp, y_temp), temp_text, font=self.date_font , fill=font_color)
-            draw.text((x_desc, y_desc), desc_text, font=self.date_font, fill=font_color)
+            y = y_top
+            for ln in lines:
+                bb = draw.textbbox((0, 0), ln, font=self.date_font)
+                w = bb[2] - bb[0]
+                x = x_right - w
+                draw.text((x, y), ln, font=self.date_font, fill=font_color)
+                y += (bb[3] - bb[1]) + line_spacing
 
         frame_with_text = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
