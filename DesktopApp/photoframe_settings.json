@@ -7,17 +7,20 @@
   "margin_bottom": 30,
   "margin_right": 50,
   "spacing_between": 50,
-
-  "accuweather_api_key": "",
-  "accuweather_location_key": "",
+  "accuweather_api_key": "YOUR_ACCUWEATHER_API_KEY",
+  "accuweather_location_key": "YOUR_LOCATION_KEY",
 
   "open_meteo": {
     "latitude": 32.0853,
     "longitude": 34.7818,
-    "units": "metric",         
-    "timezone": "auto",   
+    "units": "metric",
+    "timezone": "auto",
     "temperature_unit": "celsius",
-    "windspeed_unit": "kmh"
+    "windspeed_unit": "kmh",
+    "wind_speed_unit": "kmh",
+    "precipitation_unit": "mm",
+    "timeformat": "iso8601",
+    "cache_ttl_minutes": 60
   },
 
   "backend_configs": {
@@ -28,7 +31,6 @@
     "stream_fps": 30,
     "supersecretkey": "YOUR_SUPERSECRET_KEY"
   },
-
   "stats": {
     "show": true,
     "font_size": 20,
@@ -49,12 +51,12 @@
     "brightness": 100,
     "schedule_enabled": true,
     "off_hour": 0,
-    "on_hour": 7,
+    "on_hour": 8,
     "schedules": [
       {
         "enabled": true,
         "off_hour": 0,
-        "on_hour": 7,
+        "on_hour": 8,
         "days": [
           0,
           1,
@@ -66,5 +68,13 @@
         ]
       }
     ]
+  },
+  "autoupdate": {
+    "enabled": true,
+    "hour": 4,
+    "minute": 0,
+    "repo_path": "",
+    "remote": "origin",
+    "branch": null
   }
 }

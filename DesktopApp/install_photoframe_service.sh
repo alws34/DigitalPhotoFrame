@@ -43,7 +43,6 @@ EOF
 echo "[0.21/8] Adding 'pi' to netdev group..."
 sudo usermod -aG netdev pi
 
-
 echo "[0.3/8] Reloading polkit (best effort)..."
 sudo systemctl restart polkit || true
 
@@ -52,7 +51,8 @@ sudo apt-get install -y \
   python3 python3-venv python3-dev python3-tk python3-pip \
   libatlas-base-dev libopenjp2-7 libjpeg-dev zlib1g-dev \
   libxcb-render0 libxcb-shm0 libxkbcommon-x11-0 \
-  libheif1 libheif-dev fonts-dejavu ca-certificates curl git
+  libheif1 libheif-dev fonts-dejavu ca-certificates curl git \
+  wlr-randr
 
 echo "[2/8] Creating virtual environment at $VENV_DIR ..."
 python3 -m venv "$VENV_DIR"
@@ -89,7 +89,9 @@ WorkingDirectory=$APP_DIR
 ExecStartPre=/bin/sh -c 'until [ -S /tmp/.X11-unix/X0 ] || [ -S /run/user/1000/wayland-0 ]; do sleep 1; done'
 ExecStartPre=/bin/sh -c 'until [ -S /run/user/1000/bus ]; do sleep 1; done'
 
-ExecStart=$PYTHON $APP_DIR/PhotoFrameDesktopApp.py
+# Launch the new entry point
+ExecStart=$PYTHON $APP_DIR/app.py
+
 Restart=always
 RestartSec=3
 TimeoutStartSec=0
@@ -116,7 +118,6 @@ EOF
 
 echo "[6/8] Reloading and enabling service..."
 sudo systemctl daemon-reload
-# ensure old symlinks (e.g., multi-user.target) are replaced with graphical.target
 sudo systemctl disable "$SERVICE_NAME" || true
 sudo systemctl enable "$SERVICE_NAME"
 sudo systemctl start "$SERVICE_NAME"
