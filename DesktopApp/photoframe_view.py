@@ -25,6 +25,13 @@ from autoupdater import AutoUpdater
 from stats_service import StatsService
 from overlay import OverlayRenderer
 from settings_form import SettingsForm
+from Handlers.MQTT.mqtt_bridge import MqttBridge
+
+from typing import Optional
+try:
+    from Handlers.MQTT.mqtt_bridge import MqttBridge
+except ImportError:
+    MqttBridge = None
 
 
 class PhotoFrameView(tk.Frame, iFrame):
@@ -86,6 +93,30 @@ class PhotoFrameView(tk.Frame, iFrame):
         self.autoupdater = AutoUpdater(self.settings, self.stop_event)
         self.autoupdater.start()
 
+        self.mqtt_bridge: Optional[MqttBridge] = None
+
+        mqtt_settings = self.settings.get("mqtt", {})
+        mqtt_enabled = bool(mqtt_settings.get("enabled", False))
+        mqtt_host = mqtt_settings.get("host", "").strip()
+
+        if mqtt_enabled and mqtt_host and MqttBridge is not None:
+            try:
+                self.mqtt_bridge = MqttBridge(
+                    view=self,
+                    settings=self.settings,
+                    #device_name="Digital Photo Frame",
+                    #get_state=self._mqtt_state_snapshot,                 # -> dict of current stats
+                    #set_brightness=lambda pct: self._apply_brightness_from_mqtt(int(pct)),
+                    #pull_update=self.autoupdater.pull_now,               # returns (ok, msg)
+                    #restart_service=self._restart_service_sync,          # returns (ok, msg)
+                    #stop_service=self._stop_service_sync,                # returns (ok, msg)
+                )
+                self.mqtt_bridge.start()
+            except Exception as e:
+                self.send_log_message(f"MQTT bridge initialization failed: {e}", logging.ERROR)
+        else:
+            self.send_log_message("MQTT disabled (no host, disabled in settings, or missing MqttBridge).", logging.INFO)
+                
         self.current_frame: Optional[np.ndarray] = None
         self.after(33, self._update_display)
 
@@ -95,6 +126,101 @@ class PhotoFrameView(tk.Frame, iFrame):
         self.root.bind("<ButtonRelease-1>", self._on_button_release)
 
         self.settings_form: Optional[SettingsForm] = None
+        
+    def _apply_brightness_from_mqtt(self, pct: int) -> bool:
+        pct = max(10, min(100, int(pct)))
+        ok = self.screen.set_brightness_percent(pct, allow_zero=False)
+        if ok:
+            self.settings.setdefault("screen", {})["brightness"] = pct
+        return ok
+
+    def _restart_service_sync(self):
+        """Restart the photoframe systemd service. Return (ok, msg)."""
+        try:
+            name = self.service_name
+            r = subprocess.run(["systemctl", "--user", "status", f"{name}.service"],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if r.returncode in (0, 3):
+                cp = subprocess.run(["systemctl", "--user", "restart", f"{name}.service"],
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            else:
+                cp = subprocess.run(["sudo", "systemctl", "restart", f"{name}.service"],
+                                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            return (cp.returncode == 0), (cp.stdout or "").strip()
+        except Exception as e:
+            return False, str(e)
+
+    def _stop_service_sync(self):
+        """Stop the photoframe systemd service. Return (ok, msg)."""
+        try:
+            name = self.service_name
+            cp = subprocess.run(["sudo", "systemctl", "stop", f"{name}.service"],
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            return (cp.returncode == 0), (cp.stdout or "").strip()
+        except Exception as e:
+            return False, str(e)
+
+    def _get_current_ssid(self) -> str:
+        try:
+            out = subprocess.check_output(
+                ["nmcli", "-t", "-f", "NAME", "connection", "show", "--active"],
+                universal_newlines=True, stderr=subprocess.DEVNULL, timeout=3
+            )
+            lines = [l for l in out.splitlines() if l]
+            return lines[0] if lines else "N/A"
+        except Exception:
+            return "N/A"
+
+    def _mqtt_state_snapshot(self) -> dict:
+        """
+        Build a single dict with everything the bridge should publish:
+        IP, Wi-Fi SSID, CPU %, temp, RAM %, RAM used/total, and brightness.
+        """
+        # Parse the StatsService cached text robustly
+        cpu_pct = None
+        ram_pct = None
+        ram_used = None
+        ram_total = None
+        cpu_temp = None
+
+        try:
+            lines = (self.stats.cached or "").splitlines()
+            # CPU: 12%
+            if len(lines) >= 1:
+                import re
+                m = re.search(r"(\d+)\s*%", lines[0])
+                cpu_pct = int(m.group(1)) if m else None
+
+            # RAM: 34% (1234/4096MB)
+            if len(lines) >= 2:
+                import re
+                m_pct = re.search(r"(\d+)\s*%", lines[1])
+                ram_pct = int(m_pct.group(1)) if m_pct else None
+                m_mb = re.search(r"\((\d+)\s*/\s*(\d+)MB\)", lines[1])
+                if m_mb:
+                    ram_used = int(m_mb.group(1))
+                    ram_total = int(m_mb.group(2))
+
+            # CPU Temp: 51.2°C
+            if len(lines) >= 3:
+                import re
+                m = re.search(r"(-?\d+(\.\d+)?)", lines[2])
+                cpu_temp = float(m.group(1)) if m else None
+        except Exception:
+            pass
+
+        return {
+            "ip_address": get_local_ip(),
+            "wifi_ssid": self._get_current_ssid(),
+            "cpu_percent": cpu_pct,
+            "cpu_temp_c": cpu_temp,
+            "ram_percent": ram_pct,
+            "ram_used_mb": ram_used,
+            "ram_total_mb": ram_total,
+            "screen_brightness": int(self.settings.get("screen", {}).get("brightness", 100)),
+            "service_name": self.service_name,
+            "device_name": self.settings.get("about", {}).get("text", "Digital Photo Frame"),
+        }
 
     # --------- iFrame logging hook ----------
     def send_log_message(self, msg: str, logger=logging.info) -> None:
@@ -332,6 +458,11 @@ class PhotoFrameView(tk.Frame, iFrame):
     # --------- lifecycle ----------
     def stop(self) -> None:
         self.stop_event.set()
+        try:
+            if hasattr(self, "mqtt_bridge") and self.mqtt_bridge:
+                self.mqtt_bridge.stop()
+        except Exception:
+            pass
 
     def _on_close(self) -> None:
         self.stop()

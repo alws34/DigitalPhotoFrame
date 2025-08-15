@@ -9,7 +9,6 @@
   "spacing_between": 50,
   "accuweather_api_key": "YOUR_ACCUWEATHER_API_KEY",
   "accuweather_location_key": "YOUR_LOCATION_KEY",
-
   "open_meteo": {
     "latitude": 32.0853,
     "longitude": 34.7818,
@@ -22,7 +21,6 @@
     "timeformat": "iso8601",
     "cache_ttl_minutes": 60
   },
-
   "backend_configs": {
     "host": "0.0.0.0",
     "server_port": 5002,
@@ -69,12 +67,27 @@
       }
     ]
   },
+  "mqtt": {
+    "enabled": true,
+    "host": "",
+    "port": 1883,
+    "username": "",
+    "password": "",
+    "tls": false,
+    "client_id": "photoframe-livingroom",
+    "base_topic": "photoframe",
+    "discovery": true,
+    "discovery_prefix": "homeassistant",
+    "interval_seconds": 1,
+    "retain_config": true
+  },
   "autoupdate": {
     "enabled": true,
     "hour": 4,
     "minute": 0,
     "repo_path": "",
     "remote": "origin",
-    "branch": null
+    "branch": null,
+    "shallow_ok": true
   }
 }
