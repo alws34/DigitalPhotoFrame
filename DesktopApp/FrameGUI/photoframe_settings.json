@@ -27,6 +27,8 @@
     "stream_width": 1920,
     "stream_height": 1080,
     "stream_fps": 30,
+    "idle_fps": 1,
+    "max_gui_fps": 30,
     "supersecretkey": "YOUR_SUPERSECRET_KEY"
   },
   "stats": {
@@ -35,8 +37,8 @@
     "font_color": "yellow"
   },
   "image_quality_encoding": 100,
-  "animation_duration": 10,
-  "delay_between_images": 10,
+  "animation_duration": 5,
+  "delay_between_images": 30,
   "animation_fps": 30,
   "allow_translucent_background": true,
   "image_dir": "Images",
@@ -55,15 +57,7 @@
         "enabled": true,
         "off_hour": 0,
         "on_hour": 8,
-        "days": [
-          0,
-          1,
-          2,
-          3,
-          4,
-          5,
-          6
-        ]
+        "days": [0, 1, 2, 3, 4, 5, 6]
       }
     ]
   },
@@ -78,7 +72,7 @@
     "base_topic": "photoframe",
     "discovery": true,
     "discovery_prefix": "homeassistant",
-    "interval_seconds": 1,
+    "interval_seconds": 2,
     "retain_config": true
   },
   "autoupdate": {
