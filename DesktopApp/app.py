@@ -10,7 +10,7 @@ sys.path.append(os.path.abspath(os.path.join(BASE_DIR, "..")))
 
 from logging_setup import init_logging
 from config import load_settings
-from photoframe_view import PhotoFrameView
+from FrameGUI.photoframe_view import PhotoFrameView
 
 
 def main() -> None:

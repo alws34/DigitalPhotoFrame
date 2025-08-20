@@ -21,8 +21,6 @@ from Utilities.observer import ImagesObserver
 from iFrame import iFrame
 from EffectHandler import EffectHandler
 
-
-#from Utilities.NotificationManager import NotificationManager
 #endregion imports
 
 # region Logging Setup
@@ -41,15 +39,16 @@ logging.getLogger().addHandler(console_handler)
 logging.info("PhotoFrame application starting...")
 # endregion Logging Setup
 
-SETTINGS_PATH = "settings.json"
+SETTINGS_PATH = ""
 class AnimationStatus(Enum):
     ANIMATION_FINISHED = 1
     ANIMATION_ERROR = 2
 
 
 class PhotoFrameServer(iFrame):
-    def __init__(self, width=1920, height=1080, iframe: iFrame = None, images_dir = None):
+    def __init__(self, width=1920, height=1080, iframe: iFrame = None, images_dir = None, settings_path = "settings.json"):
         self.set_logger(logging)
+        SETTINGS_PATH = settings_path
         self.settings = SettingsHandler(SETTINGS_PATH, logging)
         if not self.set_images_dir(images_dir=images_dir):
             logging.error("Failed to set images directory. Exiting.")
@@ -154,8 +153,8 @@ class PhotoFrameServer(iFrame):
         self.frame_to_stream = frame
         if hasattr(self, 'm_api'):
             self.m_api._new_frame_ev.set()
-        if self._gui_frame:
-            self._gui_frame.update_frame_to_stream(frame)    
+        if self._gui_frame and hasattr(self._gui_frame, "publish_frame_from_backend"):
+            self._gui_frame.publish_frame_from_backend(frame) 
             
     def get_live_frame(self):
         return self.frame_to_stream
@@ -244,7 +243,11 @@ class PhotoFrameServer(iFrame):
         if self.status == AnimationStatus.ANIMATION_FINISHED:
             self.current_image = self.next_image
             return AnimationStatus.ANIMATION_FINISHED
-
+    
+    def publish_frame_from_backend(self, frame):
+        pass
+    
+    
     def run_photoframe(self):
         self.shuffled_images = self.image_handler.shuffle_images(self.images)
         self.current_image = imread(self.get_random_image())

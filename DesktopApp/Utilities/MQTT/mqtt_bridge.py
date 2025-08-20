@@ -20,7 +20,7 @@ else:
     MqttClient = Any
 
 try:
-    from utils_net import get_local_ip as _get_local_ip_util
+    from Utilities.network_utils import get_local_ip as _get_local_ip_util
 except Exception:
     _get_local_ip_util = None
 

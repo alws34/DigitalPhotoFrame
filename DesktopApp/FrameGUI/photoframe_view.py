@@ -9,29 +9,23 @@ import logging
 import subprocess
 import numpy as np
 from typing import Dict, Any, Optional
-
 import tkinter as tk
 from tkinter import ttk, messagebox
 from PIL import Image, ImageTk
 
-from WebServer.API import Backend as BackendAPI
-from WebServer.PhotoFrameServer import PhotoFrameServer
+from WebAPI.API import Backend as BackendAPI
+from FrameServer.PhotoFrameServer import PhotoFrameServer
 from iFrame import iFrame
 
-from utils_net import get_local_ip
-from weather_adapter import build_weather_client
-from screen_scheduler import ScreenController
-from autoupdater import AutoUpdater
-from stats_service import StatsService
-from overlay import OverlayRenderer
-from settings_form import SettingsForm
-from Handlers.MQTT.mqtt_bridge import MqttBridge
+from Utilities.network_utils import get_local_ip
+from Utilities.Weather.weather_adapter import build_weather_client
+from Utilities.screen_utils import ScreenController
+from Utilities.autoupdate_utils import AutoUpdater
+from Utilities.stats_utils import StatsService
+from Utilities.MQTT.mqtt_bridge import MqttBridge
 
-from typing import Optional
-try:
-    from Handlers.MQTT.mqtt_bridge import MqttBridge
-except ImportError:
-    MqttBridge = None
+from FrameGUI.overlay import OverlayRenderer
+from FrameGUI.settings_form import SettingsForm
 
 
 class PhotoFrameView(tk.Frame, iFrame):
@@ -62,7 +56,11 @@ class PhotoFrameView(tk.Frame, iFrame):
 
         self.label = tk.Label(self, bg="black")
         self.label.pack(fill="both", expand=True)
-
+        
+        self._gui_new_frame_ev = threading.Event()
+        self._gui_frame_q = queue.Queue(maxsize=1)  # or maxsize=1 for lowest latency
+        self._start_gui_event_pump()
+            
         self.weather_client = build_weather_client(self, self.settings)
         self.weather_thread = threading.Thread(target=self._weather_loop, daemon=True)
         self.weather_thread.start()
@@ -84,7 +82,7 @@ class PhotoFrameView(tk.Frame, iFrame):
         )
         threading.Thread(target=self.server.run_photoframe, daemon=True).start()
 
-        self.api = BackendAPI(frame=self.server, settings=self.settings, image_dir=self.image_dir)
+        self.api = BackendAPI(frame=self.server, settings=self.settings, image_dir=self.image_dir, settings_path = "photoframe_settings.json")
         self.server.m_api = self.api
         threading.Thread(target=self.api.start, daemon=True).start()
 
@@ -118,7 +116,7 @@ class PhotoFrameView(tk.Frame, iFrame):
             self.send_log_message("MQTT disabled (no host, disabled in settings, or missing MqttBridge).", logging.INFO)
                 
         self.current_frame: Optional[np.ndarray] = None
-        self.after(33, self._update_display)
+        #self.after(33, self._update_display)
 
         self.root.bind_all("<Control-c>", lambda _e: self._on_close())
         self.root.bind_all("<ButtonRelease-1>", self._handle_triple_tap)
@@ -249,9 +247,40 @@ class PhotoFrameView(tk.Frame, iFrame):
             time.sleep(600)
 
     # --------- UI update ----------
-    def _update_display(self) -> None:
-        frame = self.server.get_live_frame()
-        if frame is not None:
+    # def _update_display(self) -> None:
+    #     frame = self.server.get_live_frame()
+    #     if frame is not None:
+    #         frame = self.overlay.resize_and_letterbox(frame, self.desired_width, self.desired_height)
+    #         margins = {
+    #             "left": int(self.settings.get("margin_left", 50)),
+    #             "bottom": int(self.settings.get("margin_bottom", 50)),
+    #             "right": int(self.settings.get("margin_right", 50)),
+    #             "spacing": int(self.settings.get("spacing_between", 10)),
+    #         }
+    #         weather = self.weather_client.data()
+    #         frame = self.overlay.render_datetime_and_weather(
+    #             frame_bgr=frame,
+    #             margins=margins,
+    #             weather=weather,
+    #             font_color=(255, 255, 255),
+    #         )
+    #         # if bool(self.settings.get("stats", {}).get("show", False)):
+    #         #     frame = self.overlay.render_stats(
+    #         #         frame_bgr=frame,
+    #         #         text=self.stats.cached,
+    #         #         color_name=self.settings.get("stats", {}).get("font_color", "yellow"),
+    #         #     )
+
+    #         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    #         pil_image = Image.fromarray(rgb)
+    #         image_tk = ImageTk.PhotoImage(pil_image)
+    #         self.label.config(image=image_tk)
+    #         self.label.image = image_tk
+
+    #     self.after(33, self._update_display)
+    
+    def _render_frame(self, frame: np.ndarray) -> None:
+        try:
             frame = self.overlay.resize_and_letterbox(frame, self.desired_width, self.desired_height)
             margins = {
                 "left": int(self.settings.get("margin_left", 50)),
@@ -266,21 +295,15 @@ class PhotoFrameView(tk.Frame, iFrame):
                 weather=weather,
                 font_color=(255, 255, 255),
             )
-            # if bool(self.settings.get("stats", {}).get("show", False)):
-            #     frame = self.overlay.render_stats(
-            #         frame_bgr=frame,
-            #         text=self.stats.cached,
-            #         color_name=self.settings.get("stats", {}).get("font_color", "yellow"),
-            #     )
-
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             pil_image = Image.fromarray(rgb)
             image_tk = ImageTk.PhotoImage(pil_image)
             self.label.config(image=image_tk)
             self.label.image = image_tk
-
-        self.after(33, self._update_display)
-
+        except Exception:
+            logging.exception("render_frame failed")
+            
+        
     # --------- Gestures ----------
     def _on_button_press(self, _event) -> None:
         if self._long_press_job is None:
@@ -454,7 +477,26 @@ class PhotoFrameView(tk.Frame, iFrame):
 
     def update_frame_to_stream(self, frame):
         self.current_frame = frame
-
+        
+    def publish_frame_from_backend(self, frame):
+        """
+        Called by the frame server on each new frame.
+        Keep only the newest frame, then wake the GUI pump.
+        Non-blocking, safe to call from non-Tk threads.
+        """
+        try:
+            while True:
+                if not hasattr(self, "_gui_frame_q"):
+                    continue 
+                self._gui_frame_q.get_nowait() 
+        except queue.Empty:
+            pass
+        try:
+            self._gui_frame_q.put_nowait(frame)
+        except queue.Full:
+            pass
+        self._gui_new_frame_ev.set()
+        
     # --------- lifecycle ----------
     def stop(self) -> None:
         self.stop_event.set()
@@ -467,3 +509,48 @@ class PhotoFrameView(tk.Frame, iFrame):
     def _on_close(self) -> None:
         self.stop()
         self.root.destroy()
+
+    
+    def _start_gui_event_pump(self) -> None:
+        """
+        Wait on _gui_new_frame_ev and schedule rendering back to the Tk thread.
+        Also do a very low-rate idle refresh in case an event is missed.
+        """
+        idle_fps = int(self.settings.get("backend_configs", {}).get("idle_fps", 1)) or 1
+        idle_delay = 1.0 / max(idle_fps, 1)
+
+        def worker():
+            last_render = 0.0
+            while not self.stop_event.is_set():
+                got = self._gui_new_frame_ev.wait(timeout=idle_delay)
+                now = time.time()
+                if got:
+                    self._gui_new_frame_ev.clear()
+                    self._post_render_latest_frame()
+                    last_render = now
+                else:
+                    if now - last_render >= idle_delay:
+                        self._post_render_latest_frame()
+                        last_render = now
+
+        threading.Thread(target=worker, name="GUI-EventPump", daemon=True).start()
+
+
+    def _post_render_latest_frame(self) -> None:
+        """
+        Drain to newest frame and render it on the Tk thread.
+        Falls back to server.get_live_frame() if queue is empty.
+        """
+        frame = None
+        try:
+            while True:
+                frame = self._gui_frame_q.get_nowait()
+        except queue.Empty:
+            pass
+
+        if frame is None:
+            frame = self.server.get_live_frame()
+        if frame is None:
+            return
+
+        self.after(0, lambda f=frame: self._render_frame(f))

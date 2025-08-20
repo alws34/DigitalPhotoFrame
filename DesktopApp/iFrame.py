@@ -21,7 +21,11 @@ class iFrame(ABC):
     @abstractmethod
     def update_images_list(self):
         pass
-
+    
+    @abstractmethod
+    def publish_frame_from_backend(self):
+        pass
+    
     @abstractmethod
     def update_frame_to_stream(self):
         pass

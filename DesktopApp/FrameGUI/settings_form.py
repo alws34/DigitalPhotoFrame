@@ -9,7 +9,7 @@ from PIL import Image, ImageTk
 import tkinter as tk
 from tkinter import ttk, messagebox
 
-from utils_net import get_local_ip
+from Utilities.network_utils import get_local_ip
 
 
 class SettingsForm:
