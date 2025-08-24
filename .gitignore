@@ -1,10 +1,8 @@
-/images/*
-/Effects/__pycache__/*
-Images/*
-*/env/*
-#users.json
-#PhotoFrame.log
-*__pycache__/*
+env/*
+users.jsons
+PhotoFrame.log
+*pycache*
 *.pyc
-WebServer/Images/*
-DesktopApp/Images/*
+Images/*
+*.json
+!photoframe_settings.json

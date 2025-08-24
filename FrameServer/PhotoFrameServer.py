@@ -19,7 +19,7 @@ import numpy as np
 import json
 from datetime import datetime, timezone
 
-from WebServer.Settings import SettingsHandler
+from Settings import SettingsHandler
 from WebAPI.API import Backend
 from image_handler import Image_Utils
 from Utilities.observer import ImagesObserver
