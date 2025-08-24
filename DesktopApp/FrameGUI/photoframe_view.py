@@ -30,8 +30,27 @@ class PhotoFrameView(tk.Frame, iFrame):
     Tkinter client. Displays frames only. All overlay work is done on the server.
     publish_frame_from_backend schedules direct GUI updates without custom queues/threads.
     """
-    def __init__(self, root: tk.Tk, settings: Dict[str, Any], desired_width: int, desired_height: int) -> None:
+    def __init__(
+        self,
+        root: tk.Tk,
+        settings: Dict[str, Any],
+        desired_width: int,
+        desired_height: int,
+        settings_path: str = None,   # <-- NEW, default keeps backward-compat
+    ) -> None:
         super().__init__(root, bg="black")
+        self.root = root
+        self.settings = settings
+        self.desired_width = desired_width
+        self.desired_height = desired_height
+
+        # Resolve an absolute settings path if provided; else fall back to default
+        if settings_path:
+            self.settings_path = os.path.abspath(settings_path)
+        else:
+            base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+            self.settings_path = os.path.join(base_dir, "photoframe_settings.json")
+            
         self.root = root
         self.settings = settings
         self.desired_width = desired_width
@@ -74,7 +93,8 @@ class PhotoFrameView(tk.Frame, iFrame):
             width=self.desired_width,
             height=self.desired_height,
             iframe=self,
-            images_dir=self.image_dir
+            images_dir=self.image_dir,
+            settings_path=self.settings_path, 
         )
         threading.Thread(target=self.server.run_photoframe, daemon=True).start()
 

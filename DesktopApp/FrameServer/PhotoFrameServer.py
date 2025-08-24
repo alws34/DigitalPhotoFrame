@@ -148,12 +148,25 @@ class PhotoFrameServer(iFrame):
         if font_path is None:
             font_path = font_name
 
+        # Panels config
+        enable_panels = bool(self.settings.get("allow_translucent_background", False))
+        panels_cfg = self.settings.get("overlay_panels", {}) or {}
+        panel_alpha = int(panels_cfg.get("alpha", 128))
+        panel_padding = int(panels_cfg.get("padding", 12))
+        panel_radius = int(panels_cfg.get("radius", 10))
+        # Optional: keep your full-width contrast band together with panels
+        self._keep_band_with_panels = bool(panels_cfg.get("keep_band_with_panels", False))
+
         self.overlay = OverlayRenderer(
             font_path=font_path,
             time_font_size=int(self.settings.get("time_font_size", 48)),
             date_font_size=int(self.settings.get("date_font_size", 28)),
             stats_font_size=int(self.settings.get("stats", {}).get("font_size", 20)),
             desired_size=(self.screen_width, self.screen_height),
+            enable_panels=enable_panels,
+            panel_alpha=panel_alpha,
+            panel_padding=panel_padding,
+            panel_radius=panel_radius,
         )
 
         self._overlay_margins = {
@@ -163,24 +176,52 @@ class PhotoFrameServer(iFrame):
             "spacing": int(self.settings.get("spacing_between", 10)),
         }
 
-        # Weather client and fetch loop
+        # Weather client
         self.weather_client = build_weather_client(self, self.settings)
         try:
             self.weather_client.fetch()
             logging.info("Initial weather fetched: %s", str(self.weather_client.data())[:200])
         except Exception:
             logging.exception("Initial weather fetch failed")
+
+        # Start periodic updates: prefer client's own scheduler if available
         self._weather_stop = threading.Event()
-        self._weather_thread = threading.Thread(target=self._weather_loop, daemon=True)
+        if hasattr(self.weather_client, "initialize_weather_updates"):
+            try:
+                self.weather_client.initialize_weather_updates()
+                self._weather_thread = None  # managed by the client
+                logging.info("Weather updates initialized by provider.")
+            except Exception:
+                logging.exception("Failed to initialize provider-managed weather updates; falling back to local loop.")
+                self._start_local_weather_loop()
+        else:
+            self._start_local_weather_loop()
+
+        def _weather_loop(self) -> None:
+            while not getattr(self, "_weather_stop", threading.Event()).is_set():
+                try:
+                    self.weather_client.fetch()
+                except Exception:
+                    logging.exception("weather loop error (server)")
+                time.sleep(600)
+    
+    def _start_local_weather_loop(self) -> None:
+        def _weather_loop():
+            while not self._weather_stop.is_set():
+                try:
+                    self.weather_client.fetch()
+                except Exception:
+                    logging.exception("weather loop error (server)")
+                # wait with interruptibility
+                self._weather_stop.wait(600.0)
+        self._weather_thread = threading.Thread(target=_weather_loop, name="WeatherLoop", daemon=True)
         self._weather_thread.start()
 
-    def _weather_loop(self) -> None:
-        while not getattr(self, "_weather_stop", threading.Event()).is_set():
-            try:
-                self.weather_client.fetch()
-            except Exception:
-                logging.exception("weather loop error (server)")
-            time.sleep(600)
+    def _stop_weather_loop(self) -> None:
+        try:
+            self._weather_stop.set()
+        except Exception:
+            pass
 
     # ------------- 30 fps compositor loop -------------
     def _compositor_loop(self) -> None:
@@ -229,20 +270,15 @@ class PhotoFrameServer(iFrame):
         cv2.addWeighted(roi, 0.65, overlay, 0.35, 0.0, dst=roi)
 
     def _compose_final_frame(self, frame_bgr: np.ndarray) -> np.ndarray:
-        """
-        Server-side composition: resize/letterbox and draw datetime + weather every frame.
-        """
-        # Always letterbox/fit to target first
         composed = self.overlay.resize_and_letterbox(frame_bgr, self.screen_width, self.screen_height)
 
-        # Ensure readability under text
         try:
-            self._draw_contrast_band(composed)
+            # Only draw the old band if panels are disabled, or if explicitly requested
+            if (not self.overlay.enable_panels) or getattr(self, "_keep_band_with_panels", False):
+                self._draw_contrast_band(composed)
         except Exception:
-            # Non-fatal
             pass
 
-        # Overlay time/date/weather on every frame
         try:
             weather = self.weather_client.data() or {}
             composed = self.overlay.render_datetime_and_weather(
@@ -298,7 +334,25 @@ class PhotoFrameServer(iFrame):
         return self.is_running
 
     def send_log_message(self, msg, logger: logging):
-        logger(msg)
+        try:
+        # Prefer an instance logger if you set one in set_logger()
+            lg = getattr(self, "logger", None)
+            if callable(logger):
+                # A callable like logging.info / self.logger.info
+                logger(msg)
+            else:
+                # Assume a numeric level constant (int)
+                level = int(logger)
+                if lg is not None:
+                    lg.log(level, msg)
+                else:
+                    logging.log(level, msg)
+        except Exception:
+            # Ultimate fallback to keep logs flowing even if something is off
+            try:
+                (lg or logging).info(msg)
+            except Exception:
+                print(f"[PhotoFrame LOG] {msg}")
 
     def get_images_from_directory(self):
         image_extensions = [".jpg", ".jpeg", ".png", ".gif"]
@@ -439,7 +493,7 @@ class PhotoFrameServer(iFrame):
             logging.info("Shutting down.")
             self.is_running = False
             self._compositor_stop.set()
-            self._weather_stop.set()
+            self._stop_weather_loop() 
 
     def _start_api(self):
         self.m_api = Backend(frame=self, settings=self.settings, image_dir=self.IMAGE_DIR)
