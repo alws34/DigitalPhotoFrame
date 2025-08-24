@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-APP_DIR="/home/pi/Desktop/DigitalPhotoFrame/DesktopApp"
+APP_DIR="/home/pi/Desktop/DigitalPhotoFrame"
 ROOT_DIR="/home/pi/Desktop/DigitalPhotoFrame"
 REQS_FILE="$ROOT_DIR/requirements.txt"
 VENV_DIR="$APP_DIR/env"
