@@ -1,0 +1,380 @@
+/* General Reset and Layout */
+html, body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background-color: #1e1e1e;
+  color: #f0f0f0;
+  font-family: Arial, sans-serif;
+}
+
+.action-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.action-bar .close-btn {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  font-size: 1.2em;
+  cursor: pointer;
+}
+
+
+/* Top right buttons */
+.top-right {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  height: 100%;
+}
+
+#top-right button {
+  background-color: #333;
+  color: white;
+  border: none;
+  padding: 8px 14px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+#top-right button:hover {
+  background-color: #555;
+}
+
+/* Main content layout */
+#main-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  height: 100%;
+  padding-top: 60px;
+  box-sizing: border-box;
+}
+
+/* Fixed image display */
+/* #image-transition {
+  width: 60vw;
+  height: 50vh;
+  max-width: 1000px;
+  max-height: 700px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  background-color: #000;
+  border: 2px solid #444;
+  border-radius: 12px;
+  overflow: hidden;
+  margin: 0 5vw;
+} */
+#image-transition {
+  width: 100%;
+  max-width: 1000px;
+  aspect-ratio: 4 / 3; /* Maintains 4:3 ratio */
+  background-color: #000;
+  border: 2px solid #444;
+  border-radius: 12px;
+  overflow: hidden;
+  margin: 0 5vw;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+#image-transition img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+#top-left {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 1001;
+}
+
+.welcome-message {
+  font-weight: bold;
+  color: #ccc;
+  font-size: 16px;
+}
+
+/* Metadata section */
+#image-info {
+  text-align: center;
+  margin-top: 15px;
+}
+
+#caption span {
+  font-size: 12px;
+  font-weight: bold;
+}
+
+#image-info span[data-format="datetime"]::before {
+  content: attr(data-formatted);
+  display: inline;
+}
+
+/* Scrollable bottom area for gallery/settings */
+/* #bottom-scrollable {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 20px;
+  padding: 20px;
+  width: 100%;
+  max-height: 40vh;
+  overflow-y: auto;
+  box-sizing: border-box;
+  background-color: #111;
+  border-top: 2px solid #444;
+  box-shadow: inset 0 8px 10px rgba(0, 0, 0, 0.3);
+} */
+#bottom-scrollable {
+  position: relative;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  align-items: flex-start;
+  padding: 60px 20px 20px;
+  gap: 20px;
+  background-color: #111;
+  border-top: 2px solid #444;
+  box-shadow: inset 0 8px 10px rgba(0, 0, 0, 0.3);
+}
+.action-bar {
+  position: absolute;
+  top: 10px;
+  right: 20px;
+  z-index: 10;
+  display: flex;
+  gap: 10px;
+}
+.action-bar button {
+  background-color: #333;
+  color: white;
+  border: none;
+  padding: 8px 14px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.action-bar button:hover {
+  background-color: #555;
+}
+/* Image card styling */
+.image-card {
+  width: 220px;
+  background-color: #222;
+  padding: 10px;
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.image-card input[type="checkbox"] {
+  margin-top: 5px;
+}
+
+.image-card img {
+  width: 200px;
+  height: 200px;
+  object-fit: cover;
+  border-radius: 10px;
+  margin-bottom: 10px;
+  transition: transform 0.3s;
+}
+
+.image-card img:hover {
+  transform: scale(1.05);
+}
+
+.image-card button {
+  background-color: #333;
+  color: white;
+  border: none;
+  padding: 6px 10px;
+  border-radius: 5px;
+  margin: 2px;
+  cursor: pointer;
+}
+
+.image-card button:hover {
+  background-color: #444;
+}
+
+/* Modal styles */
+.modal {
+  display: none;
+  position: fixed;
+  z-index: 1000;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  background-color: rgba(0, 0, 0, 0.9);
+}
+
+.modal-content {
+  background-color: #2e2e2e;
+  margin: 10% auto;
+  padding: 20px;
+  border: 1px solid #888;
+  width: 70%;
+  color: white;
+  border-radius: 10px;
+  position: relative;
+}
+
+.close {
+  color: #aaa;
+  position: absolute;
+  top: 10px;
+  right: 20px;
+  font-size: 28px;
+  font-weight: bold;
+  cursor: pointer;
+}
+
+.close:hover,
+.close:focus {
+  color: white;
+  text-decoration: none;
+  cursor: pointer;
+}
+#dropZone {
+  border: 2px dashed #aaa;
+  padding: 20px;
+  margin-bottom: 20px;
+  text-align: center;
+  cursor: pointer;
+}
+
+.image-preview {
+  margin-bottom: 20px;
+}
+
+.image-preview table {
+  margin-top: 10px;
+}
+
+.modal-actions {
+  margin-top: 20px;
+  text-align: center;
+}
+
+.modal-actions button,
+.form-actions button {
+  background-color: #333;
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 5px;
+  margin: 5px;
+  cursor: pointer;
+}
+
+.modal-actions button:hover,
+.form-actions button:hover {
+  background-color: #555;
+}
+
+.form-group {
+  margin-bottom: 15px;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 5px;
+  font-weight: bold;
+}
+
+.form-group input[type="text"] {
+  width: 100%;
+  padding: 8px;
+  border: 1px solid #555;
+  border-radius: 4px;
+  background-color: #1e1e1e;
+  color: white;
+}
+
+#main-container {
+  padding-top: 70px; /* increased to clear top bar */
+}
+
+#top-bar {
+  position: fixed;
+  overflow: visible;    
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 50px;
+  background-color: #2b2b2b; /* Slightly brighter than background */
+  color: white;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0 20px; 
+  z-index: 1002;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.5);
+}
+
+/* Welcome Message */
+.top-left .welcome-message {
+  font-weight: bold;
+  font-size: 16px;
+  color: #e0e0e0;
+}
+
+.hamburger {
+  font-size: 24px;
+  user-select: none;
+  font-family: Arial, sans-serif;
+  font-weight: bold;
+  color: white;
+  z-index: 1003;
+  cursor: pointer;
+  padding: 8px 25px; 
+  border: none;
+  border-radius: 6px;
+  background-color: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dropdown-menu {
+  position: absolute;
+  top: 50px;
+  background-color: #333;
+  border: 1px solid #444;
+  border-radius: 6px;
+  margin-right: 20px;
+  right: 0;
+  padding: 10px;
+  display: none;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 1003;
+}
+
+.dropdown-menu button {
+  background-color: #444;
+  color: white;
+  border: none;
+  padding: 8px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  width: 150px;
+  text-align: left;
+}
+
+.dropdown-menu button:hover {
+  background-color: #555;
+}

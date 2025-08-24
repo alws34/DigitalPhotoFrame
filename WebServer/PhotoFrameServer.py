@@ -17,7 +17,7 @@ import psutil
 from WebServer.Settings import SettingsHandler
 from WebServer.API import Backend
 from WebServer.utilities.image_handler import Image_Utils
-from Handlers.observer import ImagesObserver
+from Utilities.observer import ImagesObserver
 from iFrame import iFrame
 from EffectHandler import EffectHandler
 

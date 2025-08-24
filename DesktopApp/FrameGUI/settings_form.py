@@ -9,7 +9,7 @@ from PIL import Image, ImageTk
 import tkinter as tk
 from tkinter import ttk, messagebox
 
-from utils_net import get_local_ip
+from Utilities.network_utils import get_local_ip
 
 
 class SettingsForm:
@@ -99,7 +99,8 @@ class SettingsForm:
 
     def _save_settings(self) -> None:
         try:
-            base_dir = os.path.dirname(os.path.abspath(__file__))
+            # Always write to DesktopApp/photoframe_settings.json
+            base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
             path = os.path.join(base_dir, "photoframe_settings.json")
             with open(path, "w") as f:
                 json.dump(self.settings, f, indent=2)

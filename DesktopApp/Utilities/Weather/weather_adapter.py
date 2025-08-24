@@ -2,8 +2,8 @@ import logging
 from typing import Dict, Any
 
 # Wrap your existing handlers behind a tiny adapter for a common interface.
-from Handlers.Weather.accuweather_handler import accuweather_handler
-from Handlers.Weather.open_meteo_handler import OpenMeteoWeatherHandler
+from Utilities.Weather.accuweather_handler import accuweather_handler
+from Utilities.Weather.open_meteo_handler import OpenMeteoWeatherHandler
 
 
 class WeatherClient:

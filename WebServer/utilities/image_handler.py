@@ -56,6 +56,9 @@ class Image_Utils():
 
     def resize_image_with_background(self, image, target_width, target_height):
         # Get the original dimensions of the image
+        if image is None:
+            return
+        
         original_height, original_width = image.shape[:2]
 
         # Calculate the aspect ratio of the image

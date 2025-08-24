@@ -3,40 +3,54 @@ import re
 import cv2
 import time
 import json
-import queue
 import threading
 import logging
 import subprocess
 import numpy as np
 from typing import Dict, Any, Optional
-
 import tkinter as tk
 from tkinter import ttk, messagebox
 from PIL import Image, ImageTk
 
-from WebServer.API import Backend as BackendAPI
-from WebServer.PhotoFrameServer import PhotoFrameServer
+from WebAPI.API import Backend as BackendAPI
+from FrameServer.PhotoFrameServer import PhotoFrameServer
 from iFrame import iFrame
 
-from utils_net import get_local_ip
-from weather_adapter import build_weather_client
-from screen_scheduler import ScreenController
-from autoupdater import AutoUpdater
-from stats_service import StatsService
-from overlay import OverlayRenderer
-from settings_form import SettingsForm
-from Handlers.MQTT.mqtt_bridge import MqttBridge
+from Utilities.network_utils import get_local_ip
+from Utilities.screen_utils import ScreenController
+from Utilities.autoupdate_utils import AutoUpdater
+from Utilities.stats_utils import StatsService
+from Utilities.MQTT.mqtt_bridge import MqttBridge
 
-from typing import Optional
-try:
-    from Handlers.MQTT.mqtt_bridge import MqttBridge
-except ImportError:
-    MqttBridge = None
+from FrameGUI.settings_form import SettingsForm
 
 
 class PhotoFrameView(tk.Frame, iFrame):
-    def __init__(self, root: tk.Tk, settings: Dict[str, Any], desired_width: int, desired_height: int) -> None:
+    """
+    Tkinter client. Displays frames only. All overlay work is done on the server.
+    publish_frame_from_backend schedules direct GUI updates without custom queues/threads.
+    """
+    def __init__(
+        self,
+        root: tk.Tk,
+        settings: Dict[str, Any],
+        desired_width: int,
+        desired_height: int,
+        settings_path: str = None,   # <-- NEW, default keeps backward-compat
+    ) -> None:
         super().__init__(root, bg="black")
+        self.root = root
+        self.settings = settings
+        self.desired_width = desired_width
+        self.desired_height = desired_height
+
+        # Resolve an absolute settings path if provided; else fall back to default
+        if settings_path:
+            self.settings_path = os.path.abspath(settings_path)
+        else:
+            base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+            self.settings_path = os.path.join(base_dir, "photoframe_settings.json")
+            
         self.root = root
         self.settings = settings
         self.desired_width = desired_width
@@ -48,85 +62,85 @@ class PhotoFrameView(tk.Frame, iFrame):
         self._long_press_job = None
         self._long_press_duration_ms = 5000
 
+        # Render control variables
+        self._tk_photo = None
+        self._last_render_time = 0.0
+        self._render_in_progress = False
+    
         self._init_window()
 
         base_path = os.path.dirname(os.path.abspath(__file__))
-        self.font_path = os.path.join(base_path, self.settings.get("font_name", "DejaVuSans.ttf"))
-        self.overlay = OverlayRenderer(
-            font_path=self.font_path,
-            time_font_size=int(self.settings.get("time_font_size", 48)),
-            date_font_size=int(self.settings.get("date_font_size", 28)),
-            stats_font_size=int(self.settings.get("stats", {}).get("font_size", 20)),
-            desired_size=(self.desired_width, self.desired_height),
-        )
+        project_root = os.path.abspath(os.path.join(base_path, ".."))
 
         self.label = tk.Label(self, bg="black")
         self.label.pack(fill="both", expand=True)
 
-        self.weather_client = build_weather_client(self, self.settings)
-        self.weather_thread = threading.Thread(target=self._weather_loop, daemon=True)
-        self.weather_thread.start()
-
+        # Stats for SettingsForm only
         self.stats = StatsService()
         self.stats_thread = threading.Thread(target=self.stats.loop_update, args=(self.stop_event.is_set,), daemon=True)
         self.stats_thread.start()
 
         self.base_path = base_path
-        self.image_dir = os.path.join(base_path, "Images")
+        self.image_dir = os.path.join(project_root, "Images")
+
+        settings_abs = os.path.join(project_root, "photoframe_settings.json")
+
         self.backend_port = int(self.settings.get("backend_configs", {}).get("server_port", 5001))
         self.service_name = self.settings.get("service_name", "photoframe")
 
+        # Local in-process server
         self.server = PhotoFrameServer(
             width=self.desired_width,
             height=self.desired_height,
             iframe=self,
-            images_dir=self.image_dir
+            images_dir=self.image_dir,
+            settings_path=self.settings_path, 
         )
         threading.Thread(target=self.server.run_photoframe, daemon=True).start()
 
-        self.api = BackendAPI(frame=self.server, settings=self.settings, image_dir=self.image_dir)
+        # Local Web API facade
+        self.api = BackendAPI(
+            frame=self.server,
+            settings=self.settings,
+            image_dir=self.image_dir,
+            settings_path=settings_abs
+        )
         self.server.m_api = self.api
         threading.Thread(target=self.api.start, daemon=True).start()
 
+        # Screen, autoupdate, MQTT
         self.screen = ScreenController(self.settings, self.stop_event)
         self.screen.start()
         self.autoupdater = AutoUpdater(self.settings, self.stop_event)
         self.autoupdater.start()
 
         self.mqtt_bridge: Optional[MqttBridge] = None
-
         mqtt_settings = self.settings.get("mqtt", {})
         mqtt_enabled = bool(mqtt_settings.get("enabled", False))
         mqtt_host = mqtt_settings.get("host", "").strip()
-
         if mqtt_enabled and mqtt_host and MqttBridge is not None:
             try:
                 self.mqtt_bridge = MqttBridge(
                     view=self,
                     settings=self.settings,
-                    #device_name="Digital Photo Frame",
-                    #get_state=self._mqtt_state_snapshot,                 # -> dict of current stats
-                    #set_brightness=lambda pct: self._apply_brightness_from_mqtt(int(pct)),
-                    #pull_update=self.autoupdater.pull_now,               # returns (ok, msg)
-                    #restart_service=self._restart_service_sync,          # returns (ok, msg)
-                    #stop_service=self._stop_service_sync,                # returns (ok, msg)
                 )
                 self.mqtt_bridge.start()
             except Exception as e:
                 self.send_log_message(f"MQTT bridge initialization failed: {e}", logging.ERROR)
         else:
             self.send_log_message("MQTT disabled (no host, disabled in settings, or missing MqttBridge).", logging.INFO)
-                
-        self.current_frame: Optional[np.ndarray] = None
-        self.after(33, self._update_display)
 
+        self.current_frame: Optional[np.ndarray] = None
+
+        # Input bindings
         self.root.bind_all("<Control-c>", lambda _e: self._on_close())
         self.root.bind_all("<ButtonRelease-1>", self._handle_triple_tap)
         self.root.bind("<ButtonPress-1>", self._on_button_press)
         self.root.bind("<ButtonRelease-1>", self._on_button_release)
 
         self.settings_form: Optional[SettingsForm] = None
-        
+
+    # --------- MQTT helpers ----------
     def _apply_brightness_from_mqtt(self, pct: int) -> bool:
         pct = max(10, min(100, int(pct)))
         ok = self.screen.set_brightness_percent(pct, allow_zero=False)
@@ -135,11 +149,10 @@ class PhotoFrameView(tk.Frame, iFrame):
         return ok
 
     def _restart_service_sync(self):
-        """Restart the photoframe systemd service. Return (ok, msg)."""
         try:
             name = self.service_name
             r = subprocess.run(["systemctl", "--user", "status", f"{name}.service"],
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             if r.returncode in (0, 3):
                 cp = subprocess.run(["systemctl", "--user", "restart", f"{name}.service"],
                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -151,7 +164,6 @@ class PhotoFrameView(tk.Frame, iFrame):
             return False, str(e)
 
     def _stop_service_sync(self):
-        """Stop the photoframe systemd service. Return (ok, msg)."""
         try:
             name = self.service_name
             cp = subprocess.run(["sudo", "systemctl", "stop", f"{name}.service"],
@@ -172,38 +184,24 @@ class PhotoFrameView(tk.Frame, iFrame):
             return "N/A"
 
     def _mqtt_state_snapshot(self) -> dict:
-        """
-        Build a single dict with everything the bridge should publish:
-        IP, Wi-Fi SSID, CPU %, temp, RAM %, RAM used/total, and brightness.
-        """
-        # Parse the StatsService cached text robustly
         cpu_pct = None
         ram_pct = None
         ram_used = None
         ram_total = None
         cpu_temp = None
-
         try:
             lines = (self.stats.cached or "").splitlines()
-            # CPU: 12%
             if len(lines) >= 1:
-                import re
                 m = re.search(r"(\d+)\s*%", lines[0])
                 cpu_pct = int(m.group(1)) if m else None
-
-            # RAM: 34% (1234/4096MB)
             if len(lines) >= 2:
-                import re
                 m_pct = re.search(r"(\d+)\s*%", lines[1])
                 ram_pct = int(m_pct.group(1)) if m_pct else None
                 m_mb = re.search(r"\((\d+)\s*/\s*(\d+)MB\)", lines[1])
                 if m_mb:
                     ram_used = int(m_mb.group(1))
                     ram_total = int(m_mb.group(2))
-
-            # CPU Temp: 51.2°C
             if len(lines) >= 3:
-                import re
                 m = re.search(r"(-?\d+(\.\d+)?)", lines[2])
                 cpu_temp = float(m.group(1)) if m else None
         except Exception:
@@ -229,7 +227,7 @@ class PhotoFrameView(tk.Frame, iFrame):
         except Exception:
             logging.info(str(msg))
 
-    # --------- Window setup ----------
+    # --------- Window ----------
     def _init_window(self) -> None:
         self.root.title("Digital Photo Frame V2.0")
         w, h = self.desired_width, self.desired_height
@@ -239,47 +237,38 @@ class PhotoFrameView(tk.Frame, iFrame):
         self.root.configure(bg="black")
         self.root.config(cursor="none")
 
-    # --------- Weather loop ----------
-    def _weather_loop(self) -> None:
-        while not self.stop_event.is_set():
-            try:
-                self.weather_client.fetch()
-            except Exception:
-                logging.exception("weather loop error")
-            time.sleep(600)
+    # --------- Rendering (display only) ----------
+    def _render_frame(self, frame: np.ndarray) -> None:
+        """
+        Display-only rendering. The frame is assumed to be final (server already composed).
+        Enforces ~30 fps.
+        """
+        if self._render_in_progress:
+            return
+        current_time = time.time()
+        if current_time - self._last_render_time < (1.0 / 30.0):
+            return
 
-    # --------- UI update ----------
-    def _update_display(self) -> None:
-        frame = self.server.get_live_frame()
-        if frame is not None:
-            frame = self.overlay.resize_and_letterbox(frame, self.desired_width, self.desired_height)
-            margins = {
-                "left": int(self.settings.get("margin_left", 50)),
-                "bottom": int(self.settings.get("margin_bottom", 50)),
-                "right": int(self.settings.get("margin_right", 50)),
-                "spacing": int(self.settings.get("spacing_between", 10)),
-            }
-            weather = self.weather_client.data()
-            frame = self.overlay.render_datetime_and_weather(
-                frame_bgr=frame,
-                margins=margins,
-                weather=weather,
-                font_color=(255, 255, 255),
-            )
-            # if bool(self.settings.get("stats", {}).get("show", False)):
-            #     frame = self.overlay.render_stats(
-            #         frame_bgr=frame,
-            #         text=self.stats.cached,
-            #         color_name=self.settings.get("stats", {}).get("font_color", "yellow"),
-            #     )
-
+        self._render_in_progress = True
+        try:
+            # Convert BGR -> RGB for Tk
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             pil_image = Image.fromarray(rgb)
-            image_tk = ImageTk.PhotoImage(pil_image)
-            self.label.config(image=image_tk)
-            self.label.image = image_tk
 
-        self.after(33, self._update_display)
+            if self._tk_photo is None:
+                self._tk_photo = ImageTk.PhotoImage(pil_image)
+                self.label.config(image=self._tk_photo)
+                self.label.image = self._tk_photo
+            else:
+                self._tk_photo = ImageTk.PhotoImage(pil_image)
+                self.label.config(image=self._tk_photo)
+                self.label.image = self._tk_photo
+
+            self._last_render_time = current_time
+        except Exception as e:
+            logging.exception(f"render_frame failed: {e}")
+        finally:
+            self._render_in_progress = False
 
     # --------- Gestures ----------
     def _on_button_press(self, _event) -> None:
@@ -326,14 +315,14 @@ class PhotoFrameView(tk.Frame, iFrame):
                 messagebox.showerror("Failed to set orientation", str(e))
                 return False
 
-        def on_autoupdate_pull() -> None:
+        def on_autoupdate_pull(self=self) -> None:
             def _worker():
                 ok, msg = self.autoupdater.pull_now()
                 title = "Pull OK" if ok else "Pull failed"
                 self.after(0, lambda: messagebox.showinfo(title, msg[:2000]))
             threading.Thread(target=_worker, daemon=True).start()
 
-        def on_restart_service_async() -> None:
+        def on_restart_service_async(self=self) -> None:
             def _worker():
                 try:
                     name = self.service_name
@@ -357,7 +346,6 @@ class PhotoFrameView(tk.Frame, iFrame):
             on_restart_service_async=on_restart_service_async,
             wake_screen_worker=self.screen.wake,
         )
-
         self._start_settings_stats_pump(self.settings_form)
 
     def _start_settings_stats_pump(self, form: SettingsForm) -> None:
@@ -403,7 +391,6 @@ class PhotoFrameView(tk.Frame, iFrame):
                             if qr_img:
                                 form.qr_lbl.config(image=qr_img)
                                 form.qr_lbl.image = qr_img
-                            # push data points into graphs
                             if cpu_pct is not None:
                                 form.cpu_graph.push(max(0.0, min(100.0, cpu_pct)))
                             if ram_pct is not None:
@@ -454,6 +441,22 @@ class PhotoFrameView(tk.Frame, iFrame):
 
     def update_frame_to_stream(self, frame):
         self.current_frame = frame
+
+    def publish_frame_from_backend(self, frame):
+        """
+        Update the GUI directly from server callbacks.
+        Schedules a render on Tk's main loop without intermediate queues or worker threads.
+        """
+        if self.stop_event.is_set() or frame is None:
+            return
+        # Keep a reference if you want the latest frame accessible
+        self.current_frame = frame
+        try:
+            # Schedule onto Tk main loop; safe even if server calls from a worker thread.
+            self.after_idle(lambda f=frame.copy(): self._render_frame(f))
+        except Exception:
+            # Window may be closing; swallow to avoid noisy logs during shutdown
+            pass
 
     # --------- lifecycle ----------
     def stop(self) -> None:

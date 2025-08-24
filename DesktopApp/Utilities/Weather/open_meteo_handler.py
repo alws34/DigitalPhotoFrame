@@ -4,7 +4,7 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 import threading
 from PIL import Image
 import requests
@@ -28,7 +28,8 @@ class OpenMeteoWeatherHandler:
       cache_ttl_minutes    integer (default 60)
     """
 
-    def __init__(self, frame: iFrame, settings: dict):
+    def __init__(self, frame: iFrame, settings):
+        # settings can be a dict or a dict-like wrapper (e.g., SettingsHandler)
         self.Frame = frame
         self.weather_data = {}
         self.weather_icon = None
@@ -43,6 +44,65 @@ class OpenMeteoWeatherHandler:
         self._hourly_humidity = None
         self._hourly_wind = None
 
+    # ------------ helpers for dict-like access ------------
+
+    @staticmethod
+    def _get(obj, key, default=None):
+        """
+        Safe accessor for dicts and dict-like wrappers.
+        """
+        if isinstance(obj, dict):
+            return obj.get(key, default)
+        g = getattr(obj, "get", None)
+        if callable(g):
+            try:
+                return g(key, default)
+            except TypeError:
+                # some wrappers define get(self, key) without default
+                try:
+                    v = g(key)
+                    return default if v is None else v
+                except Exception:
+                    return default
+        # last resort: subscription
+        try:
+            return obj[key]
+        except Exception:
+            return default
+
+    @staticmethod
+    def _pick(mapping_like, *keys, default=None):
+        """
+        Return the first present key from a dict or dict-like object.
+        Never uses 'in' on non-dicts to avoid triggering sequence protocol.
+        """
+        for k in keys:
+            if isinstance(mapping_like, dict):
+                if k in mapping_like:
+                    return mapping_like[k]
+                continue
+            # prefer .get if available
+            g = getattr(mapping_like, "get", None)
+            if callable(g):
+                try:
+                    sentinel = object()
+                    v = g(k, sentinel)
+                    if v is not sentinel:
+                        return v
+                except TypeError:
+                    try:
+                        v = g(k)
+                        if v is not None:
+                            return v
+                    except Exception:
+                        pass
+            # try subscription
+            try:
+                return mapping_like[k]
+            except Exception:
+                pass
+        return default
+
     # ------------ public API ------------
 
     def fetch_weather_data(self):
@@ -50,10 +110,10 @@ class OpenMeteoWeatherHandler:
             return
 
         cfg = self._get_cfg()
-        ttl = int(cfg.get("cache_ttl_minutes", 60))
+        ttl = int(self._get(cfg, "cache_ttl_minutes", 60))
         now = datetime.now()
 
-        # 1) serve from cache if fresh, but require new fields too
+        # 1) serve from cache if fresh and complete
         try:
             if os.path.exists(self.cache_file):
                 with open(self.cache_file, "r") as f:
@@ -62,7 +122,13 @@ class OpenMeteoWeatherHandler:
                 cached_data = cached.get("weather_data", {}) or {}
 
                 required = {"temp", "unit", "description", "icon", "humidity", "wind_speed"}
-                cache_fresh = ts and (datetime.fromisoformat(ts) + timedelta(minutes=ttl) > now)
+                cache_fresh = False
+                if ts:
+                    try:
+                        # timestamp is naive ISO from .isoformat(); treat as local naive
+                        cache_fresh = (datetime.fromisoformat(ts) + timedelta(minutes=ttl) > now)
+                    except Exception:
+                        cache_fresh = False
                 has_required = required.issubset(set(cached_data.keys()))
                 if cache_fresh and has_required:
                     self.weather_data = cached_data
@@ -74,6 +140,7 @@ class OpenMeteoWeatherHandler:
                 elif cache_fresh and not has_required:
                     self.Frame.send_log_message("Open-Meteo cache missing new fields; refetching.", logging.info)
         except Exception:
+            # do not crash on cache errors
             pass
 
         # 2) resolve location (lat/lon only)
@@ -90,20 +157,23 @@ class OpenMeteoWeatherHandler:
         api_params = {
             "latitude": lat,
             "longitude": lon,
-            "timezone": cfg.get("timezone") or "auto",
-            "timeformat": cfg.get("timeformat") or "iso8601",
+            "timezone": self._get(cfg, "timezone", "auto"),
+            "timeformat": self._get(cfg, "timeformat", "iso8601"),
             "current": current_vars,           # new-style current block
             "current_weather": "true",         # legacy current block
             "hourly": hourly_vars,             # fallback
             "forecast_days": 1,
         }
         # units (per docs)
-        if cfg.get("temperature_unit"):
-            api_params["temperature_unit"] = cfg["temperature_unit"]
-        if cfg.get("wind_speed_unit"):
-            api_params["wind_speed_unit"] = cfg["wind_speed_unit"]
-        if cfg.get("precipitation_unit"):
-            api_params["precipitation_unit"] = cfg["precipitation_unit"]
+        tu = self._get(cfg, "temperature_unit")
+        if tu:
+            api_params["temperature_unit"] = tu
+        wu = self._get(cfg, "wind_speed_unit")
+        if wu:
+            api_params["wind_speed_unit"] = wu
+        pu = self._get(cfg, "precipitation_unit")
+        if pu:
+            api_params["precipitation_unit"] = pu
 
         # 4) call API
         try:
@@ -157,7 +227,7 @@ class OpenMeteoWeatherHandler:
                 return
 
             # Unit letter by requested temp unit
-            temp_unit = (cfg.get("temperature_unit") or "celsius").lower()
+            temp_unit = (self._get(cfg, "temperature_unit", "celsius") or "celsius").lower()
             unit_letter = "F" if temp_unit == "fahrenheit" else "C"
 
             try:
@@ -185,8 +255,7 @@ class OpenMeteoWeatherHandler:
                     self.weather_data["wind_speed"] = round(float(wind))
                 except Exception:
                     self.weather_data["wind_speed"] = wind
-                # label hint for your overlay
-                wind_unit = (cfg.get("wind_speed_unit") or "kmh").lower()
+                wind_unit = (self._get(cfg, "wind_speed_unit", "kmh") or "kmh").lower()
                 if wind_unit not in ("kmh", "mph", "ms", "kn"):
                     wind_unit = "kmh"
                 self.weather_data["wind_unit"] = wind_unit
@@ -224,12 +293,19 @@ class OpenMeteoWeatherHandler:
     # ------------ internals ------------
 
     def _get_cfg(self):
+        """
+        Extract and normalize the open_meteo section from settings, even when
+        settings is a wrapper object.
+        """
         om = {}
         if isinstance(self.settings, dict):
             om = self.settings.get("open_meteo", {}) or {}
+        else:
+            # dict-like wrappers
+            om = self._get(self.settings, "open_meteo", {}) or {}
 
         # convenience: units -> specific units (do not override explicit keys)
-        units = (om.get("units") or "").lower()
+        units = (str(self._get(om, "units", "")).lower())
         if units in ("metric", "imperial"):
             om.setdefault("temperature_unit", "fahrenheit" if units == "imperial" else "celsius")
             om.setdefault("wind_speed_unit", "mph" if units == "imperial" else "kmh")
@@ -250,8 +326,8 @@ class OpenMeteoWeatherHandler:
         - explicit latitude/longitude in settings['open_meteo']
         - legacy top-level weather/lat/lon or settings['lat'/'lon']
         """
-        lat = cfg.get("latitude")
-        lon = cfg.get("longitude")
+        lat = self._get(cfg, "latitude")
+        lon = self._get(cfg, "longitude")
         try:
             if lat is not None and lon is not None:
                 self.Frame.send_log_message(f"Open-Meteo: using coords ({lat}, {lon})", logging.info)
@@ -261,15 +337,30 @@ class OpenMeteoWeatherHandler:
         return self._legacy_lat_lon()
 
     def _legacy_lat_lon(self):
-        def pick(d, *keys):
-            for k in keys:
-                if k in d:
-                    return d[k]
-            return None
+        """
+        Fallback for older configs:
+          - settings['weather']['lat'/'lon'] or ['latitude'/'longitude']
+          - settings['lat'/'lon'] or ['latitude'/'longitude'] at top level
+        Works with dict-like SettingsHandler without using 'in' checks.
+        """
+        # Weather subsection if present
+        w = {}
+        if isinstance(self.settings, dict):
+            w = self.settings.get("weather", {}) or {}
+        else:
+            w = self._get(self.settings, "weather", {}) or {}
 
-        w = self.settings.get("weather", {}) if isinstance(self.settings, dict) else {}
-        lat = pick(w, "lat", "latitude") or pick(self.settings, "lat", "latitude")
-        lon = pick(w, "lon", "longitude") or pick(self.settings, "lon", "longitude")
+        def pick(d, *keys):
+            return self._pick(d, *keys, default=None)
+
+        lat = pick(w, "lat", "latitude")
+        lon = pick(w, "lon", "longitude")
+
+        if lat is None or lon is None:
+            # try top-level legacy keys
+            lat = pick(self.settings, "lat", "latitude") if lat is None else lat
+            lon = pick(self.settings, "lon", "longitude") if lon is None else lon
+
         try:
             if lat is not None and lon is not None:
                 self.Frame.send_log_message(f"Open-Meteo: using legacy coords ({lat}, {lon})", logging.info)
@@ -306,7 +397,8 @@ class OpenMeteoWeatherHandler:
             best_idx, best_delta = 0, None
             for i, t in enumerate(times):
                 try:
-                    dt = datetime.fromisoformat(t)  # API returns local ISO timestamps
+                    # API returns local ISO timestamps
+                    dt = datetime.fromisoformat(t)
                 except Exception:
                     continue
                 delta = abs((dt - now_local.replace(tzinfo=None)).total_seconds())
