@@ -21,7 +21,7 @@ from Utilities.screen_utils import ScreenController
 from Utilities.autoupdate_utils import AutoUpdater
 from Utilities.stats_utils import StatsService
 from Utilities.MQTT.mqtt_bridge import MqttBridge
-
+from Utilities.notifications import Notifications
 from FrameGUI.settings_form import SettingsForm
 
 
@@ -62,6 +62,15 @@ class PhotoFrameView(tk.Frame, iFrame):
         self._long_press_job = None
         self._long_press_duration_ms = 5000
 
+        self.notifications = Notifications()
+        self._notif_badge = None
+        self._running = True
+        self.notifications.add_listener(lambda: self.root.after(0, self._update_notification_badge))
+        self.git_stop_event = threading.Event() 
+
+        self._build_notification_badge()      # red dot (hidden by default)
+        self._start_update_watcher() 
+        
         # Render control variables
         self._tk_photo = None
         self._last_render_time = 0.0
@@ -111,7 +120,16 @@ class PhotoFrameView(tk.Frame, iFrame):
         # Screen, autoupdate, MQTT
         self.screen = ScreenController(self.settings, self.stop_event)
         self.screen.start()
-        self.autoupdater = AutoUpdater(self.settings, self.stop_event)
+        #self.autoupdater = AutoUpdater(stop_event=self.git_stop_event, interval_sec=1800)
+        self.autoupdater = AutoUpdater(
+            stop_event=self.git_stop_event,
+            interval_sec=1800,
+            on_update_available=self._notify_update_available,
+            on_updated=self._notify_updated,
+            restart_service_async=self._restart_system_service_async,
+            auto_restart_on_update=True,   
+            min_restart_interval_sec=1800 
+        )
         self.autoupdater.start()
 
         self.mqtt_bridge: Optional[MqttBridge] = None
@@ -139,6 +157,30 @@ class PhotoFrameView(tk.Frame, iFrame):
         self.root.bind("<ButtonRelease-1>", self._on_button_release)
 
         self.settings_form: Optional[SettingsForm] = None
+
+    def _notify_update_available(self, behind: int):
+        self.notifications.add(
+            f"Update available: your device is {behind} commit(s) behind upstream.",
+            level="info"
+        )
+
+    def _notify_updated(self, msg: str):
+        # log truncated output, but preserve details in notifications tab
+        self.notifications.add("Update pulled successfully.", level="success")
+        # optional: also store some of msg if you want
+
+    def _restart_system_service_async(self):
+        # matches your system service name and uses polkit rule you installed
+        def _w():
+            try:
+                subprocess.run(
+                    ["systemctl", "restart", "PhotoFrame_Desktop_App.service"],
+                    check=True
+                )
+            except Exception as e:
+                self.notifications.add(f"Restart failed: {e}", level="error")
+        threading.Thread(target=_w, daemon=True).start()
+
 
     # --------- MQTT helpers ----------
     def _apply_brightness_from_mqtt(self, pct: int) -> bool:
@@ -317,24 +359,80 @@ class PhotoFrameView(tk.Frame, iFrame):
 
         def on_autoupdate_pull(self=self) -> None:
             def _worker():
-                ok, msg = self.autoupdater.pull_now()
-                title = "Pull OK" if ok else "Pull failed"
-                self.after(0, lambda: messagebox.showinfo(title, msg[:2000]))
+                try:
+                    ok, msg = self.autoupdater.pull_now()
+                except Exception as e:
+                    ok, msg = False, f"pull_now() crashed: {e}"
+                # log + notify + dialog
+                self.notifications.add(
+                    f"Manual update {'succeeded' if ok else 'failed'}: {msg}",
+                    level=("update" if ok else "error")
+                )
+                self.after(0, lambda: (
+                    messagebox.showinfo("Pull OK" if ok else "Pull failed", str(msg)[:2000])
+                ))
             threading.Thread(target=_worker, daemon=True).start()
 
+
+        # def on_autoupdate_pull(self=self) -> None:
+        #     def _worker():
+        #         try:
+        #             ok = False
+        #             msg = "Unknown"
+        #             try:
+        #                 ok, msg = self.autoupdater.pull_now()
+        #             except Exception as e:
+        #                 ok, msg = False, f"pull_now() crashed: {e}"
+
+        #             # file a notification
+        #             self.notifications.add(
+        #                 f"Auto-update {'succeeded' if ok else 'failed'}: {msg}",
+        #                 level="update" if ok else "error",
+        #             )
+        #             # pop dialog + refresh badge
+        #             self.after(0, lambda: (
+        #                 messagebox.showinfo("Pull OK" if ok else "Pull failed", str(msg)[:2000]),
+        #                 self._update_notification_badge()
+        #             ))
+        #         except Exception as e:
+        #             self.notifications.add(f"Auto-update error: {e}", level="error")
+        #             self.after(0, lambda: (
+        #                 messagebox.showerror("Pull failed", str(e)),
+        #                 self._update_notification_badge()
+        #             ))
+        #     threading.Thread(target=_worker, daemon=True).start()
+
         def on_restart_service_async(self=self) -> None:
-            def _worker():
+            import subprocess, threading, os
+
+            def worker():
+                unit = "PhotoFrame_Desktop_App.service"
+                systemctl = "/usr/bin/systemctl"  # adjust if different
+
+                # No sudo here. systemctl will contact the system manager and ask polkit.
+                cmd = [systemctl, "restart", unit]
+
                 try:
-                    name = self.service_name
-                    r = subprocess.run(["systemctl", "--user", "status", f"{name}.service"],
-                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    if r.returncode in (0, 3):
-                        subprocess.run(["systemctl", "--user", "restart", f"{name}.service"], check=True)
-                    else:
-                        subprocess.run(["sudo", "systemctl", "restart", f"{name}.service"], check=True)
+                    r = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
                 except Exception as e:
-                    self.after(0, lambda: messagebox.showerror("Restart failed", str(e)))
-            threading.Thread(target=_worker, daemon=True).start()
+                    msg = f"{' '.join(cmd)}\nerror: {e}"
+                    self.after(0, lambda: messagebox.showerror("Restart failed", msg))
+                    return
+
+                if r.returncode == 0:
+                    # optional: inform user, then exit so systemd relaunches cleanly
+                    def after_ok():
+                        try:
+                            messagebox.showinfo("Restart", f"Restarted {unit}. The app will exit now.")
+                        except Exception:
+                            pass
+                        self.after(200, lambda: os._exit(0))
+                    self.after(0, after_ok)
+                else:
+                    msg = f"{' '.join(cmd)}\nstdout:\n{r.stdout}\n\nstderr:\n{r.stderr}"
+                    self.after(0, lambda: messagebox.showerror("Restart failed", msg))
+
+            threading.Thread(target=worker, daemon=True).start()
 
         self.settings_form = SettingsForm(
             parent=self.root,
@@ -345,6 +443,7 @@ class PhotoFrameView(tk.Frame, iFrame):
             on_autoupdate_pull=on_autoupdate_pull,
             on_restart_service_async=on_restart_service_async,
             wake_screen_worker=self.screen.wake,
+            notifications=self.notifications, 
         )
         self._start_settings_stats_pump(self.settings_form)
 
@@ -407,6 +506,79 @@ class PhotoFrameView(tk.Frame, iFrame):
 
         threading.Thread(target=loop, daemon=True).start()
 
+    # ---------- RED BADGE ----------
+    def _build_notification_badge(self):
+        # 16x16 red circle; fixed 20px from top-right
+        badge = tk.Canvas(self.root, width=16, height=16,
+                          highlightthickness=0, bg=self.root["bg"])
+        badge.create_oval(0, 0, 16, 16, fill="#ff3b30", outline="")
+        # place 20px inset from top/right
+        badge.place(relx=1.0, x=-(20+16), y=20, anchor="ne")
+        badge.bind("<Button-1>", lambda _e: self._open_notifications())
+        badge.place_forget()   # hide initially
+        self._notif_badge = badge
+
+    def _update_notification_badge(self):
+        try:
+            cnt = self.notifications.count()
+            if cnt > 0:
+                self._notif_badge.place(relx=1.0, x=-(20+16), y=20, anchor="ne")
+            else:
+                self._notif_badge.place_forget()
+        except Exception:
+            pass
+
+    def _open_notifications(self):
+        try:
+            self.settings_form.window().deiconify()
+            self.settings_form.focus_notifications_tab()
+        except Exception:
+            pass
+
+    # ---------- GIT WATCHER ----------
+    def _start_update_watcher(self, interval_sec: int = 1800):
+        """
+        Every interval:
+          git fetch origin
+          if local main == merge-base(main, origin/main) and != origin/main => behind
+        """
+        repo_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))  # adjust if needed
+
+        def _rev(cmd):
+            return subprocess.check_output(cmd, cwd=repo_dir, text=True).strip()
+
+        def loop():
+            while self._running:
+                try:
+                    # fetch quietly; don't fail the loop on nonzero result
+                    subprocess.run(
+                        ["git", "fetch", "origin", "main"],
+                        cwd=repo_dir, check=False,
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30
+                    )
+                    local  = _rev(["git", "rev-parse", "main"])
+                    remote = _rev(["git", "rev-parse", "origin/main"])
+                    base   = _rev(["git", "merge-base", "main", "origin/main"])
+
+                    is_behind = (local != remote and base == local)
+                    if is_behind:
+                        self.notifications.add(
+                            "A new update is available on ‘main’. Open Settings → Screen → “Pull updates now”.",
+                            level="update"
+                        )
+                        # refresh red dot from UI thread
+                        self.root.after(0, self._update_notification_badge)
+                except Exception:
+                    # swallow errors (e.g. not a Git checkout)
+                    pass
+                # sleep
+                for _ in range(interval_sec):
+                    if not self._running:
+                        break
+                    time.sleep(1)
+
+        threading.Thread(target=loop, daemon=True).start()
+
     # --------- Output selection ----------
     @staticmethod
     def _list_outputs() -> list:
@@ -461,9 +633,11 @@ class PhotoFrameView(tk.Frame, iFrame):
     # --------- lifecycle ----------
     def stop(self) -> None:
         self.stop_event.set()
+        self.git_stop_event.set()
         try:
             if hasattr(self, "mqtt_bridge") and self.mqtt_bridge:
                 self.mqtt_bridge.stop()
+            
         except Exception:
             pass
 

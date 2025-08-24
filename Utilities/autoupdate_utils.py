@@ -1,237 +1,241 @@
-import os
-import time
-import shutil
-import logging
-import subprocess
-import threading
-import random
-from typing import Dict, Optional, Tuple
-
+import os, time, shutil, logging, subprocess, threading, random
+from typing import Optional, Tuple, Dict, Callable
 
 class AutoUpdater:
-    """
-    Periodically performs a safe, fast-forward-only update on the repo.
-    - Pulls from one directory above this file by default.
-    - Auto-detects current branch and its upstream (remote/branch).
-    - Serializes pulls (prevents overlap with UI-triggered pulls).
-    - Handles shallow clones and detached HEAD.
-    - Best-effort fix for Git 'dubious ownership' warnings.
-    """
-
-    def __init__(self, settings: Dict, stop_event: threading.Event) -> None:
-        self._settings = settings
+    def __init__(
+        self,
+        stop_event: threading.Event,
+        interval_sec: int = 1800,
+        on_update_available: Optional[Callable[[int], None]] = None, 
+        on_updated: Optional[Callable[[str], None]] = None,          
+        restart_service_async: Optional[Callable[[], None]] = None,  
+        min_restart_interval_sec: int = 900,                          
+        auto_restart_on_update: bool = True,                       
+    ):
         self._stop = stop_event
         self._thread: Optional[threading.Thread] = None
         self._pull_lock = threading.Lock()
+        self._interval = int(interval_sec)
         self.last_pull: Optional[Dict[str, object]] = None
 
-    # Public API ---------------------------------------------------------------
+        self._on_update_available = on_update_available
+        self._on_updated = on_updated
+        self._restart_service_async = restart_service_async
+        self._auto_restart_on_update = bool(auto_restart_on_update)
+        self._min_restart_interval = int(min_restart_interval_sec)
+        self._last_restart_ts = 0
 
+    # ---- public -------------------------------------------------
     def start(self) -> None:
         if self._thread is None:
             self._thread = threading.Thread(target=self._worker, daemon=True)
             self._thread.start()
 
     def pull_now(self) -> Tuple[bool, str]:
-        au = self._cfg()
-        return self._git_pull(
-            repo_path=au.get("repo_path"),
-            remote=au.get("remote"),
-            branch=au.get("branch"),
-        )
+        repo = self._find_repo_root()
+        ok, out = self._git_pull(repo_path=repo)
+        # Optional: also trigger restart here if a real update happened
+        if ok and ("Updating" in out or "Fast-forward" in out or "Fast-Forward" in out):
+            if self._auto_restart_on_update and self._restart_service_async:
+                try:
+                    threading.Thread(target=self._restart_service_async, daemon=True).start()
+                except Exception:
+                    logging.exception("[AutoUpdate] restart hook failed (manual)")
+        return ok, out
 
-    # Internal ----------------------------------------------------------------
-
-    def _cfg(self) -> Dict:
-        au = self._settings.setdefault("autoupdate", {})
-        au.setdefault("enabled", True)
-        au.setdefault("hour", 4)
-        au.setdefault("minute", 0)
-        # Pull one dir up from this file (repo root)
-        au.setdefault("repo_path", os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-        # If not set, these will be auto-detected from upstream
-        au.setdefault("remote", None)
-        au.setdefault("branch", None)
-        # Optional: perform a shallow-friendly fetch (no full history)
-        au.setdefault("shallow_ok", True)
-        return au
-
+    # ---- worker -------------------------------------------------
     def _worker(self) -> None:
-        # Add a small random jitter so multiple devices do not all pull at the same second
-        initial_jitter = random.uniform(5.0, 60.0)
-        if self._stop.wait(timeout=initial_jitter):
+        if self._stop.wait(timeout=random.uniform(5.0, 60.0)):
             return
 
         while not self._stop.is_set():
-            au = self._cfg()
-            if not au.get("enabled", True):
-                if self._stop.wait(timeout=3600):
-                    return
-                continue
-
-            next_ts = self._compute_next_run_ts(au.get("hour", 4), au.get("minute", 0))
-            while True:
-                if self._stop.is_set():
-                    return
-                remaining = next_ts - time.time()
-                if remaining <= 0:
-                    break
-                self._stop.wait(timeout=min(remaining, 60))
-
             try:
-                self.pull_now()
+                repo = self._find_repo_root()
+                if repo and shutil.which("git"):
+                    env = self._git_env()
+                    # Skip if no upstream configured
+                    upstream = self._upstream_ref(repo, env, 10)
+                    if upstream:
+                        _r, _b = upstream
+                        ahead, behind = self._behind_counts(repo, env, 10)
+
+                        if behind > 0:
+                            # Notify: new version available
+                            if self._on_update_available:
+                                try: self._on_update_available(behind)
+                                except Exception: pass
+
+                            # Pull
+                            ok, out = self._git_pull(repo, 180)
+                            if self._on_updated:
+                                try: self._on_updated(out)
+                                except Exception: pass
+
+                            # Restart if pull succeeded & changed anything
+                            if ok and ("Updating" in out or "Fast-forward" in out or "Fast-Forward" in out):
+                                now = time.time()
+                                if self._auto_restart_on_update and self._restart_service_async:
+                                    # Debounce restarts
+                                    if now - self._last_restart_ts >= self._min_restart_interval:
+                                        self._last_restart_ts = now
+                                        try:
+                                            # do it in a thread so we return quickly
+                                            threading.Thread(
+                                                target=self._restart_service_async,
+                                                daemon=True
+                                            ).start()
+                                        except Exception:
+                                            logging.exception("[AutoUpdate] restart hook failed")
+                    else:
+                        # No upstream: just try a normal pull (will likely noop)
+                        self._git_pull(repo, 60)
+                else:
+                    self._record(False, "git not found or repo not detected")
             except Exception:
                 logging.exception("[AutoUpdate] unexpected error during scheduled pull")
 
-    @staticmethod
-    def _compute_next_run_ts(hour: int, minute: int) -> float:
-        now = time.localtime()
-        target = time.struct_time((
-            now.tm_year, now.tm_mon, now.tm_mday, int(hour), int(minute), 0,
-            now.tm_wday, now.tm_yday, now.tm_isdst
-        ))
-        now_ts = time.time()
-        target_ts = time.mktime(target)
-        if target_ts <= now_ts:
-            target_ts += 86400
-        return target_ts
+            # sleep in 1s chunks so we can stop promptly
+            for _ in range(self._interval):
+                if self._stop.is_set():
+                    return
+                time.sleep(1)
 
-    # Git helpers -------------------------------------------------------------
 
-    def _git_pull(
-        self,
-        repo_path: Optional[str],
-        remote: Optional[str],
-        branch: Optional[str],
-        timeout: int = 180
-    ) -> Tuple[bool, str]:
+    # ---- repo detection -----------------------------------------
+    def _find_repo_root(self) -> Optional[str]:
+        here = os.path.abspath(os.path.dirname(__file__))
+        # try git toplevel first
+        env = self._git_env()
+        ok, out = self._run_git(["git", "-C", here, "rev-parse", "--show-toplevel"], env, 10)
+        if ok and out:
+            return out.strip()
+        # fallback: walk up looking for .git
+        cur = here
+        while True:
+            if os.path.isdir(os.path.join(cur, ".git")):
+                return cur
+            parent = os.path.dirname(cur)
+            if parent == cur:
+                break
+            cur = parent
+        return None
+
+    # ---- git plumbing -------------------------------------------
+    def _git_pull(self, repo_path: Optional[str], timeout: int = 180) -> Tuple[bool, str]:
         with self._pull_lock:
             try:
-                repo_path = repo_path or os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-
                 if not shutil.which("git"):
-                    msg = "git executable not found in PATH"
-                    logging.warning("[AutoUpdate] %s", msg)
-                    self._record(False, msg)
-                    return False, msg
-
-                if not os.path.isdir(os.path.join(repo_path, ".git")):
+                    msg = "git not found"
+                    self._record(False, msg); return False, msg
+                if not repo_path or not os.path.isdir(os.path.join(repo_path, ".git")):
                     msg = f"Not a git repository: {repo_path}"
-                    logging.info("[AutoUpdate] %s", msg)
-                    self._record(False, msg)
-                    return False, msg
+                    self._record(False, msg); return False, msg
 
                 env = self._git_env()
 
-                # Auto-detect current branch if missing
-                if not branch:
-                    branch = self._current_branch(repo_path, env, timeout)
-
-                # Try to detect upstream (remote/branch) if not explicitly provided
-                if not remote or not branch:
-                    upstream = self._upstream_ref(repo_path, env, timeout)
-                    if upstream:
-                        detected_remote, detected_branch = upstream
-                        if not remote:
-                            remote = detected_remote
-                        if not branch:
-                            branch = detected_branch
-
-                # If still no remote (no upstream configured), default to origin
-                if not remote:
+                # What branch are we on?
+                branch = self._current_branch(repo_path, env, timeout)  # None if detached
+                # Try upstream remote/branch (origin/main etc.)
+                upstream = self._upstream_ref(repo_path, env, timeout)
+                if upstream:
+                    remote, upstream_branch = upstream
+                else:
                     remote = "origin"
+                    upstream_branch = branch  # may be None; pull will still work if upstream is set in config
 
-                # Always fetch first (friendly to shallow clones)
+                # Always fetch first
                 self._fetch(repo_path, remote, env, timeout)
 
-                # Fast-forward-only pull. If we know remote+branch, use them.
+                # ff-only pull
                 cmd = ["git", "-C", repo_path, "pull", "--ff-only"]
-                if remote and branch:
-                    cmd += [remote, branch]
+                if remote and upstream_branch:
+                    cmd += [remote, upstream_branch]
 
                 ok, out = self._run_git(cmd, env, timeout)
                 if not ok and self._looks_like_dubious_ownership(out):
-                    # Best-effort fix for 'dubious ownership' and retry once
                     self._mark_repo_safe(repo_path, env, timeout)
                     ok, out = self._run_git(cmd, env, timeout)
 
-                # If still failing with non-ff scenario, report clearly
                 if not ok and self._looks_like_non_ff(out):
-                    out += "\nHint: Non fast-forward. Rebase or reset may be required on the device."
+                    out += "\nHint: Non fast-forward. Manual rebase/reset may be required."
 
                 logging.info("[AutoUpdate] git pull %s.\n%s", "succeeded" if ok else "failed", out)
                 self._record(ok, out)
                 return ok, out
-
             except subprocess.TimeoutExpired:
                 msg = "git pull timed out"
-                logging.error("[AutoUpdate] %s", msg)
-                self._record(False, msg)
-                return False, msg
+                self._record(False, msg); return False, msg
             except Exception as e:
                 msg = f"git pull error: {e}"
                 logging.exception("[AutoUpdate] %s", msg)
-                self._record(False, msg)
-                return False, msg
+                self._record(False, msg); return False, msg
 
     def _git_env(self) -> Dict[str, str]:
         env = os.environ.copy()
-        # Ensure HOME exists for git config and credential helpers
-        try_home = "/home/pi"
-        if os.path.isdir(try_home):
-            env.setdefault("HOME", try_home)
+        # ensure HOME so git can read configs
+        for home in (os.environ.get("HOME"), "/home/pi", "/root"):
+            if home and os.path.isdir(home):
+                env.setdefault("HOME", home); break
         env.setdefault("GIT_TERMINAL_PROMPT", "0")
         return env
 
     def _run_git(self, cmd, env, timeout) -> Tuple[bool, str]:
-        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout, env=env)
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             text=True, timeout=timeout, env=env)
         out = (res.stdout or "") + (res.stderr or "")
         return res.returncode == 0, out.strip()
 
-    def _current_branch(self, repo_path: str, env: Dict[str, str], timeout: int) -> Optional[str]:
-        # If detached HEAD, this returns "HEAD"
+    def _current_branch(self, repo_path: str, env, timeout: int) -> Optional[str]:
         ok, out = self._run_git(["git", "-C", repo_path, "rev-parse", "--abbrev-ref", "HEAD"], env, timeout)
         if ok:
             br = out.strip()
             return None if br == "HEAD" else br
         return None
 
-    def _upstream_ref(self, repo_path: str, env: Dict[str, str], timeout: int) -> Optional[Tuple[str, str]]:
-        # Returns ("origin", "main") for upstream origin/main, if configured
-        ok, out = self._run_git(
-            ["git", "-C", repo_path, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
-            env, timeout
-        )
+    def _upstream_ref(self, repo_path: str, env, timeout: int) -> Optional[Tuple[str, str]]:
+        ok, out = self._run_git(["git", "-C", repo_path, "rev-parse",
+                                 "--abbrev-ref", "--symbolic-full-name", "@{u}"], env, timeout)
         if ok and out and "/" in out:
-            remote, branch = out.split("/", 1)
-            return remote.strip(), branch.strip()
+            r, b = out.split("/", 1)
+            return r.strip(), b.strip()
         return None
 
-    def _fetch(self, repo_path: str, remote: str, env: Dict[str, str], timeout: int) -> None:
-        # Shallow-friendly fetch; if repo is shallow, update shallow history
+    def _fetch(self, repo_path: str, remote: str, env, timeout: int) -> None:
         shallow = os.path.isfile(os.path.join(repo_path, ".git", "shallow"))
+        cmd = ["git", "-C", repo_path, "fetch", "--prune", remote]
         if shallow:
-            self._run_git(["git", "-C", repo_path, "fetch", "--prune", remote, "--depth=1", "--update-shallow"], env, timeout)
-        else:
-            self._run_git(["git", "-C", repo_path, "fetch", "--prune", remote], env, timeout)
+            cmd += ["--depth=1", "--update-shallow"]
+        self._run_git(cmd, env, timeout)
 
-    def _mark_repo_safe(self, repo_path: str, env: Dict[str, str], timeout: int) -> None:
-        # git safe.directory for ownership warnings
+    def _mark_repo_safe(self, repo_path: str, env, timeout: int) -> None:
         self._run_git(["git", "config", "--global", "--add", "safe.directory", repo_path], env, timeout)
 
     @staticmethod
     def _looks_like_dubious_ownership(out: str) -> bool:
-        if not out:
-            return False
-        o = out.lower()
-        return "detected dubious ownership" in o or "safe.directory" in o
+        o = (out or "").lower()
+        return "dubious ownership" in o or "safe.directory" in o
 
     @staticmethod
     def _looks_like_non_ff(out: str) -> bool:
-        if not out:
-            return False
-        o = out.lower()
-        return "non-fast-forward" in o or "fatal: not possible to fast-forward" in o
+        o = (out or "").lower()
+        return "non-fast-forward" in o or "not possible to fast-forward" in o
 
     def _record(self, ok: bool, msg: str) -> None:
         self.last_pull = {"ok": ok, "ts": time.time(), "msg": msg}
+
+    def _behind_counts(self, repo_path: str, env, timeout: int) -> Tuple[int, int]:
+        """
+        Returns (ahead, behind) relative to upstream.
+        If no upstream, returns (0, 0).
+        """
+        ok, out = self._run_git(
+            ["git", "-C", repo_path, "rev-list", "--left-right", "--count", "HEAD...@{u}"],
+            env, timeout
+        )
+        if ok and out:
+            try:
+                ahead_str, behind_str = out.split()
+                return int(ahead_str), int(behind_str)
+            except Exception:
+                pass
+        return (0, 0)

@@ -40,10 +40,10 @@ class Backend:
             static_folder=str(base / "./static"),
         )
         CORS(self.app)
-        # self.USER_DATA_FILE = self.set_absolute_paths("users.json")
-        # self.METADATA_FILE  = self.set_absolute_paths("metadata.json")
-        # self.LOG_FILE_PATH  = self.set_absolute_paths("PhotoFrame.log")
-        # self.WEATHER_CACHE  = self.set_absolute_paths("weather_cache.json")
+        self.USER_DATA_FILE = self.set_absolute_paths("users.json")
+        self.METADATA_FILE  = self.set_absolute_paths("metadata.json")
+        self.LOG_FILE_PATH  = self.set_absolute_paths("PhotoFrame.log")
+        self.WEATHER_CACHE  = self.set_absolute_paths("weather_cache.json")
         self.IMAGE_DIR = image_dir if image_dir is not None else self.set_absolute_paths("Images")
         os.makedirs(self.IMAGE_DIR, exist_ok=True)
         #self._ensure_storage_files()
@@ -79,11 +79,7 @@ class Backend:
         self.ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".webp", ".heic", ".heif"}
         self.SELECTED_COLOR = "#ffcccc"
 
-        # Files colocated with DesktopApp root
-        self.USER_DATA_FILE = self.set_absolute_paths("users.json")
-        self.METADATA_FILE  = self.set_absolute_paths("metadata.json")
-        self.LOG_FILE_PATH  = self.set_absolute_paths("PhotoFrame.log")
-        self.WEATHER_CACHE  = self.set_absolute_paths("weather_cache.json")
+
 
         self.latest_metadata = {}
         self._metadata_lock = threading.Lock()

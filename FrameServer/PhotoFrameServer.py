@@ -511,8 +511,7 @@ class PhotoFrameServer(iFrame):
     # ------------- Metadata (server-owned) -------------
 
     def _metadata_db_path(self) -> str:
-        # Store alongside images
-        return os.path.join(self.IMAGE_DIR, "metadata.json")
+        return os.path.join("metadata.json")
 
     def _load_metadata_db(self) -> dict:
         p = self._metadata_db_path()
@@ -530,13 +529,14 @@ class PhotoFrameServer(iFrame):
         Atomic write to avoid corruption on power loss.
         """
         p = self._metadata_db_path()
-        tmp = p + ".tmp"
+        tmp = p
         try:
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(db, f, ensure_ascii=True, indent=2, sort_keys=True)
             os.replace(tmp, p)
         except Exception:
             logging.exception("Failed to save metadata.json")
+
 
     def _utcnow_iso(self) -> str:
         return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

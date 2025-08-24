@@ -30,6 +30,8 @@ class SettingsForm:
         on_autoupdate_pull: Callable[[], None],
         on_restart_service_async: Callable[[], None],
         wake_screen_worker: Callable[[], None],
+        settings_path: str | None = None, 
+        notifications = None,
     ) -> None:
         self.parent = parent
         self.settings = settings
@@ -39,8 +41,9 @@ class SettingsForm:
         self._on_autoupdate_pull = on_autoupdate_pull
         self._on_restart_service_async = on_restart_service_async
         self._wake = wake_screen_worker
-
+        self._settings_path = settings_path
         self._brightness_debounce_job = None
+        self.notifications = notifications
 
         self.form: tk.Toplevel = tk.Toplevel(self.parent)
         self.form.withdraw()
@@ -99,34 +102,60 @@ class SettingsForm:
 
     def _save_settings(self) -> None:
         try:
-            # Always write to DesktopApp/photoframe_settings.json
-            base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-            path = os.path.join(base_dir, "photoframe_settings.json")
+            if self._settings_path and os.path.isabs(self._settings_path):
+                path = self._settings_path
+            else:
+                # fall back to DesktopApp/photoframe_settings.json
+                base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+                path = os.path.join(base_dir, "photoframe_settings.json")
             with open(path, "w") as f:
                 json.dump(self.settings, f, indent=2)
         except Exception as e:
             messagebox.showerror("Failed to save settings", str(e))
-
+            
+            
     # ----------------- UI shell -----------------
     def _build_ui(self) -> None:
         nb = ttk.Notebook(self.form)
+        self.nb = nb 
+        
         self.stats_tab = ttk.Frame(nb)
         self.wifi_tab = ttk.Frame(nb)
         self.screen_tab = ttk.Frame(nb)
         self.about_tab = ttk.Frame(nb)
+        self.notif_tab = ttk.Frame(nb)
+       
+        
         nb.add(self.stats_tab, text="Stats")
         nb.add(self.wifi_tab, text="Wi-Fi")
         nb.add(self.screen_tab, text="Screen")
         nb.add(self.about_tab, text="About")
+        nb.add(self.notif_tab, text="Notifications")
         nb.pack(fill="both", expand=True, padx=10, pady=10)
+        self.nb.bind("<<NotebookTabChanged>>", self._on_tab_changed)
+        
+        self._stats_root  = self._make_scrollable(self.stats_tab)
+        self._wifi_root   = self._make_scrollable(self.wifi_tab)
+        self._screen_root = self._make_scrollable(self.screen_tab)
+        self._about_root  = self._make_scrollable(self.about_tab)
+        self._notif_root  = self._make_scrollable(self.notif_tab)
 
         self._build_stats_tab()
         self._build_wifi_tab()
         self._build_screen_tab()
         self._build_about_tab()
-
+        self._build_notifications_tab()
         self._apply_saved_on_open()
-
+        
+        
+    def _on_tab_changed(self, event):
+        try:
+            nb = event.widget
+            current_tab = nb.nametowidget(nb.select())
+            if current_tab is self.notif_tab:
+                self._refresh_notifications()
+        except Exception:
+            pass
     # ----------------- Stats tab -----------------
     class Sparkline:
         def __init__(self, parent, width=560, height=70, maxlen=60):
@@ -204,7 +233,7 @@ class SettingsForm:
             self.draw()
 
     def _build_stats_tab(self) -> None:
-        root = self.stats_tab
+        root = self._stats_root 
         center = ttk.Frame(root)
         center.pack(fill="x", pady=(8, 4))
         self.current_ssid_lbl = ttk.Label(center, text="Wifi network: Loading...")
@@ -222,6 +251,18 @@ class SettingsForm:
         self.tmp_lbl = ttk.Label(graphs_col, text="Temp: Loading..."); self.tmp_lbl.pack(anchor="center")
         self.tmp_graph = self.Sparkline(graphs_col, width=560, height=70, maxlen=60); self.tmp_graph.widget().pack(anchor="center", pady=(0, 6))
 
+        # Maintenance
+        maint = ttk.Frame(root); maint.pack(fill="x", pady=(8, 6))
+        self.pull_btn = ttk.Button(maint, text="Pull updates now", command=self._pull_updates_clicked)
+        self.pull_btn.pack(side="left")
+
+        self.restart_btn = ttk.Button(maint, text="Restart service", command=self._restart_clicked)
+        self.restart_btn.pack(side="left", padx=8)
+
+        # Tiny status label to show progress/result
+        self.maint_status = ttk.Label(maint, text="", foreground="#888")
+        self.maint_status.pack(side="left", padx=12)
+        
     # ----------------- Wi-Fi tab -----------------
     class CustomKeyboard:
         def __init__(self, parent, target_entry: tk.Entry):
@@ -378,7 +419,7 @@ class SettingsForm:
                 self._build_rows()
 
     def _build_wifi_tab(self) -> None:
-        root = self.wifi_tab
+        root = self._wifi_root
         ttk.Label(root, text=f"Network:").pack(anchor="w", pady=(10, 0))
         self.ssid_cb = ttk.Combobox(root, state="readonly")
         self.ssid_cb.pack(fill="x")
@@ -406,8 +447,9 @@ class SettingsForm:
     # ----------------- Screen tab -----------------
     def _build_screen_tab(self) -> None:
         scr = self._ensure_screen_struct()
-
-        top = ttk.Frame(self.screen_tab); top.pack(fill="x", pady=(10, 6))
+        root = self._screen_root 
+        
+        top = ttk.Frame(root); top.pack(fill="x", pady=(10, 6))
         ttk.Label(top, text="Orientation:").grid(row=0, column=0, sticky="w", padx=(0, 12))
         self.orient_var = tk.StringVar(value=scr.get("orientation", "normal"))
         orow = ttk.Frame(top); orow.grid(row=0, column=1, sticky="w")
@@ -415,7 +457,7 @@ class SettingsForm:
             ttk.Radiobutton(orow, text=k, value=v, variable=self.orient_var).pack(side="left", padx=(0, 8))
         ttk.Button(top, text="Apply Orientation", command=self._apply_orientation).grid(row=0, column=2, padx=(12, 0))
 
-        br = ttk.LabelFrame(self.screen_tab, text="Brightness"); br.pack(fill="x", pady=(8, 6))
+        br = ttk.LabelFrame(root, text="Brightness"); br.pack(fill="x", pady=(8, 6))
         br.columnconfigure(1, weight=1)
         ttk.Label(br, text="Level:").grid(row=0, column=0, sticky="w", padx=(8, 8), pady=(8, 8))
         self.br_val_lbl = ttk.Label(br, text=f"{int(scr.get('brightness', 100))}%")
@@ -448,16 +490,144 @@ class SettingsForm:
         self.br_scale.grid(row=0, column=1, sticky="we", pady=(8, 8))
 
         # Multi-schedule editor
-        sched_frame = ttk.LabelFrame(self.screen_tab, text="Auto screen on/off schedules (any matching schedule turns screen OFF during its window)")
+        sched_frame = ttk.LabelFrame(root, text="Auto screen on/off schedules (any matching schedule turns screen OFF during its window)")
         sched_frame.pack(fill="both", expand=True, pady=(6, 0))
         sched_frame.columnconfigure(0, weight=1)
 
         self._build_schedules_ui(sched_frame)
 
-        # Maintenance
-        maint = ttk.Frame(self.screen_tab); maint.pack(fill="x", pady=(8, 6))
-        ttk.Button(maint, text="Pull updates now", command=self._on_autoupdate_pull).pack(side="left")
-        ttk.Button(maint, text="Restart service", command=self._on_restart_service_async).pack(side="left", padx=8)
+        
+    def _make_scrollable(self, parent: tk.Widget) -> ttk.Frame:
+        """
+        Turn a tab into a full-height scrollable viewport.
+        Return the inner frame; build the tab UI into that.
+        """
+        # Use grid so it fills exactly the tab area
+        parent.grid_rowconfigure(0, weight=1)
+        parent.grid_columnconfigure(0, weight=1)
+
+        container = ttk.Frame(parent)
+        container.grid(row=0, column=0, sticky="nsew")
+
+        canvas = tk.Canvas(container, borderwidth=0, highlightthickness=0)
+        vbar = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=vbar.set)
+
+        canvas.grid(row=0, column=0, sticky="nsew")
+        vbar.grid(row=0, column=1, sticky="ns")
+
+        container.grid_rowconfigure(0, weight=1)
+        container.grid_columnconfigure(0, weight=1)
+
+        inner = ttk.Frame(canvas)
+        win = canvas.create_window((0, 0), window=inner, anchor="nw")
+
+        # Keep inner width equal to the visible canvas width
+        def _on_canvas_config(event):
+            try:
+                canvas.itemconfigure(win, width=event.width)
+            except Exception:
+                pass
+        canvas.bind("<Configure>", _on_canvas_config)
+
+        # Update scrollregion whenever inner size changes
+        def _on_inner_config(_evt=None):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+        inner.bind("<Configure>", _on_inner_config)
+
+        # Mouse wheel: bind when cursor enters, unbind when leaves
+        def _bind_wheel(_e=None):
+            canvas.bind_all("<MouseWheel>", on_wheel_win)
+            canvas.bind_all("<Button-4>", on_wheel_x11_up)
+            canvas.bind_all("<Button-5>", on_wheel_x11_down)
+        def _unbind_wheel(_e=None):
+            canvas.unbind_all("<MouseWheel>")
+            canvas.unbind_all("<Button-4>")
+            canvas.unbind_all("<Button-5>")
+
+        def on_wheel_win(e):      # Windows/macOS
+            # macOS sometimes uses small delta; this normalizes reasonably
+            delta = int(e.delta/120) if e.delta else 0
+            canvas.yview_scroll(-delta, "units")
+        def on_wheel_x11_up(_e):  # Linux X11
+            canvas.yview_scroll(-1, "units")
+        def on_wheel_x11_down(_e):
+            canvas.yview_scroll(1, "units")
+
+        # Only capture wheel while the pointer is over this canvas
+        canvas.bind("<Enter>", _bind_wheel)
+        canvas.bind("<Leave>", _unbind_wheel)
+
+        return inner
+
+
+
+    def _bind_mousewheel(self, widget: tk.Widget):
+        # Windows / Linux
+        widget.bind_all("<MouseWheel>", lambda e: widget.yview_scroll(-1 * int(e.delta/120), "units"))
+        widget.bind_all("<Button-4>",   lambda e: widget.yview_scroll(-1, "units"))   # X11 up
+        widget.bind_all("<Button-5>",   lambda e: widget.yview_scroll( 1, "units"))   # X11 down
+        # macOS (sometimes delta is different); above usually suffices
+
+
+    def _pull_updates_clicked(self) -> None:
+        # Disable button, show status, run in background
+        try:
+            self.pull_btn.state(["disabled"])
+            self.maint_status.config(text="Pulling updates...")
+        except Exception:
+            pass
+
+        def _worker():
+            ok = True
+            try:
+                self._on_autoupdate_pull()  # user-provided callable
+            except Exception as e:
+                ok = False
+                err = str(e)
+            finally:
+                def _ui():
+                    try:
+                        self.pull_btn.state(["!disabled"])
+                        self.maint_status.config(text="Updates pulled ✓" if ok else f"Update failed: {err}")
+                    except Exception:
+                        pass
+                self.form.after(0, _ui)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+
+    def _restart_clicked(self) -> None:
+        # Disable both buttons because the app may go away
+        try:
+            self.restart_btn.state(["disabled"])
+            self.pull_btn.state(["disabled"])
+            self.maint_status.config(text="Restarting service...")
+        except Exception:
+            pass
+
+        def _worker():
+            ok = True
+            err = ""
+            try:
+                # user-provided callable should *not* block indefinitely
+                self._on_restart_service_async()
+            except Exception as e:
+                ok = False
+                err = str(e)
+            finally:
+                def _ui():
+                    # After restart call returns, re-enable (if process didn’t exit)
+                    try:
+                        self.restart_btn.state(["!disabled"])
+                        self.pull_btn.state(["!disabled"])
+                        self.maint_status.config(text="Restart requested ✓" if ok else f"Restart failed: {err}")
+                    except Exception:
+                        pass
+                self.form.after(0, _ui)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
 
     def _build_schedules_ui(self, parent: ttk.Frame) -> None:
         scr_cfg = self._ensure_screen_struct()
@@ -591,7 +761,7 @@ class SettingsForm:
 
     # ----------------- About tab -----------------
     def _build_about_tab(self) -> None:
-        root = self.about_tab
+        root = self._about_root 
         about_cfg = self.settings.get("about", {}) if isinstance(self.settings, dict) else {}
         about_text = about_cfg.get("text", "Digital Photo Frame")
         about_image_path = about_cfg.get("image_path", "")
@@ -646,7 +816,75 @@ class SettingsForm:
                         self._about_img_ref = ImageTk.PhotoImage(im)
                         ttk.Label(content, image=self._about_img_ref).pack(anchor="center", pady=(0, 20))
             except Exception:
-                logging.exception("Failed to load About image")
+                self.logger.exception("Failed to load About image")
+
+        # ----------------- Notifications -----------------
+
+    # ----------------- Notifications tab -----------------    
+    def _build_notifications_tab(self) -> None:
+        root = self._notif_root
+        root.columnconfigure(0, weight=1)
+        root.rowconfigure(0, weight=1)
+
+        # list area
+        frame = ttk.Frame(root)
+        frame.grid(row=0, column=0, sticky="nsew", padx=8, pady=8)
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(0, weight=1)
+
+        cols = ("ts", "level", "text")
+        self.notif_tree = ttk.Treeview(frame, columns=cols, show="headings", height=12)
+        for c, w in (("ts", 150), ("level", 80), ("text", 600)):
+            self.notif_tree.heading(c, text=c.upper())
+            self.notif_tree.column(c, width=w, stretch=(c == "text"))
+        self.notif_tree.grid(row=0, column=0, sticky="nsew")
+
+        vsb = ttk.Scrollbar(frame, orient="vertical", command=self.notif_tree.yview)
+        self.notif_tree.configure(yscrollcommand=vsb.set)
+        vsb.grid(row=0, column=1, sticky="ns")
+
+        # actions
+        actions = ttk.Frame(root)
+        actions.grid(row=1, column=0, sticky="we", padx=8, pady=(0,8))
+        ttk.Button(actions, text="Refresh", command=self._refresh_notifications).pack(side="left")
+        ttk.Button(actions, text="Clear", command=self._clear_notifications).pack(side="left", padx=6)
+
+        self._refresh_notifications()
+
+    def _refresh_notifications(self):
+        try:
+            for i in self.notif_tree.get_children():
+                self.notif_tree.delete(i)
+            for it in self.notifications.list():
+                self.notif_tree.insert("", "end", values=(it["ts"], it["level"], it["text"]))
+        except Exception:
+            pass
+
+    def _clear_notifications(self):
+        try:
+            self.notifications.clear()
+            self._refresh_notifications()
+            # also hide the badge in the main window
+            try:
+                self.parent.after(0, getattr(self.parent, "_update_notification_badge", lambda: None))
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def focus_notifications_tab(self):
+        try:
+            nb = self.form.nametowidget(self.form.winfo_children()[0])  # the Notebook
+            # find the index of notif_tab
+            tabs = nb.tabs()
+            for i, t in enumerate(tabs):
+                if nb.nametowidget(t) is self.notif_tab:
+                    nb.select(i)
+                    break
+            self._refresh_notifications()
+        except Exception:
+            pass
+
 
     # ----------------- Apply/Init -----------------
     def _apply_saved_on_open(self) -> None:

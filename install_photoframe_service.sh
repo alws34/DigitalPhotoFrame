@@ -116,6 +116,26 @@ ProtectHome=no
 WantedBy=graphical.target
 EOF
 
+echo "[5.1/8] Adding polkit rule for service restarts..."
+sudo tee /etc/polkit-1/rules.d/46-allow-photoframe-restart.rules >/dev/null <<'EOF'
+/* Allow pi to manage ONLY PhotoFrame_Desktop_App.service */
+polkit.addRule(function(action, subject) {
+  if (action.id == "org.freedesktop.systemd1.manage-units" &&
+      subject.user == "pi") {
+    var unit = action.lookup("unit");
+    var verb = action.lookup("verb");
+    var okVerbs = ["start", "stop", "restart", "reload"];
+    if (unit == "PhotoFrame_Desktop_App.service" &&
+        okVerbs.indexOf(verb) >= 0) {
+      return polkit.Result.YES;
+    }
+  }
+});
+EOF
+
+echo "[5.2/8] Reloading polkit..."
+sudo systemctl restart polkit || true
+
 echo "[6/8] Reloading and enabling service..."
 sudo systemctl daemon-reload
 sudo systemctl disable "$SERVICE_NAME" || true
