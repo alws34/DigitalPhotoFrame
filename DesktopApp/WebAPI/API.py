@@ -32,7 +32,7 @@ else:
 
 
 class Backend:
-    def __init__(self, frame: iFrame, settings, image_dir=None, settings_path=None ):    
+    def __init__(self, frame: iFrame, settings, image_dir=None, settings_path=None):
         base = Path(__file__).parent
         self.app = Flask(
             __name__,
@@ -40,60 +40,95 @@ class Backend:
             static_folder=str(base / "./static"),
         )
         CORS(self.app)
-        self.app.secret_key =settings["backend_configs"]["supersecretkey"] 
-        self.latest_metadata = {}
-
-        self.stream_h = settings["backend_configs"]["stream_height"]
-        self.stream_w = settings["backend_configs"]["stream_width"]
-        
-        self.port = settings["backend_configs"]["server_port"]
-        self.host = settings["backend_configs"]["host"]
+        # self.USER_DATA_FILE = self.set_absolute_paths("users.json")
+        # self.METADATA_FILE  = self.set_absolute_paths("metadata.json")
+        # self.LOG_FILE_PATH  = self.set_absolute_paths("PhotoFrame.log")
+        # self.WEATHER_CACHE  = self.set_absolute_paths("weather_cache.json")
         self.IMAGE_DIR = image_dir if image_dir is not None else self.set_absolute_paths("Images")
-        
-        self.ALLOWED_EXTENSIONS = {'.png', '.jpg', '.jpeg',
-                                   '.gif', '.bmp', '.tiff', '.webp', '.heic', '.heif'}
-        self.SELECTED_COLOR = '#ffcccc'
-
-        self.USER_DATA_FILE = self.set_absolute_paths('users.json')
-        self.SETTINGS_FILE = self.set_absolute_paths('settings.json')
-        if settings_path is not None:
-            self.SETTINGS_FILE = self.set_absolute_paths(settings_path)
-        self.METADATA_FILE = self.set_absolute_paths('metadata.json')
-        self.LOG_FILE_PATH = self.set_absolute_paths("PhotoFrame.log")
-        self.WEATHER_CACHE = "weather_cache.json"
-        
-        self.Frame = frame
-        self.executor = ThreadPoolExecutor(max_workers=2)
-        
-        self._metadata_lock = threading.Lock()
         os.makedirs(self.IMAGE_DIR, exist_ok=True)
+        #self._ensure_storage_files()
+
+        # Resolve paths first
+        self.Frame = frame
         
-        self.settings = self.load_settings()
-        self.encoding_quality = self.settings.get("image_quality_encoding", 80)
+
+        # Where to read/write settings.json
+        if settings_path:
+            # honor absolute or relative path
+            self.SETTINGS_FILE = self.set_absolute_paths(settings_path)
+        else:
+            # default alongside DesktopApp root
+            self.SETTINGS_FILE = self.set_absolute_paths("photoframe_settings.json")
+
+        # Load settings: prefer the object passed from the server
+        if settings:
+            self.settings = settings
+        else:
+            self.settings = self.load_settings()
+
+        # Now pull required keys with safe defaults
+        backend_cfg = (self.settings.get("backend_configs") if isinstance(self.settings, dict)
+                       else getattr(self.settings, "get", lambda *_: {})("backend_configs")) or {}
+
+        self.app.secret_key = backend_cfg.get("supersecretkey", "CHANGE_ME")
+        self.stream_h = int(backend_cfg.get("stream_height", 1080))
+        self.stream_w = int(backend_cfg.get("stream_width", 1920))
+        self.port     = int(backend_cfg.get("server_port", 5001))
+        self.host     = str(backend_cfg.get("host", "0.0.0.0"))
+
+        self.ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".webp", ".heic", ".heif"}
+        self.SELECTED_COLOR = "#ffcccc"
+
+        # Files colocated with DesktopApp root
+        self.USER_DATA_FILE = self.set_absolute_paths("users.json")
+        self.METADATA_FILE  = self.set_absolute_paths("metadata.json")
+        self.LOG_FILE_PATH  = self.set_absolute_paths("PhotoFrame.log")
+        self.WEATHER_CACHE  = self.set_absolute_paths("weather_cache.json")
+
+        self.latest_metadata = {}
+        self._metadata_lock = threading.Lock()
+        self._ensure_storage_files()
         
-        if not os.path.exists(self.USER_DATA_FILE):
-            with open(self.USER_DATA_FILE, 'w') as file:
-                json.dump({}, file)
-        if not os.path.exists(self.METADATA_FILE):
-            with open(self.METADATA_FILE, 'w') as file:
-                json.dump({}, file)
-        
+        # If we had to load from disk, re-read encoding from settings; else default
+        self.encoding_quality = int((self.settings.get("image_quality_encoding") if isinstance(self.settings, dict)
+                                     else 80) or 80)
+
         self._jpeg_queue   = Queue(maxsize=30)
         self._new_frame_ev = Event()
         self._stop_event   = Event()
-        
+
+        self.executor = ThreadPoolExecutor(max_workers=2)
         self.setup_routes()
         Thread(target=self._capture_loop, daemon=True).start()
         
-        
 
     def set_absolute_paths(self, path: str) -> str:
-        # If path is already absolute, just normalize and return it
         if os.path.isabs(path):
             return os.path.abspath(path)
-        # Otherwise resolve relative to the DesktopApp root, not WebAPI/
-        base = os.path.dirname(os.path.dirname(__file__))  # go one level up
+        base = os.path.dirname(os.path.dirname(__file__))  # DesktopApp root
         return os.path.abspath(os.path.join(base, path))
+    
+    def _ensure_storage_files(self) -> None:
+        os.makedirs(self.IMAGE_DIR, exist_ok=True)
+
+        for path, default in [
+            (self.USER_DATA_FILE, {}),
+            (self.METADATA_FILE, {}),
+            (self.SETTINGS_FILE, {}),  
+            (self.LOG_FILE_PATH, ""), 
+        ]:
+            try:
+                d = os.path.dirname(path)
+                if d and not os.path.exists(d):
+                    os.makedirs(d, exist_ok=True)
+                if not os.path.exists(path):
+                    with open(path, "w", encoding="utf-8") as f:
+                        if isinstance(default, dict):
+                            json.dump(default, f, indent=4)
+                        else:
+                            f.write(default)
+            except Exception as e:
+                print(f"[Backend] Could not initialize {path}: {e}")
         
 
     def _capture_loop(self):
@@ -152,11 +187,25 @@ class Backend:
 
 
     def load_settings(self):
-        with open(self.SETTINGS_FILE, 'r') as file:
-            return json.load(file)
+        try:
+            with open(self.SETTINGS_FILE, "r") as file:
+                return json.load(file)
+        except FileNotFoundError:
+            # Do not crash the API if settings file is missing; start with empty/defaults
+            print(f"[Backend] Settings file not found: {self.SETTINGS_FILE}. Starting with empty settings.")
+            return {}
+        except json.JSONDecodeError as e:
+            print(f"[Backend] Invalid JSON in settings file {self.SETTINGS_FILE}: {e}. Starting with empty settings.")
+            return {}
+        except Exception as e:
+            print(f"[Backend] Unexpected error reading settings: {e}. Starting with empty settings.")
+            return {}
 
     def save_settings(self, data):
-        with open(self.SETTINGS_FILE, 'w') as file:
+        if not os.path.exists(self.SETTINGS_FILE):
+            os.makedirs(os.path.dirname(self.SETTINGS_FILE), exist_ok=True)
+            
+        with open(self.SETTINGS_FILE, "w") as file:
             json.dump(data, file, indent=4)
 
     def allowed_file(self, filename):
@@ -184,19 +233,39 @@ class Backend:
             return False
         return True
 
-    # Metadata management
     def load_metadata_db(self):
         try:
-            with open(self.METADATA_FILE, 'r') as f:
+            with open(self.METADATA_FILE, 'r', encoding='utf-8') as f:
+                if os.path.getsize(self.METADATA_FILE) == 0:
+                    return {}
                 return json.load(f)
-        except json.JSONDecodeError as e:
-            print(f"Error loading metadata DB: {e}")
+        except FileNotFoundError:
+            # Create file and return empty
+            self._ensure_storage_files()
+            return {}
+        except json.JSONDecodeError:
+            print(f"[Backend] metadata.json is invalid JSON. Resetting to empty dict.")
+            try:
+                with open(self.METADATA_FILE, "w", encoding="utf-8") as f:
+                    json.dump({}, f)
+            except Exception:
+                pass
+            return {}
+        except Exception as e:
+            print(f"[Backend] load_metadata_db failed: {e}")
             return {}
 
     def save_metadata_db(self, data):
-        with open(self.METADATA_FILE, 'w') as f:
-            json.dump(data, f, indent=4)
-
+        try:
+            d = os.path.dirname(self.METADATA_FILE)
+            if d:
+                os.makedirs(d, exist_ok=True)
+            with open(self.METADATA_FILE, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=4)
+        except Exception as e:
+            print(f"[Backend] save_metadata_db failed: {e}")
+            
+        
     def compute_image_hash(self, image_path):
         hash_obj = hashlib.sha256()
         with open(image_path, "rb") as f:

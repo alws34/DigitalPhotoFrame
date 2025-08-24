@@ -148,8 +148,8 @@ function previewFiles() {
       div.innerHTML = `
         <img src="${e.target.result}" style="max-width: 300px; max-height: 300px;" />
         <table>
-          <tr><td>Uploader:</td><td><input name="uploader_${i}"></td></tr>
-          <tr><td>Caption:</td><td><input name="caption_${i}"></td></tr>
+          <tr><td>Uploader:</td><td><input name="uploader_${i}" placeholder="(optional)" /></td></tr>
+          <tr><td>Caption:</td><td><input name="caption_${i}" placeholder="(optional)" /></td></tr>
         </table>
       `;
       container.appendChild(div);
@@ -251,13 +251,13 @@ function handleFiles(fileList) {
       uploader.type = "text";
       uploader.placeholder = "Uploader Name";
       uploader.name = `uploader_${index}`;
-      uploader.required = true;
+      uploader.required = false;
 
       const caption = document.createElement("input");
       caption.type = "text";
       caption.placeholder = "Caption";
       caption.name = `caption_${index}`;
-      caption.required = true;
+      caption.required = false;
 
       imgCard.appendChild(img);
       imgCard.appendChild(document.createElement("br"));

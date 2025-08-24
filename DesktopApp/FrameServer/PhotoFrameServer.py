@@ -20,8 +20,8 @@ import json
 from datetime import datetime, timezone
 
 from WebServer.Settings import SettingsHandler
-from WebServer.API import Backend
-from WebServer.utilities.image_handler import Image_Utils
+from WebAPI.API import Backend
+from image_handler import Image_Utils
 from Utilities.observer import ImagesObserver
 from Utilities.Weather.weather_adapter import build_weather_client
 from overlay import OverlayRenderer
@@ -66,9 +66,9 @@ class PhotoFrameServer(iFrame):
         self.set_logger(logging)
         global SETTINGS_PATH
         SETTINGS_PATH = settings_path
-
+        self.settings_path = os.path.abspath(settings_path)
         self.settings = SettingsHandler(SETTINGS_PATH, logging)
-
+        
         if not self.set_images_dir(images_dir=images_dir):
             logging.error("Failed to set images directory. Exiting.")
             raise FileNotFoundError("Images directory not found and could not be created.")
@@ -496,8 +496,17 @@ class PhotoFrameServer(iFrame):
             self._stop_weather_loop() 
 
     def _start_api(self):
-        self.m_api = Backend(frame=self, settings=self.settings, image_dir=self.IMAGE_DIR)
-        self.m_api.start()
+        try:
+            self.m_api = Backend(
+                frame=self,
+                settings=self.settings,          # existing settings dict/object
+                image_dir=self.IMAGE_DIR,
+                settings_path=self.settings_path  # <-- pass absolute path
+            )
+            self.m_api.start()
+        except Exception:
+            logging.exception("Failed to start Backend API")
+
 
     # ------------- Metadata (server-owned) -------------
 
