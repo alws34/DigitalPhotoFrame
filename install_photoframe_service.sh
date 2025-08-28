@@ -96,24 +96,27 @@ Restart=always
 RestartSec=3
 TimeoutStartSec=0
 
-# Environment for GUI apps (Tk / XWayland / Wayland)
+# GUI env (keep from your script)
 Environment=HOME=/home/pi
 Environment=DISPLAY=:0
-$XAUTH_LINE
 Environment=XDG_RUNTIME_DIR=/run/user/1000
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
 Environment=PYTHONUNBUFFERED=1
+
+# Logging
 SyslogIdentifier=photoframe
 StandardOutput=journal
 StandardError=journal
 
-# Hardening (relaxed so we can still read user files under /home/pi)
-NoNewPrivileges=yes
-ProtectSystem=full
+# Security model:
+# - We allow general write so the app can prepare any future image_dir.
+# - Give minimal caps for runtime chown/chmod even if current perms block it.
+NoNewPrivileges=no
+ProtectSystem=off
 ProtectHome=no
-
-[Install]
-WantedBy=graphical.target
+CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE
+AmbientCapabilities=CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE
+UMask=002
 EOF
 
 echo "[5.1/8] Adding polkit rule for service restarts..."

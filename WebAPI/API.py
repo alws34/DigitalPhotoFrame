@@ -488,22 +488,15 @@ class Backend:
                 # Read uploader and caption
                 caption = request.form.get(f"caption_{idx}", "").strip()
                 uploader = request.form.get(f"uploader_{idx}", "").strip()
-
-                # Save temporarily to compute hash
-                temp_dir = os.path.join(self.IMAGE_DIR, "_temp")
-                os.makedirs(temp_dir, exist_ok=True)
-                temp_path = os.path.join(temp_dir, original_filename)
-                file.save(temp_path)
-
-                # Compute file hash
+                temp_path = os.path.join(self.IMAGE_DIR, original_filename)
                 file_hash = self.compute_image_hash(temp_path)
-
-                # Final destination
-                final_path = os.path.join(self.IMAGE_DIR, original_filename)
-
-                # Move to image directory (overwrite if exists)
-                shutil.move(temp_path, final_path)
-
+                
+                try:
+                    file.save(temp_path)
+                except Exception as e:
+                    self.Frame.send_log_message(f"{e}")
+                    return jsonify({"message": f"{e}"}), 500
+                
                 # Convert HEIC/HEIF if needed
                 if ext in ['.heic', '.heif']:
                     jpeg_path = os.path.splitext(final_path)[0] + ".jpg"
