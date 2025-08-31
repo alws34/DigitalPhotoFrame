@@ -1,74 +1,48 @@
-import cv2
 import numpy as np
-import time
 import random
 
-def ScrollEffect(img2, img1, duration=5.0):
+def _ease_smoothstep(t: float) -> float:
+    return t * t * (3.0 - 2.0 * t)
+
+def ScrollEffect(img2, img1, duration=0.8, fps=30, direction=None):
     """
-    Create a generator for the scroll transition effect.
-
-    Args:
-    img1 (numpy.ndarray): The first image (source image).
-    img2 (numpy.ndarray): The second image (destination image).
-    duration (float): The total duration of the transition in seconds.
-
-    Yields:
-    numpy.ndarray: The frame with the scroll effect applied.
+    Scroll reveal between img2 -> img1.
+    direction in {'left','right','up','down'} or None (random once).
     """
     rows, cols, _ = img1.shape
-    start_time = time.time()
+    steps = max(1, int(round(duration * fps)))
+    if direction is None:
+        direction = random.choice(['left', 'right', 'up', 'down'])
 
-    # Randomly select a direction
-    directions = ['left', 'right', 'up', 'down']
-    direction = random.choice(directions)
-    #print(f"Scroll direction: {direction}")
+    for i in range(steps):
+        t = _ease_smoothstep((i + 1) / steps)
+        frame = np.empty_like(img1)
 
-    while True:
-        elapsed_time = time.time() - start_time
-        progress = min(elapsed_time / duration, 1.0)
-
-        frame = np.zeros_like(img1)
-
-        if direction == 'left':
-            # Scroll from right to left
-            offset = int(progress * cols)
-            if offset > cols:
-                offset = cols
-            # Left part from img2
-            frame[:, :cols - offset, :] = img2[:, offset:, :]
-            # Right part from img1
-            frame[:, cols - offset:, :] = img1[:, :offset, :]
-        elif direction == 'right':
-            # Scroll from left to right
-            offset = int(progress * cols)
-            if offset > cols:
-                offset = cols
-            # Left part from img1
-            frame[:, :offset, :] = img1[:, cols - offset:, :]
-            # Right part from img2
-            frame[:, offset:, :] = img2[:, :cols - offset, :]
-        elif direction == 'up':
-            # Scroll from bottom to top
-            offset = int(progress * rows)
-            if offset > rows:
-                offset = rows
-            # Top part from img2
-            frame[:rows - offset, :, :] = img2[offset:, :, :]
-            # Bottom part from img1
-            frame[rows - offset:, :, :] = img1[:offset, :, :]
-        elif direction == 'down':
-            # Scroll from top to bottom
-            offset = int(progress * rows)
-            if offset > rows:
-                offset = rows
-            # Top part from img1
-            frame[:offset, :, :] = img1[rows - offset:, :, :]
-            # Bottom part from img2
-            frame[offset:, :, :] = img2[:rows - offset, :, :]
-
-        # Yield the frame
+        if direction in ('left', 'right'):
+            offset = int(round(t * cols))
+            offset = max(0, min(cols, offset))
+            if direction == 'left':
+                # Left area from img2 shifted leftwards by offset
+                if cols - offset > 0:
+                    frame[:, :cols - offset] = img2[:, offset:]
+                if offset > 0:
+                    frame[:, cols - offset:] = img1[:, :offset]
+            else:  # right
+                if offset > 0:
+                    frame[:, :offset] = img1[:, cols - offset:]
+                if cols - offset > 0:
+                    frame[:, offset:] = img2[:, :cols - offset]
+        else:
+            offset = int(round(t * rows))
+            offset = max(0, min(rows, offset))
+            if direction == 'up':
+                if rows - offset > 0:
+                    frame[:rows - offset] = img2[offset:]
+                if offset > 0:
+                    frame[rows - offset:] = img1[:offset]
+            else:  # down
+                if offset > 0:
+                    frame[:offset] = img1[rows - offset:]
+                if rows - offset > 0:
+                    frame[offset:] = img2[:rows - offset]
         yield frame
-
-        # Break the loop when the transition is complete
-        if elapsed_time >= duration:
-            break

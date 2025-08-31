@@ -76,6 +76,9 @@ class PhotoFrameServer(iFrame):
         self.screen_width = width
         self.screen_height = height
 
+        self._target_fps = int(self.settings.get("animation_fps", 30))
+        self._frame_interval = 1.0 / float(self._target_fps)
+
         # Effects and image utils
         self.EffectHandler = EffectHandler()
         self.image_handler = Image_Utils(settings=self.settings)
@@ -521,7 +524,7 @@ class PhotoFrameServer(iFrame):
         )
 
         effect_function = self.effects[self.EffectHandler.get_random_effect()]
-        gen = effect_function(self.current_image, self.next_image, duration)
+        gen = effect_function(self.current_image, self.next_image, duration, fps=self._target_fps)
         self.status = self.update_frame(gen)
 
         if self.status == AnimationStatus.ANIMATION_FINISHED:

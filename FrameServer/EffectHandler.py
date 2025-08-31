@@ -13,6 +13,14 @@ from Effects.BarnDoorOpenEffect import BarnDoorOpenEffect
 from Effects.BarnDoorCloseEffect import BarnDoorCloseEffect
 from Effects.ShrinkEffect import ShrinkEffect
 from Effects.StretchEffect import StretchEffect
+from Effects.LinearEffect import LinearEffect
+from Effects.LumaWipeEffect import LumaWipeEffect
+from Effects.SoftWipeEffect import SoftWipeEffect
+from Effects.RippleEffect import RippleEffect
+from Effects.SpinZoomFadeEffect import SpinZoomFadeEffect
+from Effects.CrossZoomEffect import CrossZoomEffect
+from Effects.SwirlEffect import SwirlEffect
+from Effects.ZoomBlurEffect import ZoomBlurEffect
 from Effects.PlainEffect import PlainEffect
 # endregion Importing Effects
 
@@ -35,7 +43,15 @@ class EffectHandler:
             11: BarnDoorCloseEffect,
             12: ShrinkEffect,
             13: StretchEffect,
-            # 14: PlainEffect
+            14: LinearEffect,
+            15: LumaWipeEffect,
+            16: SoftWipeEffect,
+            17: RippleEffect,
+            18: SpinZoomFadeEffect,
+            19: CrossZoomEffect,
+            20: SwirlEffect,
+            21: ZoomBlurEffect,
+            # 22: PlainEffect
         }
         self.current_effect_idx = -1
         

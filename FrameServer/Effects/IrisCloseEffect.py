@@ -1,52 +1,21 @@
-import cv2
 import numpy as np
-import time
 
-def IrisCloseEffect(img2, img1, duration=5.0):
+def _ease_smoothstep(t: float) -> float:
+    return t * t * (3.0 - 2.0 * t)
+
+def IrisCloseEffect(img2, img1, duration=0.8, fps=30):
     """
-    Create a generator for the iris close transition effect.
-
-    Args:
-    img1 (numpy.ndarray): The first image (source image).
-    img2 (numpy.ndarray): The second image (destination image).
-    duration (float): The total duration of the transition in seconds.
-
-    Yields:
-    numpy.ndarray: The frame with the iris close effect applied.
+    Circular hide to center. Vectorized; no cv2.circle per frame.
     """
     rows, cols, _ = img1.shape
-    start_time = time.time()
+    steps = max(1, int(round(duration * fps)))
+    yy, xx = np.ogrid[:rows, :cols]
+    cx, cy = cols // 2, rows // 2
+    dist2 = (xx - cx) ** 2 + (yy - cy) ** 2
+    max_r2 = dist2.max()
 
-    # Center coordinates
-    center_x = cols // 2
-    center_y = rows // 2
-
-    # Maximum radius is the distance from the center to a corner
-    max_radius = int(np.sqrt(center_x ** 2 + center_y ** 2))
-
-    while True:
-        elapsed_time = time.time() - start_time
-        progress = min(elapsed_time / duration, 1.0)
-
-        # Calculate the current radius (shrinking from max_radius to 0)
-        radius = int(max_radius * (1 - progress))
-
-        # Create a mask with a filled circle
-        mask = np.zeros((rows, cols), dtype=np.uint8)
-        cv2.circle(mask, (center_x, center_y), radius, 255, -1)
-
-        # Invert the mask
-        mask_inv = cv2.bitwise_not(mask)
-
-        # Create a 3-channel mask
-        mask_inv_3ch = cv2.merge([mask_inv, mask_inv, mask_inv])
-
-        # Apply the mask to blend the two images
-        frame = np.where(mask_inv_3ch == 255, img1, img2)
-
-        # Yield the frame
-        yield frame
-
-        # Break the loop when the transition is complete
-        if elapsed_time >= duration:
-            break
+    for i in range(steps):
+        t = _ease_smoothstep((i + 1) / steps)
+        r2 = int(round((1.0 - t) * (1.0 - t) * max_r2))
+        mask = dist2 > r2
+        yield np.where(mask[..., None], img2, img1)

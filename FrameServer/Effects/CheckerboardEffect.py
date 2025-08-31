@@ -1,64 +1,27 @@
-import cv2
 import numpy as np
-import time
 
-def CheckerboardEffect(img1, img2, duration=5.0, grid_size=16):
-    """
-    Create a generator for the checkerboard transition effect.
+def _ease_smoothstep(t: float) -> float:
+    return t * t * (3.0 - 2.0 * t)
 
-    Args:
-    img1 (numpy.ndarray): The first image (source image).
-    img2 (numpy.ndarray): The second image (destination image).
-    duration (float): The total duration of the transition in seconds.
-    grid_size (int): The number of squares along one dimension (e.g., 8 for an 8x8 grid).
-
-    Yields:
-    numpy.ndarray: The frame with the checkerboard effect applied.
-    """
+def CheckerboardEffect(img1, img2, duration=0.8, grid_size=16, fps=30):
     rows, cols, _ = img1.shape
-    start_time = time.time()
-    cell_width = cols // grid_size
-    cell_height = rows // grid_size
+    steps = max(1, int(round(duration * fps)))
 
-    # Initialize the mask at t=0 with the checkerboard pattern
-    mask = np.zeros((rows, cols), dtype=np.uint8)
-    cells_to_fill = []
+    cell_w = max(1, cols // max(1, grid_size))
+    cell_h = max(1, rows // max(1, grid_size))
 
-    for i in range(grid_size):
-        for j in range(grid_size):
-            x_start = j * cell_width
-            y_start = i * cell_height
-            x_end = x_start + cell_width
-            y_end = y_start + cell_height
+    y = np.arange(rows)[:, None]      # (rows,1)
+    x = np.arange(cols)[None, :]      # (1,cols)
+    ci = np.minimum(y // cell_h, grid_size - 1)  # (rows,1)
+    cj = np.minimum(x // cell_w, grid_size - 1)  # (1,cols)
+    even_cell = ((ci + cj) % 2) == 0            # (rows,cols) broadcasted
 
-            if (i + j) % 2 == 0:
-                # Cells to show img2 from the start
-                mask[y_start:y_end, x_start:x_end] = 1
-            else:
-                # Cells to fill later; store their coordinates
-                cells_to_fill.append((y_start, y_end, x_start, x_end))
+    for i in range(steps):
+        t = _ease_smoothstep((i + 1) / steps)
+        current_h = int(round(t * cell_h))
 
-    while True:
-        elapsed_time = time.time() - start_time
-        progress = min(elapsed_time / duration, 1.0)
+        within_col = (y % cell_h) < current_h           # (rows,1)
+        within_full = np.broadcast_to(within_col, (rows, cols))  # (rows,cols)
 
-        # Create a copy of the mask to update
-        mask_current = mask.copy()
-
-        for y_start, y_end, x_start, x_end in cells_to_fill:
-            # Compute the current height of the rectangle for vertical growth
-            current_height = int((y_end - y_start) * progress)
-
-            # Update the mask to fill from top to bottom
-            mask_current[y_start:y_start+current_height, x_start:x_end] = 1
-
-        # Apply the mask to blend the two images
-        mask_3ch = np.dstack([mask_current]*3)
-        frame = np.where(mask_3ch == 1, img2, img1)
-
-        # Yield the frame
-        yield frame
-
-        # Stop when the transition is complete
-        if elapsed_time >= duration:
-            break
+        mask2 = np.where(even_cell, True, within_full)  # (rows,cols)
+        yield np.where(mask2[..., None], img2, img1)    # (rows,cols,1) vs (rows,cols,3)

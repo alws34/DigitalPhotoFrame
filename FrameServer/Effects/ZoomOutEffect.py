@@ -1,57 +1,26 @@
 import cv2
 import numpy as np
-import time
 
-def ZoomOutEffect(img1, img2, duration=5.0):
+def _ease_smoothstep(t: float) -> float:
+    return t * t * (3.0 - 2.0 * t)
+
+def ZoomOutEffect(img1, img2, duration=0.8, fps=30):
     """
-    Create a generator for the zoom-out transition effect.
-
-    Args:
-    img1 (numpy.ndarray): The first image (source image).
-    img2 (numpy.ndarray): The second image (destination image).
-    duration (float): The total duration of the transition in seconds.
-
-    Yields:
-    numpy.ndarray: The frame with the zoom-out effect applied.
+    Center box of img2 grows over img1.
     """
     rows, cols, _ = img1.shape
-    start_time = time.time()
+    steps = max(1, int(round(duration * fps)))
 
-    # Define the starting size (small rectangle)
-    min_scale = 0.0  # Start from 0% of the image size
-    max_scale = 1.0  # End at 100% of the image size
+    for i in range(steps):
+        t = _ease_smoothstep((i + 1) / steps)
+        scale = max(0.0, min(1.0, t))  # from 0.0 -> 1.0
 
-    while True:
-        elapsed_time = time.time() - start_time
-        progress = min(elapsed_time / duration, 1.0)
+        cur_w = max(1, int(round(cols * scale)))
+        cur_h = max(1, int(round(rows * scale)))
+        x0 = (cols - cur_w) // 2
+        y0 = (rows - cur_h) // 2
 
-        # Calculate the current scale
-        scale = min_scale + (max_scale - min_scale) * progress
-
-        # Calculate the current rectangle size
-        current_width = int(cols * scale)
-        current_height = int(rows * scale)
-
-        # Ensure the dimensions are at least 1 pixel
-        current_width = max(1, current_width)
-        current_height = max(1, current_height)
-
-        # Calculate the top-left corner coordinates to center the rectangle
-        x_start = (cols - current_width) // 2
-        y_start = (rows - current_height) // 2
-
-        # Resize img2 to the current rectangle size
-        img2_resized = cv2.resize(img2, (current_width, current_height), interpolation=cv2.INTER_LINEAR)
-
-        # Create a frame by copying img1
         frame = img1.copy()
-
-        # Overlay the resized img2 onto the frame
-        frame[y_start:y_start+current_height, x_start:x_start+current_width] = img2_resized
-
-        # Yield the frame
+        patch = cv2.resize(img2, (cur_w, cur_h), interpolation=cv2.INTER_LINEAR)
+        frame[y0:y0 + cur_h, x0:x0 + cur_w] = patch
         yield frame
-
-        # Break the loop when the transition is complete
-        if elapsed_time >= duration:
-            break

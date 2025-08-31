@@ -1,54 +1,41 @@
-import cv2
 import numpy as np
-import time
 import random
 
-def WipeEffect(img1, img2, duration=5.0):
+def _ease_smoothstep(t: float) -> float:
+    return t * t * (3.0 - 2.0 * t)
+
+def WipeEffect(img1, img2, duration=0.8, fps=30, direction=None):
     """
-    Create a generator for the wipe transition effect.
-
-    Args:
-    img1 (numpy.ndarray): The first image (source image).
-    img2 (numpy.ndarray): The second image (destination image).
-    duration (float): The total duration of the transition in seconds.
-
-    Yields:
-    numpy.ndarray: The frame with the wipe effect applied.
+    Hard wipe from img1 to img2.
+    direction in {'left','right','up','down'} or None (random once).
     """
     rows, cols, _ = img1.shape
-    start_time = time.time()
+    steps = max(1, int(round(duration * fps)))
+    if direction is None:
+        direction = random.choice(['left', 'right', 'up', 'down'])
 
-    # Randomly select a direction
-    directions = ['left', 'right', 'up', 'down']
-    direction = random.choice(directions)
-    #print(f"Wipe direction: {direction}")
+    for i in range(steps):
+        t = _ease_smoothstep((i + 1) / steps)
 
-    while True:
-        elapsed_time = time.time() - start_time
-        progress = min(elapsed_time / duration, 1.0)
+        if direction in ('left', 'right'):
+            w = max(0, min(cols, int(round(t * cols))))
+            if direction == 'left':
+                mask = np.zeros((rows, cols), dtype=bool)
+                if w > 0:
+                    mask[:, :w] = True
+            else:
+                mask = np.zeros((rows, cols), dtype=bool)
+                if w > 0:
+                    mask[:, cols - w:] = True
+        else:
+            h = max(0, min(rows, int(round(t * rows))))
+            if direction == 'up':
+                mask = np.zeros((rows, cols), dtype=bool)
+                if h > 0:
+                    mask[:h, :] = True
+            else:
+                mask = np.zeros((rows, cols), dtype=bool)
+                if h > 0:
+                    mask[rows - h:, :] = True
 
-        frame = img1.copy()
-
-        if direction == 'left':
-            # Wipe from left to right
-            wipe_width = int(progress * cols)
-            frame[:, :wipe_width, :] = img2[:, :wipe_width, :]
-        elif direction == 'right':
-            # Wipe from right to left
-            wipe_width = int(progress * cols)
-            frame[:, cols - wipe_width:, :] = img2[:, cols - wipe_width:, :]
-        elif direction == 'up':
-            # Wipe from top to bottom
-            wipe_height = int(progress * rows)
-            frame[:wipe_height, :, :] = img2[:wipe_height, :, :]
-        elif direction == 'down':
-            # Wipe from bottom to top
-            wipe_height = int(progress * rows)
-            frame[rows - wipe_height:, :, :] = img2[rows - wipe_height:, :, :]
-
-        # Yield the frame
-        yield frame
-
-        # Break the loop when the transition is complete
-        if elapsed_time >= duration:
-            break
+        yield np.where(mask[..., None], img2, img1)

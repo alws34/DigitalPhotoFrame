@@ -1,61 +1,36 @@
 import cv2
 import numpy as np
-import time
 import random
 
-def StretchEffect(img2, img1, duration=5.0):
+def _ease_smoothstep(t: float) -> float:
+    return t * t * (3.0 - 2.0 * t)
+
+def StretchEffect(img2, img1, duration=0.8, fps=30, direction=None):
     """
-    Create a generator for the stretch transition effect.
-
-    Args:
-    img1 (numpy.ndarray): The first image (source image).
-    img2 (numpy.ndarray): The second image (destination image).
-    duration (float): The total duration of the transition in seconds.
-
-    Yields:
-    numpy.ndarray: The frame with the stretch effect applied.
+    Grow img1 from an edge over img2.
+    direction in {'top','bottom','left','right'} or None (random once).
     """
     rows, cols, _ = img1.shape
-    start_time = time.time()
+    steps = max(1, int(round(duration * fps)))
+    if direction is None:
+        direction = random.choice(['top', 'bottom', 'left', 'right'])
 
-    # Randomly select a direction
-    directions = ['top', 'bottom', 'left', 'right']
-    direction = random.choice(directions)
-    #print(f"Stretch direction: {direction}")
-
-    while True:
-        elapsed_time = time.time() - start_time
-        progress = min(elapsed_time / duration, 1.0)
-
-        # Calculate the current size
-        if direction in ['left', 'right']:
-            current_width = int(cols * progress)
-            current_width = max(1, current_width)
-            current_height = rows
-        else:
-            current_height = int(rows * progress)
-            current_height = max(1, current_height)
-            current_width = cols
-
-        # Resize img1 to the current size
-        img1_resized = cv2.resize(img1, (current_width, current_height), interpolation=cv2.INTER_LINEAR)
-
-        # Create a frame starting with img2
+    for i in range(steps):
+        t = _ease_smoothstep((i + 1) / steps)
         frame = img2.copy()
 
-        # Overlay the resized img1 based on direction
-        if direction == 'left':
-            frame[:, :current_width, :] = img1_resized
-        elif direction == 'right':
-            frame[:, cols - current_width:, :] = img1_resized
-        elif direction == 'top':
-            frame[:current_height, :, :] = img1_resized
-        elif direction == 'bottom':
-            frame[rows - current_height:, :, :] = img1_resized
-
-        # Yield the frame
+        if direction in ('left', 'right'):
+            cur_w = max(1, int(round(cols * t)))
+            img1_resized = cv2.resize(img1, (cur_w, rows), interpolation=cv2.INTER_LINEAR)
+            if direction == 'left':
+                frame[:, :cur_w] = img1_resized
+            else:
+                frame[:, cols - cur_w:] = img1_resized
+        else:
+            cur_h = max(1, int(round(rows * t)))
+            img1_resized = cv2.resize(img1, (cols, cur_h), interpolation=cv2.INTER_LINEAR)
+            if direction == 'top':
+                frame[:cur_h] = img1_resized
+            else:
+                frame[rows - cur_h:] = img1_resized
         yield frame
-
-        # Break the loop when the transition is complete
-        if elapsed_time >= duration:
-            break

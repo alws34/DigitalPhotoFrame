@@ -1,25 +1,13 @@
-import time
-import cv2
 import numpy as np
 
-def PlainEffect(img1, img2, duration=5.0):
-    """
-    A no-op transition that simply renders the source image.
+def _ease_smoothstep(t: float) -> float:
+    return t * t * (3.0 - 2.0 * t)
 
-    Args:
-    img1 (numpy.ndarray): The source image.
-    img2 (numpy.ndarray): The destination image (not used).
-    duration (float): The total duration to display the image in seconds.
-
-    Yields:
-    numpy.ndarray: The frame displaying the source image.
+def PlainEffect(img1, img2, duration=0.8, fps=30):
     """
-    start_time = time.time()
-    while True:
-        elapsed_time = time.time() - start_time
-        # Just yield the source image
+    No-op transition: hold img1 for duration at fps.
+    """
+    steps = max(1, int(round(duration * fps)))
+    for _ in range(steps):
+        # Copy to avoid aliasing if downstream mutates frames in-place
         yield img1.copy()
-
-        # Break the loop when the duration is exceeded
-        if elapsed_time >= duration:
-            break
