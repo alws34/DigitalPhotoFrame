@@ -21,7 +21,7 @@ def ShrinkEffect(img1, img2, duration=5.0):
     # Randomly select a direction
     directions = ['top', 'bottom', 'left', 'right']
     direction = random.choice(directions)
-    print(f"Shrink direction: {direction}")
+    #print(f"Shrink direction: {direction}")
 
     while True:
         elapsed_time = time.time() - start_time

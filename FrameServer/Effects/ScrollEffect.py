@@ -21,7 +21,7 @@ def ScrollEffect(img2, img1, duration=5.0):
     # Randomly select a direction
     directions = ['left', 'right', 'up', 'down']
     direction = random.choice(directions)
-    print(f"Scroll direction: {direction}")
+    #print(f"Scroll direction: {direction}")
 
     while True:
         elapsed_time = time.time() - start_time

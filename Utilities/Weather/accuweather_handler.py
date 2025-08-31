@@ -1,3 +1,12 @@
+'''
+NOT IN USE
+if you want to use it, add in the settings json the following fields:
+
+  "accuweather_api_key": "YOUR_ACCUWEATHER_API_KEY",
+  "accuweather_location_key": "YOUR_LOCATION_KEY"
+
+'''
+
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))

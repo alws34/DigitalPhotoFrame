@@ -84,6 +84,11 @@ class PhotoFrameView(tk.Frame, iFrame):
         self.label = tk.Label(self, bg="black")
         self.label.pack(fill="both", expand=True)
 
+        self._display_timer = None
+        self._rgb_buf = None     
+        self._target_fps = int(self.settings.get("backend_configs", {}).get("stream_fps", 30))
+        self._start_display_pump()
+                
         # Stats for SettingsForm only
         self.stats = StatsService()
         self.stats_thread = threading.Thread(target=self.stats.loop_update, args=(self.stop_event.is_set,), daemon=True)
@@ -280,37 +285,69 @@ class PhotoFrameView(tk.Frame, iFrame):
         self.root.config(cursor="none")
 
     # --------- Rendering (display only) ----------
+    # def _render_frame(self, frame: np.ndarray) -> None:
+    #     """
+    #     Display-only rendering. The frame is assumed to be final (server already composed).
+    #     Enforces ~30 fps.
+    #     """
+    #     if self._render_in_progress:
+    #         return
+    #     current_time = time.time()
+    #     if current_time - self._last_render_time < (1.0 / 30.0):
+    #         return
+
+    #     self._render_in_progress = True
+    #     try:
+    #         # Convert BGR -> RGB for Tk
+    #         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    #         pil_image = Image.fromarray(rgb)
+
+    #         if self._tk_photo is None:
+    #             self._tk_photo = ImageTk.PhotoImage(pil_image)
+    #             self.label.config(image=self._tk_photo)
+    #             self.label.image = self._tk_photo
+    #         else:
+    #             self._tk_photo = ImageTk.PhotoImage(pil_image)
+    #             self.label.config(image=self._tk_photo)
+    #             self.label.image = self._tk_photo
+
+    #         self._last_render_time = current_time
+    #     except Exception as e:
+    #         logging.exception(f"render_frame failed: {e}")
+    #     finally:
+    #         self._render_in_progress = False
     def _render_frame(self, frame: np.ndarray) -> None:
         """
-        Display-only rendering. The frame is assumed to be final (server already composed).
-        Enforces ~30 fps.
+        Display-only rendering. Avoid allocations:
+        - Reuse a persistent RGB buffer (numpy).
+        - Use PIL.frombuffer (no extra copy).
+        - Reuse a single ImageTk.PhotoImage and .paste(...) into it.
         """
-        if self._render_in_progress:
-            return
-        current_time = time.time()
-        if current_time - self._last_render_time < (1.0 / 30.0):
-            return
-
-        self._render_in_progress = True
         try:
-            # Convert BGR -> RGB for Tk
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            pil_image = Image.fromarray(rgb)
+            h, w = frame.shape[:2]
+
+            # Allocate or resize the reusable RGB buffer if needed
+            if (self._rgb_buf is None) or (self._rgb_buf.shape[0] != h) or (self._rgb_buf.shape[1] != w):
+                self._rgb_buf = np.empty((h, w, 3), dtype=np.uint8)
+                # force PhotoImage recreation on size change
+                self._tk_photo = None
+
+            # Convert BGR -> RGB into the preallocated buffer (no new array)
+            cv2.cvtColor(frame, cv2.COLOR_BGR2RGB, dst=self._rgb_buf)
+
+            # Wrap the buffer without copying
+            pil_image = Image.frombuffer("RGB", (w, h), self._rgb_buf, "raw", "RGB", 0, 1)
 
             if self._tk_photo is None:
-                self._tk_photo = ImageTk.PhotoImage(pil_image)
-                self.label.config(image=self._tk_photo)
+                # First time or size changed: create once
+                self._tk_photo = ImageTk.PhotoImage(image=pil_image)
+                self.label.configure(image=self._tk_photo)
                 self.label.image = self._tk_photo
             else:
-                self._tk_photo = ImageTk.PhotoImage(pil_image)
-                self.label.config(image=self._tk_photo)
-                self.label.image = self._tk_photo
-
-            self._last_render_time = current_time
+                # Fast path: update in place
+                self._tk_photo.paste(pil_image)
         except Exception as e:
             logging.exception(f"render_frame failed: {e}")
-        finally:
-            self._render_in_progress = False
 
     # --------- Gestures ----------
     def _on_button_press(self, _event) -> None:
@@ -616,24 +653,64 @@ class PhotoFrameView(tk.Frame, iFrame):
 
     def publish_frame_from_backend(self, frame):
         """
-        Update the GUI directly from server callbacks.
-        Schedules a render on Tk's main loop without intermediate queues or worker threads.
+        Server pushes the latest frame (BGR np.ndarray). We only store the
+        most recent frame; the UI pump handles display at a fixed rate.
         """
         if self.stop_event.is_set() or frame is None:
             return
-        # Keep a reference if you want the latest frame accessible
         self.current_frame = frame
-        try:
-            # Schedule onto Tk main loop; safe even if server calls from a worker thread.
-            self.after_idle(lambda f=frame.copy(): self._render_frame(f))
-        except Exception:
-            # Window may be closing; swallow to avoid noisy logs during shutdown
-            pass
+    
+    def _start_display_pump(self) -> None:
+        """
+        Fixed-rate UI pump (target fps). Each tick, render the latest frame once.
+        This prevents scheduling storms and keeps latency stable.
+        """
+        interval_ms = max(10, int(1000 / max(1, self._target_fps)))
+
+        def tick():
+            if self.stop_event.is_set() or not self._running:
+                return
+            try:
+                frame = self.current_frame
+                if frame is not None:
+                    self._render_frame(frame)
+            except Exception:
+                pass
+            # reschedule
+            self._display_timer = self.after(interval_ms, tick)
+
+        if self._display_timer is None:
+            self._display_timer = self.after(interval_ms, tick)
+
+    # def publish_frame_from_backend(self, frame):
+    #     """
+    #     Update the GUI directly from server callbacks.
+    #     Schedules a render on Tk's main loop without intermediate queues or worker threads.
+    #     """
+    #     if self.stop_event.is_set() or frame is None:
+    #         return
+    #     # Keep a reference if you want the latest frame accessible
+    #     self.current_frame = frame
+    #     try:
+    #         # Schedule onto Tk main loop; safe even if server calls from a worker thread.
+    #         self.after_idle(lambda f=frame.copy(): self._render_frame(f))
+    #     except Exception:
+    #         # Window may be closing; swallow to avoid noisy logs during shutdown
+    #         pass
 
     # --------- lifecycle ----------
     def stop(self) -> None:
         self.stop_event.set()
         self.git_stop_event.set()
+        try:
+            if self._display_timer is not None:
+                try:
+                    self.after_cancel(self._display_timer)
+                except Exception:
+                    pass
+                self._display_timer = None
+        except Exception:
+            pass
         try:
             if hasattr(self, "mqtt_bridge") and self.mqtt_bridge:
                 self.mqtt_bridge.stop()

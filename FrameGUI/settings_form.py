@@ -8,7 +8,8 @@ from typing import Callable, Dict, Any, List, Tuple
 from PIL import Image, ImageTk
 import tkinter as tk
 from tkinter import ttk, messagebox
-
+import copy
+import ast
 from Utilities.network_utils import get_local_ip
 
 
@@ -61,6 +62,7 @@ class SettingsForm:
         self.form.geometry(f"{width}x{height}+{x}+{y}")
         self.form.lift()
         self.form.attributes("-topmost", True)
+
 
         self._build_ui()
         self.form.deiconify()
@@ -124,13 +126,15 @@ class SettingsForm:
         self.screen_tab = ttk.Frame(nb)
         self.about_tab = ttk.Frame(nb)
         self.notif_tab = ttk.Frame(nb)
-       
+        self.config_tab = ttk.Frame(nb)
         
         nb.add(self.stats_tab, text="Stats")
         nb.add(self.wifi_tab, text="Wi-Fi")
         nb.add(self.screen_tab, text="Screen")
         nb.add(self.about_tab, text="About")
         nb.add(self.notif_tab, text="Notifications")
+        nb.add(self.config_tab, text="Config")
+              
         nb.pack(fill="both", expand=True, padx=10, pady=10)
         self.nb.bind("<<NotebookTabChanged>>", self._on_tab_changed)
         
@@ -139,13 +143,15 @@ class SettingsForm:
         self._screen_root = self._make_scrollable(self.screen_tab)
         self._about_root  = self._make_scrollable(self.about_tab)
         self._notif_root  = self._make_scrollable(self.notif_tab)
-
+        self._config_root = self._make_scrollable(self.config_tab)
+        
         self._build_stats_tab()
         self._build_wifi_tab()
         self._build_screen_tab()
         self._build_about_tab()
         self._build_notifications_tab()
         self._apply_saved_on_open()
+        self._build_config_tab()
         
         
     def _on_tab_changed(self, event):
@@ -1078,6 +1084,260 @@ class SettingsForm:
             return lines[0] if lines else "N/A"
         except Exception:
             return "N/A"
+
+        # ================= Config tab (JSON-driven) =================
+   
+    def _build_config_tab(self) -> None:
+        """
+        Renders:
+          - 'General' section with all top-level non-dict (free) fields.
+          - A notebook with one tab per top-level dict (nested object).
+          - Save/Revert row at the bottom.
+        Nested dicts render recursively as sub-tabs. Lists are shown as JSON strings.
+        """
+        root = self._config_root
+
+        # Build a normalized, editable model
+        self._cfg_model = self._normalize_for_edit(copy.deepcopy(self.settings))
+        self._cfg_vars = {}  # path(tuple) -> {'var': tk.Variable, 'type': 'bool'|'int'|'float'|'str'|'json'}
+
+        # Split top-level: free fields vs nested dicts
+        free = {}
+        nested = {}
+        for k, v in self._cfg_model.items() if isinstance(self._cfg_model, dict) else []:
+            if isinstance(v, dict):
+                nested[k] = v
+            else:
+                free[k] = v
+
+        # General section: all free (non-dict) fields
+        general = ttk.LabelFrame(root, text="General (top-level fields)")
+        general.pack(fill="x", padx=8, pady=(8, 6))
+        general.columnconfigure(1, weight=1)
+
+        for key in sorted(free.keys()):
+            self._render_scalar_row(parent=general, label=key, value=free[key], path=(key,))
+
+        # Nested objects: one tab per dict
+        if nested:
+            nb = ttk.Notebook(root)
+            nb.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+
+            # Stable order
+            for key in sorted(nested.keys()):
+                tab = ttk.Frame(nb)
+                nb.add(tab, text=str(key))
+                tab.columnconfigure(0, weight=1)
+
+                # Each nested dict: show its own free fields + sub-tabs for inner dicts
+                self._render_dict_into_tab(parent=tab, title=str(key), data=nested[key], path=(key,))
+
+        ttk.Separator(root, orient="horizontal").pack(fill="x", padx=8, pady=(0, 6))
+        btns = ttk.Frame(root)
+        btns.pack(fill="x", padx=8, pady=(0, 10))
+        ttk.Button(btns, text="Save", command=self._config_save_clicked).pack(side="left")
+        ttk.Button(btns, text="Revert", command=self._config_revert_clicked).pack(side="left", padx=(0, 8))
+
+    # ---------- Rendering helpers ----------
+    def _render_dict_into_tab(self, parent: ttk.Frame, title: str, data: dict, path: tuple) -> None:
+        """
+        For a dict, render its non-dict fields first, then create sub-tabs for child dicts.
+        """
+        # Split again at this level
+        free = {}
+        nested = {}
+        for k, v in data.items():
+            if isinstance(v, dict):
+                nested[k] = v
+            else:
+                free[k] = v
+
+        sect = ttk.LabelFrame(parent, text=f"{title} fields")
+        sect.grid(row=0, column=0, sticky="nwe", padx=6, pady=6)
+        sect.columnconfigure(1, weight=1)
+
+        for key in sorted(free.keys()):
+            self._render_scalar_row(parent=sect, label=key, value=free[key], path=path + (key,))
+
+        if nested:
+            sub_nb = ttk.Notebook(parent)
+            sub_nb.grid(row=1, column=0, sticky="nsew", padx=6, pady=(0, 6))
+            parent.rowconfigure(1, weight=1)
+            for key in sorted(nested.keys()):
+                tab = ttk.Frame(sub_nb)
+                sub_nb.add(tab, text=str(key))
+                tab.columnconfigure(0, weight=1)
+                self._render_dict_into_tab(parent=tab, title=str(key), data=nested[key], path=path + (key,))
+
+    def _render_scalar_row(self, parent: ttk.Frame, label: str, value: object, path: tuple) -> None:
+        """
+        Render a scalar or list as a single row with type-based widget.
+        Lists are shown as JSON strings. None defaults to empty string.
+        """
+        row = ttk.Frame(parent)
+        row.grid(sticky="we", pady=3, padx=6)
+        row.columnconfigure(1, weight=1)
+
+        ttk.Label(row, text=label).grid(row=0, column=0, sticky="w", padx=(0, 8))
+
+        if isinstance(value, bool):
+            var = tk.BooleanVar(value=value)
+            ctl = ttk.Checkbutton(row, variable=var)
+            ctl.grid(row=0, column=1, sticky="w")
+            self._cfg_vars[path] = {"var": var, "type": "bool"}
+
+        elif isinstance(value, int):
+            var = tk.StringVar(value=str(value))
+            ent = ttk.Entry(row, textvariable=var)
+            ent.grid(row=0, column=1, sticky="we")
+            self._cfg_vars[path] = {"var": var, "type": "int"}
+
+        elif isinstance(value, float):
+            var = tk.StringVar(value=str(value))
+            ent = ttk.Entry(row, textvariable=var)
+            ent.grid(row=0, column=1, sticky="we")
+            self._cfg_vars[path] = {"var": var, "type": "float"}
+
+        elif isinstance(value, list):
+            # Show lists as JSON text to keep UI compact and explicit
+            import json as _json
+            var = tk.StringVar(value=_json.dumps(value))
+            ent = ttk.Entry(row, textvariable=var)
+            ent.grid(row=0, column=1, sticky="we")
+            self._cfg_vars[path] = {"var": var, "type": "json"}
+
+        else:
+            # String or None or other scalars rendered as text
+            var = tk.StringVar(value="" if value is None else str(value))
+            ent = ttk.Entry(row, textvariable=var)
+            ent.grid(row=0, column=1, sticky="we")
+            self._cfg_vars[path] = {"var": var, "type": "str"}
+
+    # ---------- Save / Revert ----------
+    def _config_revert_clicked(self) -> None:
+        try:
+            for child in self._config_root.winfo_children():
+                child.destroy()
+        except Exception:
+            pass
+        self._build_config_tab()
+
+    def _config_save_clicked(self) -> None:
+        """
+        Collect values from widgets, coerce to proper types, merge back into self.settings,
+        fix legacy encoded fields, save to disk.
+        """
+        try:
+            # Push var changes into the model
+            for path, meta in self._cfg_vars.items():
+                vtype = meta["type"]
+                raw = meta["var"].get()
+                coerced = self._coerce_to_type(vtype, raw)
+                self._set_by_path(self._cfg_model, path, coerced)
+
+            # Fix known legacy encodings (e.g., stringified lists/dicts)
+            self._fix_legacy_after_edit(self._cfg_model)
+
+            # Merge into live settings in-place so callers see new values
+            self._dict_assign_inplace(self.settings, self._cfg_model)
+
+            # Persist to disk
+            self._save_settings()
+
+            # Mirror schedule compatibility (if used elsewhere)
+            self._mirror_first_enabled_schedule_to_legacy(self._ensure_screen_struct())
+
+            messagebox.showinfo("Saved", "Settings saved.")
+        except Exception as e:
+            messagebox.showerror("Save failed", str(e))
+
+    # ---------- Model utils ----------
+    def _normalize_for_edit(self, obj):
+        """
+        Convert stringified JSON/Python literals into real structures for editing.
+        Leaves normal scalars as-is.
+        """
+        if isinstance(obj, dict):
+            return {k: self._normalize_for_edit(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [self._normalize_for_edit(v) for v in obj]
+        if isinstance(obj, str):
+            s = obj.strip()
+            if s and (s[0] in "[{") and (s[-1] in "]}"):
+                # Try JSON, then Python literal
+                try:
+                    import json as _json
+                    return self._normalize_for_edit(_json.loads(s))
+                except Exception:
+                    try:
+                        return self._normalize_for_edit(ast.literal_eval(s))
+                    except Exception:
+                        return obj
+        return obj
+
+    def _fix_legacy_after_edit(self, obj):
+        """
+        Hook for any post-edit fixups. Currently no-ops except keeping structure consistent.
+        """
+        # Example: ensure screen.schedule_enabled mirrors first enabled schedule (already handled post-save)
+        return obj
+
+    def _coerce_to_type(self, tname: str, raw: object):
+        s = "" if raw is None else str(raw).strip()
+        if tname == "bool":
+            return bool(raw) if isinstance(raw, bool) else (s.lower() in ("1", "true", "yes", "on"))
+        if tname == "int":
+            try: return int(s)
+            except Exception: return 0
+        if tname == "float":
+            try: return float(s)
+            except Exception: return 0.0
+        if tname == "json":
+            # Parse list/dict entered as JSON
+            try:
+                import json as _json
+                return _json.loads(s) if s else []
+            except Exception:
+                # As a last resort, try Python literal
+                try:
+                    return ast.literal_eval(s)
+                except Exception:
+                    # Keep original text if parsing fails
+                    return s
+        # default: string
+        return s
+
+    def _get_by_path(self, obj, path: tuple):
+        cur = obj
+        for p in path:
+            cur = cur[p]
+        return cur
+
+    def _set_by_path(self, obj, path: tuple, value):
+        if not path:
+            raise ValueError("empty path")
+        *pp, last = path
+        cur = obj
+        for p in pp:
+            cur = cur[p]
+        cur[last] = value
+
+    def _dict_assign_inplace(self, dst: dict, src: dict) -> None:
+        """
+        Replace contents of dst with src in-place (deep), preserving object identity.
+        """
+        # remove keys not in src
+        for k in list(dst.keys()):
+            if k not in src:
+                del dst[k]
+        # copy/overwrite
+        for k, v in src.items():
+            if isinstance(v, dict):
+                if not isinstance(dst.get(k), dict):
+                    dst[k] = {}
+                self._dict_assign_inplace(dst[k], v)
+            else:
+                dst[k] = v
 
 
 def _shutil_which(name: str) -> str:

@@ -101,6 +101,9 @@ class PhotoFrameServer(iFrame):
         # Weather + overlay configuration (server side)
         self._init_overlay_pipeline()
 
+        self._overlay_cached_rgba = None
+        self._overlay_cache_key = None
+
         # Filesystem observer
         self._observer_started = False
         self._observer_debounce_ts = 0.0
@@ -133,6 +136,44 @@ class PhotoFrameServer(iFrame):
             logging.exception("Failed to update images list after directory change")
         
     # ------------- Overlay pipeline (server side) -------------
+    # PhotoFrameServer.py  --- add inside the class
+    def _overlay_key_from_weather(self, weather: dict) -> tuple:
+        now = time.localtime()
+        clk = (now.tm_hour, now.tm_min, now.tm_sec)
+        if weather:
+            sig = (weather.get("temp"), weather.get("unit"), weather.get("description"))
+        else:
+            sig = (None, None, None)
+        return clk + sig
+
+    def _ensure_overlay_cached(self, weather: dict):
+        key = self._overlay_key_from_weather(weather or {})
+        if key != self._overlay_cache_key or self._overlay_cached_rgba is None:
+            self._overlay_cached_rgba = self.overlay.render_overlay_rgba(
+                self.screen_width,
+                self.screen_height,
+                self._overlay_margins,
+                weather or {},
+                (255, 255, 255),
+            )
+            self._overlay_cache_key = key
+
+    @staticmethod
+    def _blend_rgba_over_bgr(base_bgr: np.ndarray, overlay_rgba_img) -> np.ndarray:
+        # overlay_rgba_img is a PIL.Image RGBA the same size as base
+        ov = np.array(overlay_rgba_img, dtype=np.uint8)  # HxWx4 RGBA
+        if ov.shape[0] != base_bgr.shape[0] or ov.shape[1] != base_bgr.shape[1]:
+            ov = cv2.resize(ov, (base_bgr.shape[1], base_bgr.shape[0]), interpolation=cv2.INTER_NEAREST)
+
+        alpha = ov[:, :, 3:4].astype(np.float32) / 255.0   # HxWx1
+        rgb = ov[:, :, :3].astype(np.float32)              # HxWx3
+        dst = base_bgr.astype(np.float32)
+
+        # out = alpha*rgb + (1-alpha)*dst
+        dst = rgb * alpha + dst * (1.0 - alpha)
+        return dst.astype(np.uint8)
+
+    
     def _init_overlay_pipeline(self) -> None:
         font_name = self.settings.get("font_name") or "DejaVuSans.ttf"
         candidate_dirs = [
@@ -269,28 +310,60 @@ class PhotoFrameServer(iFrame):
         overlay = np.zeros_like(roi, dtype=roi.dtype)
         cv2.addWeighted(roi, 0.65, overlay, 0.35, 0.0, dst=roi)
 
+    # def _compose_final_frame(self, frame_bgr: np.ndarray) -> np.ndarray:
+    #     composed = self.overlay.resize_and_crop(frame_bgr, self.screen_width, self.screen_height)
+
+    #     # try:
+    #     #     # Only draw the old band if panels are disabled, or if explicitly requested
+    #     #     if (not self.overlay.enable_panels) or getattr(self, "_keep_band_with_panels", False):
+    #     #         self._draw_contrast_band(composed)
+    #     # except Exception:
+    #     #     pass
+
+    #     try:
+    #         weather = self.weather_client.data() or {}
+    #         composed = self.overlay.render_datetime_and_weather(
+    #             frame_bgr=composed,
+    #             margins=self._overlay_margins,
+    #             weather=weather,
+    #             font_color=(255, 255, 255),
+    #         )
+    #     except Exception:
+    #         logging.exception("overlay.render_datetime_and_weather failed")
+
+    #     return composed
+
     def _compose_final_frame(self, frame_bgr: np.ndarray) -> np.ndarray:
-        composed = self.overlay.resize_and_letterbox(frame_bgr, self.screen_width, self.screen_height)
+        # 1) Avoid per-frame resize if already at target size
+        if frame_bgr is None:
+            return None
+        h, w = frame_bgr.shape[:2]
+        if w != self.screen_width or h != self.screen_height:
+            composed = self.overlay.resize_and_crop(frame_bgr, self.screen_width, self.screen_height)
+        else:
+            composed = frame_bgr.copy()
 
-        try:
-            # Only draw the old band if panels are disabled, or if explicitly requested
-            if (not self.overlay.enable_panels) or getattr(self, "_keep_band_with_panels", False):
-                self._draw_contrast_band(composed)
-        except Exception:
-            pass
-
+        # 2) Re-render overlay at most once per second or when weather changes
         try:
             weather = self.weather_client.data() or {}
+        except Exception:
+            weather = {}
+
+        self._ensure_overlay_cached(weather)
+
+        # 3) Alpha-blend cached overlay with OpenCV/NumPy
+        try:
+            composed = self._blend_rgba_over_bgr(composed, self._overlay_cached_rgba)
+        except Exception:
+            # Fallback: old slow path (shouldn't be hit)
             composed = self.overlay.render_datetime_and_weather(
                 frame_bgr=composed,
                 margins=self._overlay_margins,
                 weather=weather,
                 font_color=(255, 255, 255),
             )
-        except Exception:
-            logging.exception("overlay.render_datetime_and_weather failed")
-
         return composed
+
 
     def _push_composed_to_outputs(self, composed: np.ndarray) -> None:
         self.frame_to_stream = composed
