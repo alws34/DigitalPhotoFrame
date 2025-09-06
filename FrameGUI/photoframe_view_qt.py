@@ -1,5 +1,6 @@
 from __future__ import annotations
 from datetime import time
+import subprocess
 import sys
 import os
 import threading
@@ -10,7 +11,9 @@ from PySide6 import QtCore, QtGui, QtWidgets
 import numpy as np
 from PIL import Image
 from iFrame import iFrame
-
+from FrameGUI.SettingsFrom.model import SettingsModel
+from FrameGUI.SettingsFrom.viewmodel import SettingsViewModel
+from FrameGUI.SettingsFrom.dialog import SettingsDialog
 class IFrameQtWidgetMeta(type(QtWidgets.QWidget), type(iFrame)):
     pass
 
@@ -47,11 +50,53 @@ class PhotoFrameQtWidget(QtWidgets.QWidget, iFrame, metaclass=IFrameQtWidgetMeta
         self.dateTimeChanged.connect(self._update_datetime_gui)
         self.frameChanged.connect(self._canvas.set_qimage)
         self.weatherChanged.connect(self._update_weather_gui)
-
+        
+        # setting form
+        self._last_clicks = []
+        self._settings_vm = None
+        self.backend_port = int(self.settings.get("backend_configs", {}).get("server_port", 5001))
+        # optional, if not already set elsewhere:
+        self.service_name = self.settings.get("service_name", "photoframe")
+        self.screen_ctrl = None
+        # adopt any preattached controller if the app set one before:
+        if hasattr(self, "screen") and not callable(getattr(self, "screen")):
+            # (back-compat if someone assigned self.screen = ScreenController(...))
+            self.screen_ctrl = getattr(self, "screen")
+    
+    
+    
     def stop(self):
         """A simple method to close the window, can be expanded for more cleanup."""
         self.close()
 
+    def mousePressEvent(self, e: QtGui.QMouseEvent) -> None:
+        now = QtCore.QTime.currentTime().msecsSinceStartOfDay()
+        self._last_clicks.append(now)
+        self._last_clicks = self._last_clicks[-3:]
+        if len(self._last_clicks) == 3 and (self._last_clicks[-1] - self._last_clicks[0] <= 800):
+            self._open_settings()
+        super().mousePressEvent(e)
+    
+    def _open_settings(self):
+        """
+        Builds Model + ViewModel + Dialog and shows it modally.
+        """
+        model = SettingsModel(self.settings, getattr(self, "settings_path", None))
+        vm = SettingsViewModel(
+            model=model,
+            backend_port=self.backend_port,
+            on_apply_brightness=self._on_apply_brightness,
+            on_apply_orientation=self._on_apply_orientation,
+            on_autoupdate_pull=self._on_autoupdate_pull,
+            on_restart_service_async=self._on_restart_service_async,
+            wake_screen_worker=(self.screen_ctrl.wake if self.screen_ctrl else (lambda: None)),
+            notifications=(self.notifications if hasattr(self, "notifications") else None),
+            parent=self,
+        )
+        dlg = SettingsDialog(vm, model, parent=self)
+        dlg.exec()
+
+        
     def set_frame(self, bgr: np.ndarray) -> None:
         if bgr is None:
             return
@@ -77,6 +122,134 @@ class PhotoFrameQtWidget(QtWidgets.QWidget, iFrame, metaclass=IFrameQtWidgetMeta
         self._overlay.update_weather(weather_obj)  
     # endregion
 
+    #region settings_form
+    @staticmethod
+    def _list_outputs() -> list[str]:
+        try:
+            out = subprocess.check_output(["wlr-randr"], universal_newlines=True, stderr=subprocess.DEVNULL, timeout=3)
+        except Exception:
+            return []
+        names = []
+        for line in out.splitlines():
+            line = line.strip()
+            if not line or line.startswith(" "):
+                continue
+            name = line.split()[0]
+            if name not in names:
+                names.append(name)
+        return names
+
+    def _pick_default_output(self) -> Optional[str]:
+        outs = self._list_outputs()
+        outs.sort(key=lambda n: (0 if n.upper().startswith("DSI") else 1, n))
+        return outs[0] if outs else None
+
+
+    # ---- Brightness ----
+    def _on_apply_brightness(self, pct: int) -> bool:
+        try:
+            pct = max(10, min(100, int(pct)))
+            if not self.screen_ctrl:
+                QtWidgets.QMessageBox.warning(self, "Brightness", "Screen controller not available.")
+                return False
+            ok = self.screen_ctrl.set_brightness_percent(pct, allow_zero=False)
+            if ok:
+                self.settings.setdefault("screen", {})["brightness"] = pct
+            return bool(ok)
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Brightness error", str(e))
+            return False
+    def attach_screen_controller(self, controller) -> None:
+        """Call this after creating the widget to wire the ScreenController."""
+        self.screen_ctrl = controller
+
+    # ---- Orientation ----
+    def _on_apply_orientation(self, transform: str) -> bool:
+        """
+        Calls wlr-randr with the default output. Shows errors to the user.
+        """
+        output = self._pick_default_output()
+        if not output:
+            QtWidgets.QMessageBox.critical(self, "No display", "Could not detect a Wayland output via wlr-randr.")
+            return False
+        try:
+            subprocess.run(["wlr-randr", "--output", output, "--transform", transform], check=True)
+            return True
+        except subprocess.CalledProcessError as e:
+            QtWidgets.QMessageBox.critical(self, "Failed to set orientation", e.stdout or str(e))
+            return False
+
+    # ---- Auto-update (pull now) ----
+    def _on_autoupdate_pull(self) -> None:
+        """
+        Asynchronous pull with notifications and a result dialog.
+        """
+        def worker():
+            ok, msg = False, "Unknown"
+            try:
+                if not hasattr(self, "autoupdater") or self.autoupdater is None:
+                    raise RuntimeError("AutoUpdater not available.")
+                ok, msg = self.autoupdater.pull_now()
+            except Exception as e:
+                ok, msg = False, f"pull_now() crashed: {e}"
+
+            # file a notification
+            try:
+                if hasattr(self, "notifications") and self.notifications:
+                    self.notifications.add(
+                        f"Manual update {'succeeded' if ok else 'failed'}: {msg}",
+                        level=("update" if ok else "error")
+                    )
+            except Exception:
+                pass
+
+            # UI feedback
+            def ui():
+                QtWidgets.QMessageBox.information(
+                    self,
+                    "Pull OK" if ok else "Pull failed",
+                    str(msg)[:2000] if msg else ("Success" if ok else "Failed")
+                )
+            QtCore.QTimer.singleShot(0, ui)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    # ---- Restart service (async) ----
+    def _on_restart_service_async(self) -> None:
+        """
+        Asks systemd to restart the desktop app service. No sudo here; polkit rules handle auth.
+        """
+        def worker():
+            unit = "PhotoFrame_Desktop_App.service"  # adjust if needed
+            systemctl = "/usr/bin/systemctl"
+            cmd = [systemctl, "restart", unit]
+            try:
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+            except Exception as e:
+                def ui_err():
+                    QtWidgets.QMessageBox.critical(self, "Restart failed", f"{' '.join(cmd)}\nerror: {e}")
+                return QtCore.QTimer.singleShot(0, ui_err)
+
+            if r.returncode == 0:
+                def ui_ok():
+                    try:
+                        QtWidgets.QMessageBox.information(self, "Restart", f"Restarted {unit}. The app will exit now.")
+                    except Exception:
+                        pass
+                    QtCore.QTimer.singleShot(200, lambda: os._exit(0))
+                QtCore.QTimer.singleShot(0, ui_ok)
+            else:
+                def ui_err():
+                    QtWidgets.QMessageBox.critical(
+                        self, "Restart failed",
+                        f"{' '.join(cmd)}\nstdout:\n{r.stdout}\n\nstderr:\n{r.stderr}"
+                    )
+                QtCore.QTimer.singleShot(0, ui_err)
+        threading.Thread(target=worker, daemon=True).start()
+
+    #endregion
+
+    
 
 class ImageCanvas(QtWidgets.QWidget):
     def __init__(self, parent=None):
@@ -324,3 +497,7 @@ class OverlayPanel(QtWidgets.QWidget):
 def cv2_to_rgb_bytes(bgr: np.ndarray) -> bytes:
     rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
     return rgb.tobytes()
+
+
+
+

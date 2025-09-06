@@ -49,8 +49,8 @@ class EffectHandler:
             17: RippleEffect,
             18: SpinZoomFadeEffect,
             19: CrossZoomEffect,
-            20: SwirlEffect,
-            21: ZoomBlurEffect,
+            20: ZoomBlurEffect,
+            # 21: SwirlEffect,
             # 22: PlainEffect
         }
         self.current_effect_idx = -1
