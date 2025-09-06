@@ -1,4 +1,5 @@
 # region imports
+import hashlib
 import os
 import sys
 
@@ -8,12 +9,8 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import logging
 import threading
 import time
-from cv2 import imread
 import random as rand
 from enum import Enum
-import hashlib
-import psutil
-import queue
 import cv2
 import numpy as np
 import json
@@ -24,7 +21,6 @@ from WebAPI.API import Backend
 from image_handler import Image_Utils
 from Utilities.observer import ImagesObserver
 from Utilities.Weather.weather_adapter import build_weather_client
-from overlay import OverlayRenderer
 from iFrame import iFrame
 from EffectHandler import EffectHandler
 
@@ -63,12 +59,19 @@ class PhotoFrameServer(iFrame):
     Client displays frames only.
     """
     def __init__(self, width=1920, height=1080, iframe: iFrame = None, images_dir=None, settings_path="settings.json"):
-        self.set_logger(logging)
         global SETTINGS_PATH
         SETTINGS_PATH = settings_path
-        self.settings_path = os.path.abspath(settings_path)
-        self.settings = SettingsHandler(SETTINGS_PATH, logging)
+        self._gui_frame = iframe
         
+        try:
+            cv2.setUseOptimized(True)
+            cv2.setNumThreads(max(1, (os.cpu_count() or 4) - 2))
+        except Exception as e:
+            self.logger.exception(f"Failed to set OpenCV optimizations: {e}")
+        
+        self.settings_handler_path = os.path.abspath(settings_path)
+        self.settings_handler = SettingsHandler(SETTINGS_PATH, logging)
+
         if not self.set_images_dir(images_dir=images_dir):
             logging.error("Failed to set images directory. Exiting.")
             raise FileNotFoundError("Images directory not found and could not be created.")
@@ -76,41 +79,53 @@ class PhotoFrameServer(iFrame):
         self.screen_width = width
         self.screen_height = height
 
-        self._target_fps = int(self.settings.get("animation_fps", 30))
-        self._frame_interval = 1.0 / float(self._target_fps)
-
-        # Effects and image utils
-        self.EffectHandler = EffectHandler()
-        self.image_handler = Image_Utils(settings=self.settings)
-        self.effects = self.EffectHandler.get_effects()
-
-        # iFrame peer (GUI)
-        self._gui_frame = iframe
-
-        # Images cache
-        self.update_images_list()
-        self.current_image_idx = -1
-        self.current_effect_idx = -1
+        self._target_fps = int(self.settings_handler.get("animation_fps", 30))
+        self._transition_fps = int(self.settings_handler.get("transition_fps", 30))
+        self._transition_frame_interval = 1.0 / max(1.0, float(self._transition_fps))
+ 
+        self.current_image_idx = 0
+        self.current_effect_idx = 0
         self.current_image = None
         self.next_image = None
         self.frame_to_stream = None
         self.is_running = True
 
-        # Timing
-        self._target_fps = 30
-        self._frame_interval = 1.0 / float(self._target_fps)
-        self._in_transition = False
+        
+        self.EffectHandler = EffectHandler()
+        self.image_handler = Image_Utils(settings=self.settings_handler)
+        self.effects = self.EffectHandler.get_effects()
+        self.update_images_list()    
+        
+        if self._gui_frame:
+            # Keep a handle to the thread so we can join on shutdown
+            self._date_time_thread = threading.Thread(
+                target=self.start_date_time_loop,
+                name="DateTimeThread",
+                daemon=True,
+            )
+            self._date_time_thread.start()
 
-        # Weather + overlay configuration (server side)
-        self._init_overlay_pipeline()
+            # Weather client and loop
+            self._weather_stop = threading.Event()
+            self.weather_client = build_weather_client(self, self.settings_handler)
 
-        self._overlay_cached_rgba = None
-        self._overlay_cache_key = None
+            # Some handlers may expose initialize_weather_updates(); call if present.
+            init = getattr(self.weather_client, "initialize_weather_updates", None)
+            if callable(init):
+                try:
+                    init()
+                except Exception:
+                    logging.exception("weather_client.initialize_weather_updates failed")
+
+            self._weather_thread = None
+            self._start_local_weather_loop()
+        else:
+            self._date_time_thread = None
 
         # Filesystem observer
         self._observer_started = False
         self._observer_debounce_ts = 0.0
-        self._observer_min_interval = 1.0 
+        self._observer_min_interval = 1.0
         self.Observer = ImagesObserver(frame=self, images_dir=self.IMAGE_DIR)
         # If your ImagesObserver supports a callback, register it:
         if hasattr(self.Observer, "on_change"):
@@ -119,10 +134,7 @@ class PhotoFrameServer(iFrame):
             self.Observer.start_observer()
             self._observer_started = True
 
-        # Start compositor thread to keep time/weather updating between transitions
-        self._compositor_stop = threading.Event()
-        self._compositor_thread = threading.Thread(target=self._compositor_loop, name="Compositor30FPS", daemon=True)
-        self._compositor_thread.start()
+   
 
     def _on_images_dir_changed(self):
         now = time.time()
@@ -138,127 +150,26 @@ class PhotoFrameServer(iFrame):
         except Exception:
             logging.exception("Failed to update images list after directory change")
         
-    # ------------- Overlay pipeline (server side) -------------
-    # PhotoFrameServer.py  --- add inside the class
-    def _overlay_key_from_weather(self, weather: dict) -> tuple:
-        now = time.localtime()
-        clk = (now.tm_hour, now.tm_min, now.tm_sec)
-        if weather:
-            sig = (weather.get("temp"), weather.get("unit"), weather.get("description"))
-        else:
-            sig = (None, None, None)
-        return clk + sig
+        
+    def start_date_time_loop(self):
+        # runs in a worker thread, not the GUI thread
+        while self.is_running:
+            now = time.localtime()
+            dt = f"{now.tm_hour:02d}:{now.tm_min:02d}:{now.tm_sec:02d}"
+            self._gui_frame.set_date_time(dt)  # thread-safe (invokeMethod with Q_ARG or signals)
+            time.sleep(1)
 
-    def _ensure_overlay_cached(self, weather: dict):
-        key = self._overlay_key_from_weather(weather or {})
-        if key != self._overlay_cache_key or self._overlay_cached_rgba is None:
-            self._overlay_cached_rgba = self.overlay.render_overlay_rgba(
-                self.screen_width,
-                self.screen_height,
-                self._overlay_margins,
-                weather or {},
-                (255, 255, 255),
-            )
-            self._overlay_cache_key = key
-
-    @staticmethod
-    def _blend_rgba_over_bgr(base_bgr: np.ndarray, overlay_rgba_img) -> np.ndarray:
-        # overlay_rgba_img is a PIL.Image RGBA the same size as base
-        ov = np.array(overlay_rgba_img, dtype=np.uint8)  # HxWx4 RGBA
-        if ov.shape[0] != base_bgr.shape[0] or ov.shape[1] != base_bgr.shape[1]:
-            ov = cv2.resize(ov, (base_bgr.shape[1], base_bgr.shape[0]), interpolation=cv2.INTER_NEAREST)
-
-        alpha = ov[:, :, 3:4].astype(np.float32) / 255.0   # HxWx1
-        rgb = ov[:, :, :3].astype(np.float32)              # HxWx3
-        dst = base_bgr.astype(np.float32)
-
-        # out = alpha*rgb + (1-alpha)*dst
-        dst = rgb * alpha + dst * (1.0 - alpha)
-        return dst.astype(np.uint8)
-
-    
-    def _init_overlay_pipeline(self) -> None:
-        font_name = self.settings.get("font_name") or "DejaVuSans.ttf"
-        candidate_dirs = [
-            os.path.abspath(os.path.dirname(__file__)),
-            os.path.abspath(os.path.join(os.path.dirname(__file__), "..")),
-        ]
-        font_path = None
-        for d in candidate_dirs:
-            fp = os.path.join(d, font_name)
-            if os.path.isfile(fp):
-                font_path = fp
-                break
-        if font_path is None:
-            font_path = font_name
-
-        # Panels config
-        enable_panels = bool(self.settings.get("allow_translucent_background", False))
-        panels_cfg = self.settings.get("overlay_panels", {}) or {}
-        panel_alpha = int(panels_cfg.get("alpha", 128))
-        panel_padding = int(panels_cfg.get("padding", 12))
-        panel_radius = int(panels_cfg.get("radius", 10))
-        # Optional: keep your full-width contrast band together with panels
-        self._keep_band_with_panels = bool(panels_cfg.get("keep_band_with_panels", False))
-
-        self.overlay = OverlayRenderer(
-            font_path=font_path,
-            time_font_size=int(self.settings.get("time_font_size", 48)),
-            date_font_size=int(self.settings.get("date_font_size", 28)),
-            stats_font_size=int(self.settings.get("stats", {}).get("font_size", 20)),
-            desired_size=(self.screen_width, self.screen_height),
-            enable_panels=enable_panels,
-            panel_alpha=panel_alpha,
-            panel_padding=panel_padding,
-            panel_radius=panel_radius,
-        )
-
-        self._overlay_margins = {
-            "left": int(self.settings.get("margin_left", 50)),
-            "bottom": int(self.settings.get("margin_bottom", 50)),
-            "right": int(self.settings.get("margin_right", 50)),
-            "spacing": int(self.settings.get("spacing_between", 10)),
-        }
-
-        # Weather client
-        self.weather_client = build_weather_client(self, self.settings)
-        try:
-            self.weather_client.fetch()
-            logging.info("Initial weather fetched: %s", str(self.weather_client.data())[:200])
-        except Exception:
-            logging.exception("Initial weather fetch failed")
-
-        # Start periodic updates: prefer client's own scheduler if available
-        self._weather_stop = threading.Event()
-        if hasattr(self.weather_client, "initialize_weather_updates"):
-            try:
-                self.weather_client.initialize_weather_updates()
-                self._weather_thread = None  # managed by the client
-                logging.info("Weather updates initialized by provider.")
-            except Exception:
-                logging.exception("Failed to initialize provider-managed weather updates; falling back to local loop.")
-                self._start_local_weather_loop()
-        else:
-            self._start_local_weather_loop()
-
-        def _weather_loop(self) -> None:
-            while not getattr(self, "_weather_stop", threading.Event()).is_set():
-                try:
-                    self.weather_client.fetch()
-                except Exception:
-                    logging.exception("weather loop error (server)")
-                time.sleep(600)
-    
     def _start_local_weather_loop(self) -> None:
         def _weather_loop():
             while not self._weather_stop.is_set():
                 try:
                     self.weather_client.fetch()
+                    self._gui_frame.set_weather(self.weather_client.data() or {})
                 except Exception:
                     logging.exception("weather loop error (server)")
                 # wait with interruptibility
                 self._weather_stop.wait(600.0)
-        self._weather_thread = threading.Thread(target=_weather_loop, name="WeatherLoop", daemon=True)
+        self._weather_thread = threading.Thread(target=_weather_loop, name="WeatherThread", daemon=True)
         self._weather_thread.start()
 
     def _stop_weather_loop(self) -> None:
@@ -267,136 +178,86 @@ class PhotoFrameServer(iFrame):
         except Exception:
             pass
 
-    # ------------- 30 fps compositor loop -------------
-    def _compositor_loop(self) -> None:
+    def _send_frame(self, frame_bgr: np.ndarray) -> None:
         """
-        Runs continuously at 30 fps when not in a transition, to keep the clock and weather
-        updating on screen even when the base image is static.
+        Ensure frame is screen-sized, then push directly to GUI and API.
+        No server-side overlays or blending.
         """
-        last_push = 0.0
-        while not self._compositor_stop.is_set() and self.is_running:
-            start = time.time()
-            try:
-                if not self._in_transition and self.current_image is not None:
-                    # Compose from the current base image every frame
-                    composed = self._compose_final_frame(self.current_image)
-                    self._push_composed_to_outputs(composed)
-                    last_push = start
-            except Exception:
-                logging.exception("compositor loop error")
-            # Sleep to maintain ~30 fps
-            elapsed = time.time() - start
-            sleep_time = max(0.0, self._frame_interval - elapsed)
-            time.sleep(sleep_time)
-
-    # ------------- Composition helpers -------------
-    def _draw_contrast_band(self, frame_bgr: np.ndarray) -> None:
-        """
-        Draw a translucent black band behind the overlay area to guarantee readability.
-        In-place modification. Keeps image detail visible but improves contrast.
-        """
-        h, w = frame_bgr.shape[:2]
-        # Band height proportional to time+date font sizes
-        band_h = max(60, int((self.overlay.time_font_size + self.overlay.date_font_size) * 1.2))
-
-        # Bottom-aligned band, leave margin_bottom
-        mb = max(0, int(self._overlay_margins.get("bottom", 50)))
-        y2 = h - mb
-        y1 = max(0, y2 - band_h)
-        x1 = 0
-        x2 = w
-
-        roi = frame_bgr[y1:y2, x1:x2]
-        if roi.size == 0:
-            return
-        # Blend roi with black at alpha 0.35
-        overlay = np.zeros_like(roi, dtype=roi.dtype)
-        cv2.addWeighted(roi, 0.65, overlay, 0.35, 0.0, dst=roi)
-
-    # def _compose_final_frame(self, frame_bgr: np.ndarray) -> np.ndarray:
-    #     composed = self.overlay.resize_and_crop(frame_bgr, self.screen_width, self.screen_height)
-
-    #     # try:
-    #     #     # Only draw the old band if panels are disabled, or if explicitly requested
-    #     #     if (not self.overlay.enable_panels) or getattr(self, "_keep_band_with_panels", False):
-    #     #         self._draw_contrast_band(composed)
-    #     # except Exception:
-    #     #     pass
-
-    #     try:
-    #         weather = self.weather_client.data() or {}
-    #         composed = self.overlay.render_datetime_and_weather(
-    #             frame_bgr=composed,
-    #             margins=self._overlay_margins,
-    #             weather=weather,
-    #             font_color=(255, 255, 255),
-    #         )
-    #     except Exception:
-    #         logging.exception("overlay.render_datetime_and_weather failed")
-
-    #     return composed
-
-    def _compose_final_frame(self, frame_bgr: np.ndarray) -> np.ndarray:
-        # 1) Avoid per-frame resize if already at target size
         if frame_bgr is None:
-            return None
+            return
+
+        # Resize/letterbox only if needed
         h, w = frame_bgr.shape[:2]
         if w != self.screen_width or h != self.screen_height:
-            composed = self.overlay.resize_and_crop(frame_bgr, self.screen_width, self.screen_height)
-        else:
-            composed = frame_bgr.copy()
-
-        # 2) Re-render overlay at most once per second or when weather changes
-        try:
-            weather = self.weather_client.data() or {}
-        except Exception:
-            weather = {}
-
-        self._ensure_overlay_cached(weather)
-
-        # 3) Alpha-blend cached overlay with OpenCV/NumPy
-        try:
-            composed = self._blend_rgba_over_bgr(composed, self._overlay_cached_rgba)
-        except Exception:
-            # Fallback: old slow path (shouldn't be hit)
-            composed = self.overlay.render_datetime_and_weather(
-                frame_bgr=composed,
-                margins=self._overlay_margins,
-                weather=weather,
-                font_color=(255, 255, 255),
+            frame_bgr = self.image_handler.resize_image_with_background(
+                frame_bgr, self.screen_width, self.screen_height
             )
-        return composed
 
+        # For API (if any consumers still pull latest)
+        self.frame_to_stream = frame_bgr
 
-    def _push_composed_to_outputs(self, composed: np.ndarray) -> None:
-        self.frame_to_stream = composed
-        if hasattr(self, 'm_api'):
+        # GUI push
+        if self._gui_frame and hasattr(self._gui_frame, "set_frame"):
+            try:
+                self._gui_frame.set_frame(frame_bgr)
+            except Exception:
+                logging.exception("Failed to publish frame to GUI")
+
+        # API notify (optional)
+        if hasattr(self, "m_api"):
             try:
                 self.m_api._new_frame_ev.set()
             except Exception:
-                pass
-        if self._gui_frame and hasattr(self._gui_frame, "publish_frame_from_backend"):
-            try:
-                self._gui_frame.publish_frame_from_backend(composed)
-            except Exception:
-                pass
+                logging.exception("Failed to signal API new frame")
 
     # ------------- Stream API -------------
-    def update_frame_to_stream(self, frame):
+    def update_frame(self, generator):
         """
-        Compose final frame here (server), then push to stream and GUI.
-        Used by transition driver and also by initial display.
+        Pull frames from the transition generator and push each one to the GUI.
+        Uses a monotonic running deadline to avoid drift. After the generator
+        completes, explicitly pushes the last frame again to guarantee it lands.
         """
-        try:
-            if frame is None:
-                return
-            composed = self._compose_final_frame(frame)
-            self._push_composed_to_outputs(composed)
-        except Exception:
-            logging.exception("update_frame_to_stream failed")
+        last_frame = None
 
-    def get_live_frame(self):
-        return self.frame_to_stream
+        try:
+            # Prefer perf_counter() (monotonic, high-res) for pacing
+            interval = float(getattr(self, "_transition_frame_interval", self._transition_frame_interval))
+            now = time.perf_counter()
+            next_deadline = now  # send first frame immediately
+
+            for frame in generator:
+                last_frame = frame
+
+                # Send immediately on arrival
+                self._send_frame(frame)
+
+                # Compute next deadline and sleep just enough
+                next_deadline += interval
+                now = time.perf_counter()
+                sleep_for = next_deadline - now
+                if sleep_for > 0:
+                    # Sleep in small chunks to be responsive on wake-ups
+                    # (keeps jitter lower on some platforms)
+                    end = next_deadline
+                    while True:
+                        now = time.perf_counter()
+                        remaining = end - now
+                        if remaining <= 0:
+                            break
+                        time.sleep(min(remaining, 0.005))
+
+            # The generator ended. Some effects do not yield the exact final image.
+            # Push the last frame one more time to guarantee the final state landed.
+            if last_frame is not None:
+                self._send_frame(last_frame)
+
+            return AnimationStatus.ANIMATION_FINISHED
+
+        except Exception as e:
+            logging.exception(f"Error during frame update: {e}")
+            return AnimationStatus.ANIMATION_ERROR
+
+
 
     # ------------- Utils -------------
     def compute_image_hash(self, image_path):
@@ -408,6 +269,18 @@ class PhotoFrameServer(iFrame):
 
     def get_is_running(self):
         return self.is_running
+
+    def set_date_time(self):
+        pass
+    
+    def set_weather(self):
+        pass
+
+    def get_live_frame(self):
+        return self.frame_to_stream
+    
+    def update_frame_to_stream(self, frame_bgr: np.ndarray) -> None:
+        pass
 
     def send_log_message(self, msg, logger: logging):
         try:
@@ -449,14 +322,6 @@ class PhotoFrameServer(iFrame):
         self.current_image_idx = (self.current_image_idx + 1) % len(self.shuffled_images)
         return self.shuffled_images[self.current_image_idx]
 
-    def set_logger(self, logger):
-        try:
-            self.logger = logging.getLogger(__name__)
-            logging.info("Loaded settings from settings.json.")
-        except FileNotFoundError:
-            logging.error("settings.json not found. Exiting.")
-            raise
-
     def set_images_dir(self, images_dir=None):
         if images_dir is not None:
             self.IMAGE_DIR = images_dir
@@ -465,7 +330,7 @@ class PhotoFrameServer(iFrame):
                 logging.warning(f"'{self.IMAGE_DIR}' directory not found. Created a new one.")
             return True
 
-        images_dir = self.settings.get("images_dir") or "Images"
+        images_dir = self.settings_handler.get("images_dir") or "Images"
         self.IMAGE_DIR = os.path.abspath(
             os.path.join(os.path.dirname(__file__), images_dir)
         )
@@ -479,34 +344,10 @@ class PhotoFrameServer(iFrame):
         self.shuffled_images = self.image_handler.shuffle_images(self.images)
 
     # ------------- Transition driver -------------
-    def update_frame(self, generator):
-        """
-        Drive a transition generator. Server composes and publishes frames at ~30 fps.
-        The compositor loop is paused by _in_transition flag while this runs.
-        """
-        self._in_transition = True
-        try:
-            frame_interval = self._frame_interval
-            last = time.time()
-            for frame in generator:
-                now = time.time()
-                # Compose and push
-                self.update_frame_to_stream(frame)
-                # Pace to 30 fps
-                elapsed = now - last
-                if elapsed < frame_interval:
-                    time.sleep(frame_interval - elapsed)
-                last = time.time()
-            return AnimationStatus.ANIMATION_FINISHED
-        except Exception as e:
-            logging.exception(f"Error during frame update: {e}")
-            return AnimationStatus.ANIMATION_ERROR
-        finally:
-            self._in_transition = False
 
     def start_image_transition(self, image1_path=None, image2_path=None, duration=5):
         if self.current_image is None:
-            self.current_image = imread(self.get_random_image())
+            self.current_image = cv2.imread(self.get_random_image())
             if self.current_image is None:
                 return AnimationStatus.ANIMATION_FINISHED
             self.current_image = self.image_handler.resize_image_with_background(
@@ -518,7 +359,7 @@ class PhotoFrameServer(iFrame):
 
         self.update_image_metadata(image2_path)
 
-        self.next_image = imread(image2_path)
+        self.next_image = cv2.imread(image2_path)
         self.next_image = self.image_handler.resize_image_with_background(
             self.next_image, self.screen_width, self.screen_height
         )
@@ -527,32 +368,36 @@ class PhotoFrameServer(iFrame):
         gen = effect_function(self.current_image, self.next_image, duration, fps=self._target_fps)
         self.status = self.update_frame(gen)
 
+        if self.status == AnimationStatus.ANIMATION_FINISHED and self.next_image is not None:
+            try:
+                self._send_frame(self.next_image)
+            except Exception:
+                logging.exception("final next_image push failed")
+
         if self.status == AnimationStatus.ANIMATION_FINISHED:
             self.current_image = self.next_image
             return AnimationStatus.ANIMATION_FINISHED
 
-    def publish_frame_from_backend(self, frame):
+    def set_frame(self, frame):
         # No-op in server. Client implements publish to GUI.
         pass
 
     # ------------- Main loops -------------
     def run_photoframe(self):
         self.shuffled_images = self.image_handler.shuffle_images(self.images)
-        self.current_image = imread(self.get_random_image())
+        self.current_image = cv2.imread(self.get_random_image())
         if self.current_image is not None:
             self.current_image = self.image_handler.resize_image_with_background(
                 self.current_image, self.screen_width, self.screen_height
             )
-            # Initial compose+push
-            self.update_frame_to_stream(self.current_image)
+            self._send_frame(self.current_image)
 
         while self.is_running:
-            if self.settings["animation_duration"] > 0:
-                # Kick a transition; compositor loop will pause while transition runs
-                self.start_image_transition(duration=self.settings["animation_duration"])
-                time.sleep(self.settings["delay_between_images"])
+            if self.settings_handler["animation_duration"] > 0:
+                self.start_image_transition(duration=self.settings_handler["animation_duration"])
+                time.sleep(self.settings_handler["delay_between_images"])
             else:
-                # Idle mode: compositor loop already pushes 30 fps with time/weather
+                # No compositor; nothing to do here other than keep process responsive
                 time.sleep(0.1)
 
     def main(self):
@@ -567,17 +412,73 @@ class PhotoFrameServer(iFrame):
                 time.sleep(1)
         except KeyboardInterrupt:
             logging.info("Shutting down.")
-            self.is_running = False
-            self._compositor_stop.set()
-            self._stop_weather_loop() 
+            self.stop_services()
 
+    def stop_services(self) -> None:
+        def _join(th, name: str, timeout: float = 2.0) -> None:
+            if th is None:
+                return
+            try:
+                if th.is_alive():
+                    th.join(timeout=timeout)
+                    if th.is_alive():
+                        logging.warning("Thread %s did not stop within %.1fs.", name, timeout)
+            except Exception:
+                logging.exception("Failed joining thread %s", name)
+
+        logging.info("PhotoFrameServer.stop_services: stopping...")
+
+        self.is_running = False
+
+        try:
+            if hasattr(self, "_weather_stop") and self._weather_stop:
+                self._weather_stop.set()
+        except Exception:
+            pass
+
+        try:
+            if hasattr(self, "Observer") and self.Observer:
+                stop_fn = getattr(self.Observer, "stop_observer", None)
+                if callable(stop_fn):
+                    stop_fn()
+                else:
+                    close_fn = getattr(self.Observer, "close", None)
+                    if callable(close_fn):
+                        close_fn()
+        except Exception:
+            logging.exception("Failed to stop ImagesObserver")
+
+        try:
+            if hasattr(self, "m_api") and self.m_api:
+                for meth in ("stop", "shutdown", "close"):
+                    fn = getattr(self.m_api, meth, None)
+                    if callable(fn):
+                        try:
+                            fn()
+                        except Exception:
+                            logging.exception("Backend.%s() failed", meth)
+        except Exception:
+            logging.exception("Failed to stop Backend API")
+
+        _join(getattr(self, "_date_time_thread", None), "DateTimeThread")
+        _join(getattr(self, "_weather_thread", None), "WeatherThread")
+
+        try:
+            if self._gui_frame and hasattr(self._gui_frame, "stop"):
+                self._gui_frame.stop()
+        except Exception:
+            logging.exception("GUI stop failed")
+
+        logging.info("PhotoFrameServer.stop_services: done.")
+
+    
     def _start_api(self):
         try:
             self.m_api = Backend(
                 frame=self,
-                settings=self.settings,          # existing settings dict/object
+                settings=self.settings_handler,          # existing settings dict/object
                 image_dir=self.IMAGE_DIR,
-                settings_path=self.settings_path  # <-- pass absolute path
+                settings_path=self.settings_handler_path  # <-- pass absolute path
             )
             self.m_api.start()
         except Exception:
@@ -688,7 +589,7 @@ class PhotoFrameServer(iFrame):
             height = entry.get("height")
             if width is None or height is None:
                 try:
-                    img = cv2.imread(image_path)
+                    img = cv2.cv2.imread(image_path)
                     if img is not None:
                         height, width = int(img.shape[0]), int(img.shape[1])
                 except Exception:

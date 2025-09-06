@@ -27,8 +27,6 @@ except Exception:
 
 class MqttBridge:
     """
-    MQTT bridge for PhotoFrameView (new architecture).
-
     Publishes (state topic JSON):
       ip, cpu_usage, cpu_temp_c, ram_percent, ram_used_mb, ram_total_mb,
       wifi_ssid, uptime_s, brightness

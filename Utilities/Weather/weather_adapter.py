@@ -22,6 +22,17 @@ class WeatherClient:
         except Exception:
             logging.exception("weather_adapter.data() failed")
             return {}
+        
+    def initialize_weather_updates(self) -> None:
+        # Optional: if a concrete handler provides its own scheduler, delegate to it.
+        init = getattr(self._impl, "initialize_weather_updates", None)
+        if callable(init):
+            try:
+                init()
+            except Exception:
+                logging.exception("weather_adapter.initialize_weather_updates() failed")
+
+        
 
 
 def _has_accuweather_keys(settings: Dict[str, Any]) -> bool:
@@ -29,10 +40,11 @@ def _has_accuweather_keys(settings: Dict[str, Any]) -> bool:
         return False
     api_key = settings.get("accuweather_api_key")
     loc_key = settings.get("accuweather_location_key")
-    if api_key == "YOUR_ACCUWEATHER_API_KEY" or loc_key == "YOUR_LOCATION_KEY":
-        return bool(None)
-    return bool(api_key and loc_key)
-
+    if api_key in (None, "", "YOUR_ACCUWEATHER_API_KEY"):
+        return False
+    if loc_key in (None, "", "YOUR_LOCATION_KEY"):
+        return False
+    return True
 
 def build_weather_client(frame: Any, settings: Dict[str, Any]) -> WeatherClient:
     if _has_accuweather_keys(settings):

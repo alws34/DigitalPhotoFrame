@@ -23,15 +23,17 @@ class iFrame(ABC):
         pass
     
     @abstractmethod
-    def publish_frame_from_backend(self):
+    def set_frame(self):
         pass
     
     @abstractmethod
     def update_frame_to_stream(self):
         pass
+
     @abstractmethod
-    def get_live_frame(self):
+    def set_date_time(self):
         pass
-    # @abstractmethod
-    # def get_metadata(self):
-    #     pass
+    
+    @abstractmethod
+    def set_weather(self):
+        pass    
