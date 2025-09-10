@@ -65,7 +65,7 @@ class PhotoFrameServer(iFrame):
         
         try:
             cv2.setUseOptimized(True)
-            cv2.setNumThreads(max(1, (os.cpu_count() or 4) - 2))
+            cv2.setNumThreads(max(1, (os.cpu_count() or 4) - 1))
         except Exception as e:
             self.logger.exception(f"Failed to set OpenCV optimizations: {e}")
         
@@ -109,13 +109,8 @@ class PhotoFrameServer(iFrame):
             self._weather_stop = threading.Event()
             self.weather_client = build_weather_client(self, self.settings_handler)
 
-            # Some handlers may expose initialize_weather_updates(); call if present.
-            init = getattr(self.weather_client, "initialize_weather_updates", None)
-            if callable(init):
-                try:
-                    init()
-                except Exception:
-                    logging.exception("weather_client.initialize_weather_updates failed")
+            self._weather_stop = threading.Event()
+            self.weather_client = build_weather_client(self, self.settings_handler)
 
             self._weather_thread = None
             self._start_local_weather_loop()
@@ -134,7 +129,11 @@ class PhotoFrameServer(iFrame):
             self.Observer.start_observer()
             self._observer_started = True
 
-   
+    
+    def _blank_frame(self):
+        # neutral gray, screen-sized
+        return np.full((self.screen_height, self.screen_width, 3), 32, dtype=np.uint8)
+
 
     def _on_images_dir_changed(self):
         now = time.time()
@@ -160,6 +159,7 @@ class PhotoFrameServer(iFrame):
             time.sleep(1)
 
     def _start_local_weather_loop(self) -> None:
+        poll_sec = int(self.settings_handler.get("weather_poll_seconds", 900))  # default 15 min
         def _weather_loop():
             while not self._weather_stop.is_set():
                 try:
@@ -167,8 +167,7 @@ class PhotoFrameServer(iFrame):
                     self._gui_frame.set_weather(self.weather_client.data() or {})
                 except Exception:
                     logging.exception("weather loop error (server)")
-                # wait with interruptibility
-                self._weather_stop.wait(600.0)
+                self._weather_stop.wait(poll_sec)
         self._weather_thread = threading.Thread(target=_weather_loop, name="WeatherThread", daemon=True)
         self._weather_thread.start()
 
@@ -179,36 +178,31 @@ class PhotoFrameServer(iFrame):
             pass
 
     def _send_frame(self, frame_bgr: np.ndarray) -> None:
-        """
-        Ensure frame is screen-sized, then push directly to GUI and API.
-        No server-side overlays or blending.
-        """
         if frame_bgr is None:
             return
 
-        # Resize/letterbox only if needed
         h, w = frame_bgr.shape[:2]
         if w != self.screen_width or h != self.screen_height:
             frame_bgr = self.image_handler.resize_image_with_background(
                 frame_bgr, self.screen_width, self.screen_height
             )
 
-        # For API (if any consumers still pull latest)
+        # Make the current frame available to the backend streamer
         self.frame_to_stream = frame_bgr
 
-        # GUI push
+        # Push to GUI
         if self._gui_frame and hasattr(self._gui_frame, "set_frame"):
             try:
                 self._gui_frame.set_frame(frame_bgr)
             except Exception:
                 logging.exception("Failed to publish frame to GUI")
 
-        # API notify (optional)
-        if hasattr(self, "m_api"):
-            try:
+        # Signal backend streamer that a fresh frame exists
+        try:
+            if hasattr(self, "m_api") and self.m_api:
                 self.m_api._new_frame_ev.set()
-            except Exception:
-                logging.exception("Failed to signal API new frame")
+        except Exception:
+            logging.exception("Failed to signal API new frame")
 
     # ------------- Stream API -------------
     def update_frame(self, generator):
@@ -277,7 +271,9 @@ class PhotoFrameServer(iFrame):
         pass
 
     def get_live_frame(self):
-        return self.frame_to_stream
+        if isinstance(self.frame_to_stream, np.ndarray) and self.frame_to_stream.size:
+            return self.frame_to_stream
+        return self._blank_frame()
     
     def update_frame_to_stream(self, frame_bgr: np.ndarray) -> None:
         pass
@@ -385,24 +381,34 @@ class PhotoFrameServer(iFrame):
     # ------------- Main loops -------------
     def run_photoframe(self):
         self.shuffled_images = self.image_handler.shuffle_images(self.images)
-        self.current_image = cv2.imread(self.get_random_image())
-        if self.current_image is not None:
-            self.current_image = self.image_handler.resize_image_with_background(
-                self.current_image, self.screen_width, self.screen_height
-            )
-            self._send_frame(self.current_image)
+
+        # Try get a real image; otherwise fall back to a blank
+        img_path = self.get_random_image()
+        if img_path:
+            img = cv2.imread(img_path)
+            if img is not None:
+                self.current_image = self.image_handler.resize_image_with_background(
+                    img, self.screen_width, self.screen_height
+                )
+            else:
+                self.current_image = self._blank_frame()
+        else:
+            self.current_image = self._blank_frame()
+
+        # Push something right away so the stream has content
+        self._send_frame(self.current_image)
 
         while self.is_running:
             if self.settings_handler["animation_duration"] > 0:
                 self.start_image_transition(duration=self.settings_handler["animation_duration"])
                 time.sleep(self.settings_handler["delay_between_images"])
             else:
-                # No compositor; nothing to do here other than keep process responsive
                 time.sleep(0.1)
+
 
     def main(self):
         threading.Thread(target=self.run_photoframe, daemon=True).start()
-        threading.Thread(target=self._start_api, daemon=True).start()
+        #threading.Thread(target=self._start_api, daemon=True).start()
 
         my_pid = os.getpid()
         # self.start_monitor_thread(my_pid, interval=1.0)

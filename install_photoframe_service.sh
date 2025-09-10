@@ -13,16 +13,17 @@ DESKTOP_DIR="/home/pi/Desktop"
 START_SH="$DESKTOP_DIR/StartPhotoFrame.sh"
 STOP_SH="$DESKTOP_DIR/StopPhotoFrame.sh"
 RESTART_SH="$DESKTOP_DIR/RestartPhotoFrame.sh"
+UDEV_BACKLIGHT_RULE="/etc/udev/rules.d/90-backlight.rules"
 
-echo "[0/8] Installing NetworkManager + polkit (if missing)..."
+echo "[0/10] Installing NetworkManager + polkit (if missing)..."
 sudo apt-get update
 sudo apt-get install -y network-manager policykit-1
 
-echo "[0.1/8] Enabling NetworkManager and making sure it's running..."
+echo "[0.1/10] Enabling NetworkManager and making sure it's running..."
 sudo systemctl enable NetworkManager
 sudo systemctl restart NetworkManager
 
-echo "[0.2/8] Creating polkit rule to allow members of 'netdev' to manage Wi-Fi without sudo..."
+echo "[0.2/10] Creating polkit rule to allow members of 'netdev' to manage Wi-Fi without sudo..."
 sudo tee "$POLKIT_RULE" >/dev/null <<'EOF'
 /* Allow Wi-Fi scan/connect and system connection changes for netdev group */
 polkit.addRule(function(action, subject) {
@@ -40,27 +41,43 @@ polkit.addRule(function(action, subject) {
 });
 EOF
 
-echo "[0.21/8] Adding 'pi' to netdev group..."
+echo "[0.21/10] Adding 'pi' to netdev and video groups (video needed for backlight)..."
 sudo usermod -aG netdev pi
+sudo usermod -aG video pi
 
-echo "[0.3/8] Reloading polkit (best effort)..."
+echo "[0.3/10] Reloading polkit (best effort)..."
 sudo systemctl restart polkit || true
 
-echo "[1/8] Installing OS packages required by the app..."
+echo "[1/10] Installing OS packages required by the app..."
 sudo apt-get install -y \
   python3 python3-venv python3-dev python3-tk python3-pip \
   libatlas-base-dev libopenjp2-7 libjpeg-dev zlib1g-dev \
-  libxcb-render0 libxcb-shm0 libxkbcommon-x11-0 \
+  libxcb-render0 libxcb-shm0 libxkbcommon-x11-0 libxcb-cursor0 \
   libheif1 libheif-dev fonts-dejavu ca-certificates curl git \
   wlr-randr
 
-echo "[2/8] Creating virtual environment at $VENV_DIR ..."
+echo "[1.1/10] Installing Qt Wayland runtime bits..."
+sudo apt-get install -y \
+  qt6-wayland qt6-qpa-plugins qt6-gtk-platformtheme \
+  fonts-dejavu fonts-liberation
+
+echo "[1.2/10] Applying udev rule for backlight write access (sysfs fallback path)..."
+sudo tee "$UDEV_BACKLIGHT_RULE" >/dev/null <<'EOF'
+# Make backlight writable by the 'video' group for non-root user sessions
+SUBSYSTEM=="backlight", GROUP="video", MODE="0664"
+EOF
+
+echo "[1.3/10] Reloading udev rules and triggering backlight..."
+sudo udevadm control --reload
+sudo udevadm trigger --subsystem-match=backlight || true
+
+echo "[2/10] Creating virtual environment at $VENV_DIR ..."
 python3 -m venv "$VENV_DIR"
 
-echo "[3/8] Upgrading pip/setuptools/wheel..."
+echo "[3/10] Upgrading pip/setuptools/wheel..."
 "$VENV_DIR/bin/pip" install --upgrade pip setuptools wheel
 
-echo "[4/8] Installing Python dependencies from $REQS_FILE ..."
+echo "[4/10] Installing Python dependencies from $REQS_FILE ..."
 if [ ! -f "$REQS_FILE" ]; then
   echo "requirements.txt not found at $REQS_FILE"
   exit 1
@@ -72,7 +89,7 @@ if [ -f "/home/pi/.Xauthority" ]; then
   XAUTH_LINE="Environment=XAUTHORITY=/home/pi/.Xauthority"
 fi
 
-echo "[5/8] Writing system service to $SERVICE_PATH ..."
+echo "[5/10] Writing system service to $SERVICE_PATH ..."
 sudo tee "$SERVICE_PATH" >/dev/null <<EOF
 [Unit]
 Description=Photo Frame Desktop App (system-wide)
@@ -85,32 +102,41 @@ User=pi
 Group=pi
 WorkingDirectory=$APP_DIR
 
-# Wait until a display socket and user bus exist (boot-time readiness)
-ExecStartPre=/bin/sh -c 'until [ -S /tmp/.X11-unix/X0 ] || [ -S /run/user/1000/wayland-0 ]; do sleep 1; done'
+# Wait until Wayland socket and user bus exist
+ExecStartPre=/bin/sh -c 'until [ -S /run/user/1000/wayland-0 ]; do sleep 1; done'
 ExecStartPre=/bin/sh -c 'until [ -S /run/user/1000/bus ]; do sleep 1; done'
 
-# Launch the new entry point
+# Launch
 ExecStart=$PYTHON $APP_DIR/app.py
 
 Restart=always
 RestartSec=3
 TimeoutStartSec=0
 
-# GUI env (keep from your script)
+# GUI env for Wayland
 Environment=HOME=/home/pi
-Environment=DISPLAY=:0
 Environment=XDG_RUNTIME_DIR=/run/user/1000
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
-Environment=PYTHONUNBUFFERED=1
+Environment=WAYLAND_DISPLAY=wayland-0
+Environment=QT_QPA_PLATFORM=wayland
+
+# Prevent broken themes from forcing black-on-black palettes
+Environment=QT_QPA_PLATFORMTHEME=
+Environment=QT_STYLE_OVERRIDE=
+
+# Reasonable DPI defaults
+Environment=QT_AUTO_SCREEN_SCALE_FACTOR=1
+Environment=QT_ENABLE_HIGHDPI_SCALING=1
+
+# Optional: silence benign Wayland warnings in journal
+Environment=QT_LOGGING_RULES=qt.qpa.wayland.warning=false
 
 # Logging
 SyslogIdentifier=photoframe
 StandardOutput=journal
 StandardError=journal
 
-# Security model:
-# - We allow general write so the app can prepare any future image_dir.
-# - Give minimal caps for runtime chown/chmod even if current perms block it.
+# Security model (unchanged)
 NoNewPrivileges=no
 ProtectSystem=off
 ProtectHome=no
@@ -119,7 +145,7 @@ AmbientCapabilities=CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE
 UMask=002
 EOF
 
-echo "[5.1/8] Adding polkit rule for service restarts..."
+echo "[5.1/10] Adding polkit rule for service restarts..."
 sudo tee /etc/polkit-1/rules.d/46-allow-photoframe-restart.rules >/dev/null <<'EOF'
 /* Allow pi to manage ONLY PhotoFrame_Desktop_App.service */
 polkit.addRule(function(action, subject) {
@@ -136,29 +162,47 @@ polkit.addRule(function(action, subject) {
 });
 EOF
 
-echo "[5.2/8] Reloading polkit..."
+echo "[5.2/10] Reloading polkit..."
 sudo systemctl restart polkit || true
 
-echo "[6/8] Reloading and enabling service..."
+echo "[6/10] Reloading and enabling service..."
 sudo systemctl daemon-reload
 sudo systemctl disable "$SERVICE_NAME" || true
 sudo systemctl enable "$SERVICE_NAME"
 sudo systemctl start "$SERVICE_NAME"
 
-echo "[7/8] Status:"
+echo "[7/10] Status:"
 sudo systemctl status "$SERVICE_NAME" --no-pager -l || true
 
-echo "[8/8] Quick nmcli self-test (no sudo):"
-IFACE=$(nmcli -t -f DEVICE,TYPE device | awk -F: '$2=="wifi"{print $1; exit}')
-if [ -n "$IFACE" ]; then
-  echo " - Wi-Fi interface: $IFACE"
-  nmcli device wifi rescan ifname "$IFACE" || echo "!!! rescan failed (polkit not active yet?)"
-  nmcli -t -f IN-USE,SSID,SECURITY,SIGNAL device wifi list ifname "$IFACE" | head -n 5 || true
+echo "[8/10] Quick runtime self-tests (no sudo)..."
+
+# Wi-Fi nmcli smoke test
+IFACE=\$(nmcli -t -f DEVICE,TYPE device | awk -F: '\$2=="wifi"{print \$1; exit}')
+if [ -n "\$IFACE" ]; then
+  echo " - Wi-Fi interface: \$IFACE"
+  nmcli device wifi rescan ifname "\$IFACE" || echo "!!! rescan failed (polkit not active yet?)"
+  nmcli -t -f IN-USE,SSID,SECURITY,SIGNAL device wifi list ifname "\$IFACE" | head -n 5 || true
 else
   echo "No Wi-Fi interface detected."
 fi
 
-echo "[9/8] Creating Desktop control scripts..."
+# Brightness path tests (non-fatal)
+if [ -n "\$WAYLAND_DISPLAY" ] || [ -S /run/user/1000/wayland-0 ]; then
+  echo " - Wayland detected, wlr-randr present? \$(command -v wlr-randr || echo 'no')"
+  if command -v wlr-randr >/dev/null 2>&1; then
+    echo "   Outputs:"
+    wlr-randr || true
+  fi
+fi
+
+if ls /sys/class/backlight/*/brightness >/dev/null 2>&1; then
+  echo " - Backlight sysfs present. Permissions:"
+  ls -l /sys/class/backlight/*/brightness || true
+else
+  echo " - No /sys/class/backlight device (likely external monitor via HDMI/DP)."
+fi
+
+echo "[9/10] Creating Desktop control scripts..."
 mkdir -p "$DESKTOP_DIR"
 
 cat > "$START_SH" <<EOSTART
@@ -188,7 +232,7 @@ EORESTART
 chmod +x "$START_SH" "$STOP_SH" "$RESTART_SH"
 
 echo
-echo "Done."
+echo "[10/10] Done."
 echo "Manage with:"
 echo "  sudo systemctl status  $SERVICE_NAME"
 echo "  sudo systemctl restart $SERVICE_NAME"
@@ -198,3 +242,7 @@ echo "Desktop scripts created:"
 echo "  $START_SH"
 echo "  $STOP_SH"
 echo "  $RESTART_SH"
+echo
+echo "Notes:"
+echo " - Brightness uses Wayland (wlr-randr) when available."
+echo " - Sysfs fallback works if /sys/class/backlight exists and 'pi' is in the 'video' group (rule installed)."

@@ -30,7 +30,6 @@ if platform.system() == "Linux" or platform.system() == "Darwin":
 else:
     has_pyheif = False
 
-
 class Backend:
     def __init__(self, frame: iFrame, settings, image_dir=None, settings_path=None):
         base = Path(__file__).parent
@@ -40,24 +39,20 @@ class Backend:
             static_folder=str(base / "./static"),
         )
         CORS(self.app)
+
+        # Resolve paths early (do not depend on settings yet)
         self.USER_DATA_FILE = self.set_absolute_paths("users.json")
         self.METADATA_FILE  = self.set_absolute_paths("metadata.json")
         self.LOG_FILE_PATH  = self.set_absolute_paths("PhotoFrame.log")
         self.WEATHER_CACHE  = self.set_absolute_paths("weather_cache.json")
-        self.IMAGE_DIR = image_dir if image_dir is not None else self.set_absolute_paths("Images")
-        os.makedirs(self.IMAGE_DIR, exist_ok=True)
-        #self._ensure_storage_files()
 
-        # Resolve paths first
+        # Keep frame early for capture loop
         self.Frame = frame
-        
 
-        # Where to read/write settings.json
+        # Decide where to read/write settings.json
         if settings_path:
-            # honor absolute or relative path
             self.SETTINGS_FILE = self.set_absolute_paths(settings_path)
         else:
-            # default alongside DesktopApp root
             self.SETTINGS_FILE = self.set_absolute_paths("photoframe_settings.json")
 
         # Load settings: prefer the object passed from the server
@@ -66,9 +61,23 @@ class Backend:
         else:
             self.settings = self.load_settings()
 
+        # Compute IMAGE_DIR only after self.settings exists
+        img_cfg = (
+            image_dir
+            or (self.settings.get("image_dir") if isinstance(self.settings, dict) else None)
+            or (self.settings.get("images_dir") if isinstance(self.settings, dict) else None)
+            or "Images"
+        )
+        self.IMAGE_DIR = self._resolve_dir(img_cfg)
+        os.makedirs(self.IMAGE_DIR, exist_ok=True)
+        print(f"[Backend] Using IMAGE_DIR = {self.IMAGE_DIR}")
+
         # Now pull required keys with safe defaults
-        backend_cfg = (self.settings.get("backend_configs") if isinstance(self.settings, dict)
-                       else getattr(self.settings, "get", lambda *_: {})("backend_configs")) or {}
+        backend_cfg = (
+            self.settings.get("backend_configs")
+            if isinstance(self.settings, dict) else
+            getattr(self.settings, "get", lambda *_: {})("backend_configs")
+        ) or {}
 
         self.app.secret_key = backend_cfg.get("supersecretkey", "CHANGE_ME")
         self.stream_h = int(backend_cfg.get("stream_height", 1080))
@@ -79,15 +88,14 @@ class Backend:
         self.ALLOWED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".webp", ".heic", ".heif"}
         self.SELECTED_COLOR = "#ffcccc"
 
-
-
         self.latest_metadata = {}
         self._metadata_lock = threading.Lock()
         self._ensure_storage_files()
-        
-        # If we had to load from disk, re-read encoding from settings; else default
-        self.encoding_quality = int((self.settings.get("image_quality_encoding") if isinstance(self.settings, dict)
-                                     else 80) or 80)
+
+        # Encoding quality default
+        self.encoding_quality = int(
+            (self.settings.get("image_quality_encoding") if isinstance(self.settings, dict) else 80) or 80
+        )
 
         self._jpeg_queue   = Queue(maxsize=30)
         self._new_frame_ev = Event()
@@ -96,7 +104,15 @@ class Backend:
         self.executor = ThreadPoolExecutor(max_workers=2)
         self.setup_routes()
         Thread(target=self._capture_loop, daemon=True).start()
+
         
+
+    def _resolve_dir(self, p: str) -> str:
+        pth = Path(p).expanduser()
+        if not pth.is_absolute():
+            app_root = Path(__file__).resolve().parents[1]  # project root (two levels up)
+            pth = app_root / pth
+        return str(pth)
 
     def set_absolute_paths(self, path: str) -> str:
         if os.path.isabs(path):
@@ -129,46 +145,61 @@ class Backend:
 
     def _capture_loop(self):
         """
-        Encode every new frame as it arrives. When no frame arrives for
-        `idle_delay` seconds, re-send the last JPEG so that newcomers
-        still see something without re-encoding.
+        Producer: encodes new frames when signaled; otherwise re-sends the last
+        encoded JPEG at idle_stream_fps so clients do not time out.
         """
-        idle_fps   = self.settings["backend_configs"].get("idle_fps", 1)
-        idle_delay = 1.0 / max(idle_fps, 1)
+        # How often to push a frame when the content is static (no transitions).
+        # Configure in backend_configs.idle_fps; default to 5.
+        idle_fps = float(self.settings.get("backend_configs", {}).get("idle_fps", 5)) or 5.0
+        interval = 1.0 / max(0.1, idle_fps)
 
-        last_jpeg  = None
+        last_jpeg = None
+        next_deadline = time.perf_counter()
+
+        print(f"[Backend] capture loop started (idle_fps={idle_fps})")
 
         while not self._stop_event.is_set() and self.Frame.get_is_running():
-
-            got_new = self._new_frame_ev.wait(timeout=idle_delay)
+            # Wait for either: a new-frame event, or the next idle tick
+            timeout = max(0.0, next_deadline - time.perf_counter())
+            got_new = self._new_frame_ev.wait(timeout=timeout)
             if got_new:
                 self._new_frame_ev.clear()
-
-                frame = self.Frame.get_live_frame()
-                if isinstance(frame, ndarray) and frame.size:
-                    ok, jpg = cv2.imencode(
-                        '.jpg', frame,
-                        [cv2.IMWRITE_JPEG_QUALITY, self.encoding_quality]
-                    )
-                    if ok:
-                        last_jpeg = jpg.tobytes()
-
-            if last_jpeg is None:
+                # Try to encode the fresh frame immediately
                 frame = self.Frame.get_live_frame()
                 if isinstance(frame, ndarray) and frame.size:
                     ok, jpg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, self.encoding_quality])
                     if ok:
                         last_jpeg = jpg.tobytes()
-                if last_jpeg is None:
-                    time.sleep(0.1)
-                    continue
 
-            try:
-                self._jpeg_queue.put(last_jpeg, timeout=0.5)
-            except Full:
-                _ = self._jpeg_queue.get_nowait()
-                self._jpeg_queue.put_nowait(last_jpeg)
-                
+            # On schedule (or after new frame) push something so the queue never dries up
+            now = time.perf_counter()
+            if now >= next_deadline:
+                if last_jpeg is None:
+                    # Bootstrap: encode the current frame once
+                    frame = self.Frame.get_live_frame()
+                    if isinstance(frame, ndarray) and frame.size:
+                        ok, jpg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, self.encoding_quality])
+                        if ok:
+                            last_jpeg = jpg.tobytes()
+
+                if last_jpeg is not None:
+                    try:
+                        self._jpeg_queue.put_nowait(last_jpeg)
+                    except Full:
+                        try:
+                            _ = self._jpeg_queue.get_nowait()
+                        except Exception:
+                            pass
+                        try:
+                            self._jpeg_queue.put_nowait(last_jpeg)
+                        except Exception:
+                            pass
+
+                # schedule next tick
+                next_deadline = now + interval
+
+
+           
     def _encode_and_queue(self, frame: ndarray):
         success, jpg = cv2.imencode('.jpg', frame,
                                 [cv2.IMWRITE_JPEG_QUALITY, self.encoding_quality])
@@ -309,16 +340,40 @@ class Backend:
         self.update_current_metadata(entry)
 
     def mjpeg_stream(self, screen_w, screen_h):
-        boundary = (b'--frame\r\n'
-                    b'Content-Type: image/jpeg\r\n'
-                    b'Cache-Control: no-cache\r\n\r\n')
+        boundary_line = b"--frame\r\n"
         while self.Frame.get_is_running():
-            try:
-                data = self._jpeg_queue.get(timeout=None)  # blocks until new data
-            except Empty:
-                continue  # (or break, if you want to end the stream)
-            yield boundary + data + b'\r\n'
-                
+            data = self._jpeg_queue.get()  # block; producer ticks at idle_fps
+            yield (boundary_line +
+                b"Content-Type: image/jpeg\r\n" +
+                f"Content-Length: {len(data)}\r\n\r\n".encode("ascii") +
+                data + b"\r\n")
+
+
+            
+            
+    def _make_heartbeat_jpeg(self, w, h):
+        """
+        Return a small 'no frame' JPEG so the client keeps the stream open.
+        """
+        try:
+            import numpy as np
+            img = np.zeros((max(120, min(h, 360)), max(160, min(w, 640)), 3), dtype="uint8")
+            # Gray background with text
+            img[:] = (32, 32, 32)
+            cv2.putText(img, "Waiting for frames...", (10, 50), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.9, (200, 200, 200), 2, cv2.LINE_AA)
+            ok, jpg = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 80])
+            if ok:
+                return jpg.tobytes()
+        except Exception as e:
+            print(f"[Backend] heartbeat build failed: {e}")
+        # Fallback tiny JPEG header if something goes wrong (still valid image)
+        return (b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
+                b"\xff\xdb\x00C\x00" + b"\x08"*64 + b"\xff\xc0\x00\x11\x08\x00\x10\x00\x10\x03\x01\x22\x00\x02\x11\x01\x03\x11\x01"
+                b"\xff\xc4\x00\x14\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+                b"\xff\xda\x00\x0c\x03\x01\x00\x02\x11\x03\x11\x00?\x00" + b"\x00"*10 + b"\xff\xd9")
+
+
     def setup_routes(self):      
         @self.app.route('/stream')
         def stream():
@@ -328,12 +383,48 @@ class Backend:
                 h = int(request.args.get('height', default_h))
             except ValueError:
                 w, h = default_w, default_h
-            generator = stream_with_context(self.mjpeg_stream(w, h))
+
+            headers = {
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            }
             return Response(
-                generator,
-                mimetype='multipart/x-mixed-replace; boundary=frame'
+                stream_with_context(self.mjpeg_stream(w, h)),
+                mimetype="multipart/x-mixed-replace; boundary=frame",
+                headers=headers,
+                direct_passthrough=True,
             )
-  
+
+        @self.app.route("/stream_test")
+        def stream_test():
+            import numpy as np
+            boundary_line = b"--frame\r\n"
+            def gen():
+                w, h = 640, 360
+                t = 0
+                while True:
+                    # animated color bars with timecode
+                    bars = np.zeros((h, w, 3), dtype="uint8")
+                    for i, c in enumerate([(255,0,0),(0,255,0),(0,0,255),(255,255,0),(0,255,255),(255,0,255)]):
+                        x0 = int(i*w/6)
+                        x1 = int((i+1)*w/6)
+                        bars[:, x0:x1, :] = c
+                    cv2.putText(bars, f"TEST STREAM t={t}", (10, h-20),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (20,20,20), 2, cv2.LINE_AA)
+                    ok, jpg = cv2.imencode(".jpg", bars, [cv2.IMWRITE_JPEG_QUALITY, 80])
+                    data = jpg.tobytes() if ok else b""
+                    yield (boundary_line +
+                        b"Content-Type: image/jpeg\r\n" +
+                        f"Content-Length: {len(data)}\r\n\r\n".encode("ascii") +
+                        data + b"\r\n")
+                    t += 1
+                    time.sleep(0.2)
+            return Response(gen(),
+                            mimetype="multipart/x-mixed-replace; boundary=frame",
+                            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
         @self.app.route("/system_stats")
         def system_stats():
             import psutil
@@ -476,36 +567,35 @@ class Backend:
             metadata_db = self.load_metadata_db()
 
             for idx, file in enumerate(uploaded_files):
-                if file.filename == "":
+                if not file or file.filename == "":
                     continue
 
                 original_filename = file.filename
                 ext = os.path.splitext(original_filename)[1].lower()
-
                 if ext not in self.ALLOWED_EXTENSIONS:
                     continue
 
                 # Read uploader and caption
                 caption = request.form.get(f"caption_{idx}", "").strip()
                 uploader = request.form.get(f"uploader_{idx}", "").strip()
+
                 temp_path = os.path.join(self.IMAGE_DIR, original_filename)
-                file_hash = self.compute_image_hash(temp_path)
-                
                 try:
                     file.save(temp_path)
                 except Exception as e:
                     self.Frame.send_log_message(f"{e}")
                     return jsonify({"message": f"{e}"}), 500
-                
-                # Convert HEIC/HEIF if needed
-                if ext in ['.heic', '.heif']:
+
+                final_path = temp_path
+                if ext in ('.heic', '.heif'):
                     jpeg_path = os.path.splitext(final_path)[0] + ".jpg"
                     self.convert_heic_to_jpeg(final_path, jpeg_path)
-                    os.remove(final_path)
                     final_path = jpeg_path
                     original_filename = os.path.basename(jpeg_path)
 
-                # Save metadata (hash-keyed)
+                # Hash after the file exists on disk
+                file_hash = self.compute_image_hash(final_path)
+
                 metadata = {
                     "hash": file_hash,
                     "caption": caption,
@@ -513,12 +603,12 @@ class Backend:
                     "date_added": datetime.utcnow().isoformat(),
                     "filename": original_filename
                 }
-
                 metadata_db[file_hash] = metadata
-                self.save_metadata_db(metadata_db)
-                self.Frame.update_images_list()
 
+            self.save_metadata_db(metadata_db)
+            self.Frame.update_images_list()
             return jsonify({"message": "Upload successful"}), 200
+
 
         @self.app.route('/signup', methods=['GET', 'POST'])
         def signup():

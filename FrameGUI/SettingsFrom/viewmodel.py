@@ -266,11 +266,26 @@ class SettingsViewModel(QtCore.QObject):
     # ---------- Screen ----------
     def apply_brightness(self, pct: int) -> None:
         pct = max(10, min(100, int(pct)))
-        if self._apply_brightness_cb(pct):
+        ok, err = False, ""
+        try:
+            res = self._apply_brightness_cb(pct)
+            if isinstance(res, tuple) and len(res) >= 1:
+                ok = bool(res[0])
+                err = str(res[1]) if len(res) > 1 and res[1] is not None else ""
+            else:
+                ok = bool(res)
+        except Exception as e:
+            ok, err = False, str(e)
+
+        if ok:
             scr = self.model.ensure_screen_struct()
             scr["brightness"] = pct
             self.model.save()
             self._wake()
+            self.maintStatusChanged.emit(f"Brightness set to {pct}%")
+        else:
+            self.maintStatusChanged.emit(f"Brightness error: {err or 'operation failed'}")
+
 
     def apply_orientation(self, value: str) -> None:
         if self._apply_orientation_cb(value):
@@ -308,50 +323,96 @@ class SettingsViewModel(QtCore.QObject):
     def start_local_stats(self, interval_ms: int = 1000) -> None:
         try:
             import psutil  # type: ignore
-            psutil.cpu_percent(None)  # <-- prime reading
+
+            # One-time prime with a small interval so the first value is meaningful.
+            try:
+                psutil.cpu_percent(interval=0.15)
+            except Exception:
+                pass
+
+            self._psutil = psutil  # cache
             self._stats_timer = QtCore.QTimer(self)
-            self._stats_timer.timeout.connect(lambda: self._push_stats(psutil))
-            self._stats_timer.start(interval_ms)
+            self._stats_timer.timeout.connect(self._push_stats)
+            self._stats_timer.start(max(250, int(interval_ms)))
         except Exception:
-            # no psutil -> lightweight cross-platform fallback
+            # Lightweight fallback if psutil is missing
+            self._psutil = None
             self._stats_timer = QtCore.QTimer(self)
             self._stats_timer.timeout.connect(self._push_stats_fallback)
-            self._stats_timer.start(interval_ms)
-            
-    def _push_stats(self, psutil):
-        """Emit CPU%, RAM%, and temperature using psutil."""
+            self._stats_timer.start(max(250, int(interval_ms)))
+
+
+    def _read_cpu_temp_c(self) -> float:
+        """
+        Try psutil first with common RPi/Linux keys, then sysfs thermal zones.
+        Returns temperature in C, or 0.0 if unavailable.
+        """
+        # psutil path
         try:
-            # Prime CPU measurement once so the first value isn't 0.0 on some systems
-            try:
-                psutil.cpu_percent(None)
-            except Exception:
-                pass
-
-            cpu = float(psutil.cpu_percent(interval=None))
-            ram = float(psutil.virtual_memory().percent)
-
-            temp = 0.0
-            try:
-                temps = psutil.sensors_temperatures()
-                # Prefer common CPU sensor keys if present
+            if getattr(self, "_psutil", None):
+                temps = self._psutil.sensors_temperatures()
+                # Common keys on Pi and SBCs
                 for key in ("cpu-thermal", "cpu_thermal", "coretemp", "k10temp", "soc_thermal"):
                     if key in temps and temps[key]:
-                        temp = float(getattr(temps[key][0], "current", 0.0) or 0.0)
-                        break
-                else:
-                    # Fallback: first available reading
-                    for arr in temps.values():
-                        if arr:
-                            temp = float(getattr(arr[0], "current", 0.0) or 0.0)
-                            break
-            except Exception:
-                pass
+                        cur = getattr(temps[key][0], "current", None)
+                        if cur is not None:
+                            return float(cur)
+                # Fallback: first reading in any group
+                for arr in temps.values():
+                    if arr:
+                        cur = getattr(arr[0], "current", None)
+                        if cur is not None:
+                            return float(cur)
+        except Exception:
+            pass
+
+        # sysfs path
+        try:
+            import glob
+            for zpath in glob.glob("/sys/class/thermal/thermal_zone*/temp"):
+                # Read the type to prefer CPU-like zones
+                try:
+                    tpath = zpath.replace("/temp", "/type")
+                    tname = ""
+                    with open(tpath, "r") as tf:
+                        tname = tf.read().strip().lower()
+                    if "cpu" not in tname and "soc" not in tname and "arm" not in tname:
+                        continue
+                except Exception:
+                    pass
+                with open(zpath, "r") as f:
+                    raw = f.read().strip()
+                # Most kernels expose millidegrees C
+                val = float(raw) / (1000.0 if len(raw) > 3 else 1.0)
+                if val > 0.0:
+                    return val
+        except Exception:
+            pass
+
+        return 0.0
+
+
+    def _push_stats(self):
+        try:
+            if getattr(self, "_psutil", None) is None:
+                return  # psutil not available; fallback timer handles updates
+
+            psutil = self._psutil
+
+            # CPU percent since last call (no re-priming here!)
+            cpu = float(psutil.cpu_percent(interval=None))
+
+            # RAM percent
+            ram = float(psutil.virtual_memory().percent)
+
+            # Temperature
+            temp = float(self._read_cpu_temp_c())
 
             self.cpuPushed.emit(cpu)
             self.ramPushed.emit(ram)
             self.tempPushed.emit(temp)
         except Exception:
-            # Never let stats crash the UI
+            # Never let stats crash the UI loop
             pass
 
     def _push_stats_fallback(self):

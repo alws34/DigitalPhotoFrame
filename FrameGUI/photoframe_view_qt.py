@@ -14,6 +14,13 @@ from iFrame import iFrame
 from FrameGUI.SettingsFrom.model import SettingsModel
 from FrameGUI.SettingsFrom.viewmodel import SettingsViewModel
 from FrameGUI.SettingsFrom.dialog import SettingsDialog
+from Utilities.brightness import set_brightness_percent
+try:
+    from PySide6.QtSvg import QSvgRenderer
+    _HAS_SVG = True
+except Exception:
+    _HAS_SVG = False
+
 class IFrameQtWidgetMeta(type(QtWidgets.QWidget), type(iFrame)):
     pass
 
@@ -85,7 +92,7 @@ class PhotoFrameQtWidget(QtWidgets.QWidget, iFrame, metaclass=IFrameQtWidgetMeta
         vm = SettingsViewModel(
             model=model,
             backend_port=self.backend_port,
-            on_apply_brightness=self._on_apply_brightness,
+            on_apply_brightness=set_brightness_percent,
             on_apply_orientation=self._on_apply_orientation,
             on_autoupdate_pull=self._on_autoupdate_pull,
             on_restart_service_async=self._on_restart_service_async,
@@ -255,25 +262,69 @@ class ImageCanvas(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._qimage: Optional[QtGui.QImage] = None
+        # Make sure we expand to fill any parent container
+        self.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
 
     @QtCore.Slot(QtGui.QImage)
     def set_qimage(self, qimage: QtGui.QImage) -> None:
         self._qimage = qimage
-        self.update() # Schedule a repaint
+        self.update()  # schedule repaint
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:
         painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.SmoothPixmapTransform, True)
         painter.fillRect(self.rect(), QtCore.Qt.black)
+
         if self._qimage is None or self._qimage.isNull():
             return
-        
-        # Scale image to fit the canvas while preserving aspect ratio
-        scaled_image = self._qimage.scaled(self.size(), QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation)
-        
-        # Center the image
-        rect = scaled_image.rect()
-        rect.moveCenter(self.rect().center())
-        painter.drawImage(rect.topLeft(), scaled_image)
+
+        iw = self._qimage.width()
+        ih = self._qimage.height()
+        ww = self.width()
+        wh = self.height()
+        if iw <= 0 or ih <= 0 or ww <= 0 or wh <= 0:
+            return
+
+        # Compute a crop rect on the source image so that it "covers" the widget
+        image_ar = iw / float(ih)
+        widget_ar = ww / float(wh)
+
+        if widget_ar > image_ar:
+            # Widget is wider than the image: crop vertically
+            new_h = int(round(iw / widget_ar))
+            new_h = min(new_h, ih)
+            y = max(0, (ih - new_h) // 2)
+            src = QtCore.QRect(0, y, iw, new_h)
+        else:
+            # Widget is taller (or equal): crop horizontally
+            new_w = int(round(ih * widget_ar))
+            new_w = min(new_w, iw)
+            x = max(0, (iw - new_w) // 2)
+            src = QtCore.QRect(x, 0, new_w, ih)
+
+        # Draw the cropped portion scaled to exactly fill the widget
+        painter.drawImage(self.rect(), self._qimage, src)
+
+
+from PySide6 import QtCore, QtGui, QtWidgets
+try:
+    from PySide6.QtSvg import QSvgRenderer
+    _HAS_SVG = True
+except Exception:
+    _HAS_SVG = False
+
+import os
+import io
+import logging
+from typing import Dict, Any
+
+# Optional PIL support for converting PIL.Image -> QPixmap
+try:
+    from PIL import Image as _PIL_Image  # noqa: F401
+    from PIL.ImageQt import ImageQt
+    _HAS_PIL = True
+except Exception:
+    _HAS_PIL = False
 
 
 class OverlayPanel(QtWidgets.QWidget):
@@ -286,7 +337,7 @@ class OverlayPanel(QtWidgets.QWidget):
         self.setAttribute(QtCore.Qt.WA_NoSystemBackground, True)
         self.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
 
-        # ---- Settings (only font + margins) ----
+        # ---- Settings (font + margins) ----
         self.font_name = self.settings.get("font_name", "Arial")
         self.time_px   = int(self.settings.get("time_font_size", 120))
         self.date_px   = int(self.settings.get("date_font_size", 80))
@@ -295,55 +346,24 @@ class OverlayPanel(QtWidgets.QWidget):
         self.mb        = int(self.settings.get("margin_bottom", 50))
         self.mt        = int(self.settings.get("margin_top", self.mb))
 
-        # Weather sizes FIRST (used below for shadows)
-        self.weather_num_px  = int(max(24, int(self.date_px * 0.9)))
-        self.weather_desc_px = int(max(18, int(self.weather_num_px * 0.6)))
-        self.weather_icon_px = int(max(24, int(self.weather_num_px * 1.2)))
-
-        # Hard-coded spacings (derived, not from settings)
-        self.time_date_spacing    = max(8, self.date_px // 6)          # time ↕ date
-        self.weather_line_spacing = max(6, self.weather_num_px // 6)   # temp ↕ desc
-        self.icon_text_gap        = max(10, self.weather_icon_px // 3) # icon ↔ text
-
-        # Shadow tuning
-        scale = getattr(self, "devicePixelRatioF", lambda: 1.0)()
+        dpr = getattr(self, "devicePixelRatioF", lambda: 1.0)()
         self.shadow_alpha = int(self.settings.get("shadow_alpha", 200))
         self.shadow_color = QtGui.QColor(0, 0, 0, self.shadow_alpha)
-
-        # Per-label (time/date) shadow sizes
-        self._time_shadow_r  = int(max(12,  self.time_px * 0.18) * scale)
-        self._time_shadow_dx = int(max(2,   self.time_px * 0.04)  * scale)
-        self._time_shadow_dy = self._time_shadow_dx
-
-        self._date_shadow_r  = int(max(10,  self.date_px * 0.16) * scale)
-        self._date_shadow_dx = int(max(2,   self.date_px * 0.035) * scale)
-        self._date_shadow_dy = self._date_shadow_dx
-
-        # Single group shadow for the weather block (avoid stacking)
-        self._weather_shadow_r  = int(max(10, self.weather_num_px * 0.16) * scale)
-        self._weather_shadow_dx = int(max(2,  self.weather_num_px * 0.035) * scale)
-        self._weather_shadow_dy = self._weather_shadow_dx
 
         self._maybe_load_font(self.font_name)
 
         # ---- Time + Date (bottom-left) ----
         self._time_label = QtWidgets.QLabel("00:00:00")
-        self._date_label = QtWidgets.QLabel("—")
+        self._date_label = QtWidgets.QLabel("-")
         for lbl in (self._time_label, self._date_label):
             lbl.setStyleSheet("color: white;")
             lbl.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Maximum)
-
-        # padding to avoid shadow clipping
-        pad_time = self._time_shadow_r // 3
-        pad_date = self._date_shadow_r // 3
-        self._time_label.setContentsMargins(pad_time, pad_time, pad_time, pad_time)
-        self._date_label.setContentsMargins(pad_date, pad_date, pad_date, pad_date)
 
         # font
         self._apply_font(self._time_label, self.time_px, bold=True)
         self._apply_font(self._date_label, self.date_px, bold=False)
 
-        # HINT: prefer fixed-pitch digits for time; fall back to system fixed if needed
+        # Prefer fixed-pitch digits for time
         f = self._time_label.font()
         f.setKerning(False)
         f.setStyleHint(QtGui.QFont.Monospace, QtGui.QFont.PreferDefault)
@@ -354,20 +374,29 @@ class OverlayPanel(QtWidgets.QWidget):
             mono.setPixelSize(self.time_px); mono.setBold(True); mono.setKerning(False)
             self._time_label.setFont(mono)
 
-        # LOCK WIDTH so the label doesn't resize as digits change
-        fm = QtGui.QFontMetrics(self._time_label.font())
-        max_time_text = "88:88:88"                    # widest string for HH:MM:SS
-        fixed_w = fm.horizontalAdvance(max_time_text) + pad_time * 2
+        fm_time = QtGui.QFontMetrics(self._time_label.font())
+        max_time_text = "88:88:88"
+        fixed_w = fm_time.horizontalAdvance(max_time_text)
         self._time_label.setFixedWidth(fixed_w)
         self._time_label.setAlignment(QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter)
 
-        # Per-label shadows
+        # Shadows for time/date
+        self._time_shadow_r  = int(max(12,  self.time_px * 0.18) * dpr)
+        self._time_shadow_dx = int(max(2,   self.time_px * 0.04)  * dpr)
+        self._time_shadow_dy = self._time_shadow_dx
+        self._date_shadow_r  = int(max(10,  self.date_px * 0.16)  * dpr)
+        self._date_shadow_dx = int(max(2,   self.date_px * 0.035) * dpr)
+        self._date_shadow_dy = self._date_shadow_dx
+
+        pad_time = self._time_shadow_r // 3
+        pad_date = self._date_shadow_r // 3
+        self._time_label.setContentsMargins(pad_time, pad_time, pad_time, pad_time)
+        self._date_label.setContentsMargins(pad_date, pad_date, pad_date, pad_date)
         self._apply_shadow(self._time_label, self._time_shadow_r, self._time_shadow_dx, self._time_shadow_dy)
         self._apply_shadow(self._date_label, self._date_shadow_r, self._date_shadow_dx, self._date_shadow_dy)
 
-        # layout (keep centered inside its fixed box)
         left_box = QtWidgets.QVBoxLayout()
-        left_box.setSpacing(self.time_date_spacing)
+        left_box.setSpacing(max(8, self.date_px // 6))
         left_box.setContentsMargins(0, 0, 0, 0)
         left_box.addWidget(self._time_label, 0, QtCore.Qt.AlignHCenter)
         left_box.addWidget(self._date_label, 0, QtCore.Qt.AlignHCenter)
@@ -378,45 +407,57 @@ class OverlayPanel(QtWidgets.QWidget):
         self._left_widget.setStyleSheet("background: transparent;")
 
         # ---- Weather (bottom-right) ----
-        self._weather_icon = QtWidgets.QLabel()
-        self._weather_icon.setFixedSize(self.weather_icon_px, self.weather_icon_px)
-        self._weather_icon.setScaledContents(True)
+        # Temperature matches time size; condition text matches date size.
+        self.weather_num_px  = self.time_px
+        self.weather_desc_px = self.date_px
 
-        self._weather_num  = QtWidgets.QLabel("")
+        # Big temp
+        self._weather_num = QtWidgets.QLabel("")
+        self._weather_num.setStyleSheet("color: white;")
+        self._weather_num.setAlignment(QtCore.Qt.AlignHCenter)
+        self._weather_num.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Maximum)
+        self._apply_font(self._weather_num, self.weather_num_px, bold=True)
+
+        # Condition row: [emoji] [description], emoji right next to text
+        self._weather_emoji = QtWidgets.QLabel("")
+        self._weather_emoji.setStyleSheet("color: white;")
+        self._weather_emoji.setAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
+        self._weather_emoji.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Maximum)
+        self._apply_font(self._weather_emoji, self.weather_desc_px, bold=True)
+
         self._weather_desc = QtWidgets.QLabel("")
-        for lbl in (self._weather_num, self._weather_desc):
-            lbl.setStyleSheet("color: white;")
-            lbl.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Maximum)
-            lbl.setAlignment(QtCore.Qt.AlignHCenter)
-
-        self._apply_font(self._weather_num,  self.weather_num_px,  bold=True)
+        self._weather_desc.setStyleSheet("color: white;")
+        self._weather_desc.setAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignLeft)
+        self._weather_desc.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Maximum)
         self._apply_font(self._weather_desc, self.weather_desc_px, bold=False)
 
-        weather_text_col = QtWidgets.QVBoxLayout()
-        weather_text_col.setSpacing(self.weather_line_spacing)
-        weather_text_col.setContentsMargins(0, 0, 0, 0)
-        weather_text_col.addWidget(self._weather_num,  0, QtCore.Qt.AlignHCenter)
-        weather_text_col.addWidget(self._weather_desc, 0, QtCore.Qt.AlignHCenter)
+        cond_row = QtWidgets.QHBoxLayout()
+        cond_row.setSpacing(max(8, self.weather_desc_px // 4))
+        cond_row.setContentsMargins(0, 0, 0, 0)
+        cond_row.addWidget(self._weather_emoji, 0, QtCore.Qt.AlignVCenter)
+        cond_row.addWidget(self._weather_desc,  0, QtCore.Qt.AlignVCenter)
 
-        weather_row = QtWidgets.QHBoxLayout()
-        weather_row.setSpacing(self.icon_text_gap)
-        weather_row.setContentsMargins(0, 0, 0, 0)
-        weather_row.addWidget(self._weather_icon, 0, QtCore.Qt.AlignVCenter)
-        weather_row.addLayout(weather_text_col)
+        # Stack: temp on top, condition row beneath
+        weather_col = QtWidgets.QVBoxLayout()
+        weather_col.setSpacing(max(6, self.weather_desc_px // 4))
+        weather_col.setContentsMargins(0, 0, 0, 0)
+        weather_col.addWidget(self._weather_num, 0, QtCore.Qt.AlignHCenter)
+        weather_col.addLayout(cond_row)
 
         self._weather_widget = QtWidgets.QWidget()
-        self._weather_widget.setLayout(weather_row)
+        self._weather_widget.setLayout(weather_col)
         self._weather_widget.setStyleSheet("background: transparent;")
         self._weather_widget.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
         self._weather_widget.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Maximum)
 
-        # Small padding so the group shadow isn’t clipped
+        # One shadow on the whole weather block
+        self._weather_shadow_r  = int(max(10, self.weather_num_px * 0.16) * dpr)
+        self._weather_shadow_dx = int(max(2,  self.weather_num_px * 0.035) * dpr)
+        self._weather_shadow_dy = self._weather_shadow_dx
         pad = max(4, self._weather_shadow_r // 4)
         self._weather_widget.setContentsMargins(pad, pad, pad, pad)
-
-        # One shadow on the whole weather block
         self._apply_shadow(self._weather_widget, self._weather_shadow_r,
-                        self._weather_shadow_dx, self._weather_shadow_dy)
+                           self._weather_shadow_dx, self._weather_shadow_dy)
 
         # ---- Main grid (corners) ----
         main = QtWidgets.QGridLayout(self)
@@ -438,34 +479,32 @@ class OverlayPanel(QtWidgets.QWidget):
 
     def update_weather(self, data: dict) -> None:
         data = data or {}
+
+        # Temperature string
         temp = data.get("temp", "")
         unit = data.get("unit", "")
-        desc = data.get("description", "")
-        icon = data.get("icon", None)
-
         if isinstance(temp, (int, float)):
-            temp_str = f"{int(round(temp))} °{unit}".strip()
+            temp_str = f"{int(round(temp))} °{unit}".strip()  # ASCII only
         else:
-            temp_str = f"{temp} {unit}".strip()
-
+            temp_str = f"{str(temp)} °{unit}".strip()
         self._weather_num.setText(temp_str)
-        self._weather_desc.setText(str(desc or ""))
 
-        qimg = QtGui.QImage()
-        if isinstance(icon, QtGui.QImage):
-            qimg = icon
-        elif isinstance(icon, (bytes, bytearray)):
-            qimg.loadFromData(bytes(icon))
-        if not qimg.isNull():
-            self._weather_icon.setPixmap(QtGui.QPixmap.fromImage(qimg))
-            self._weather_icon.show()
-        else:
-            self._weather_icon.clear()
-            self._weather_icon.hide()
+        # Condition text matches the date size
+        desc = str(data.get("description", "") or "")
+        self._weather_desc.setText(desc)
+
+        # Emoji near the condition (fallback from AccuWeather id)
+        symbol = ""
+        icon_obj = data.get("icon")
+        if isinstance(icon_obj, int):
+            symbol = self._accuweather_symbol(icon_obj)
+        # If you later carry WMO codes, you can map them here, too.
+
+        self._weather_emoji.setText(symbol)
+        self._weather_emoji.setVisible(bool(symbol))
 
     # ---- helpers ----
-    def _apply_shadow(self, widget: QtWidgets.QWidget,
-                  radius: int, dx: float, dy: float, alpha: int = None) -> None:
+    def _apply_shadow(self, widget: QtWidgets.QWidget, radius: int, dx: float, dy: float, alpha: int = None) -> None:
         eff = QtWidgets.QGraphicsDropShadowEffect(self)
         eff.setBlurRadius(int(radius))
         eff.setOffset(float(dx), float(dy))
@@ -493,6 +532,18 @@ class OverlayPanel(QtWidgets.QWidget):
         f.setBold(bold)
         label.setFont(f)
 
+    def _accuweather_symbol(self, icon_id: int) -> str:
+        # Minimal readable mapping. Extend as needed.
+        day = icon_id < 30
+        if icon_id in (1, 2, 33, 34):        return "☀" if day else "☾"
+        if icon_id in (3, 4, 35, 36):        return "⛅" if day else "☁"
+        if icon_id in (6, 7):                return "☁"
+        if icon_id in (11, 20):              return "〰"
+        if icon_id in (12, 13, 14, 39, 40):  return "🌧"
+        if icon_id in (15, 41, 42):          return "⛈"
+        if icon_id in (18, 26):              return "🌧"
+        if icon_id in (22, 29):              return "❄"
+        return "☁"
 
 def cv2_to_rgb_bytes(bgr: np.ndarray) -> bytes:
     rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)

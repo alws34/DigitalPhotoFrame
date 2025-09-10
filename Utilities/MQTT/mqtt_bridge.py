@@ -84,9 +84,8 @@ class MqttBridge:
         self.t_brightness_state = f"{self.base_topic}/{self.device_id}/brightness"
         self.t_service_state = f"{self.base_topic}/{self.device_id}/service_state"
         self.t_cmd_brightness = f"{self.base_topic}/{self.device_id}/cmd/brightness"
-        #self.t_cmd_update = f"{self.base_topic}/{self.device_id}/cmd/update"
-        #self.t_cmd_restart = f"{self.base_topic}/{self.device_id}/cmd/restart"
-        #self.t_cmd_service = f"{self.base_topic}/{self.device_id}/cmd/service"
+        
+        self._ext_ip_cache = (None, 0) 
 
         self.client: Optional[MqttClient] = None
         self.connected = False
@@ -284,10 +283,10 @@ class MqttBridge:
 
         # Sensors from state JSON
         sensor(
-            "ip", "IP Address", "{{ value_json.ip }}",
-            icon="mdi:ip",
+            "external_ip", "External IP", "{{ value_json.external_ip }}",
+            icon="mdi:web",
             extra={"entity_category": "diagnostic"},
-            unique_suffix="_v2"       # forces HA to create fresh entities
+            unique_suffix="_v2"
         )
         sensor("cpu", "CPU Usage", "{{ value_json.cpu_usage }}", unit="%", device_class="power_factor")
         sensor("cputemp", "CPU Temperature", "{{ value_json.cpu_temp_c }}", unit="°C", device_class="temperature")
@@ -328,13 +327,14 @@ class MqttBridge:
 
     def _stats(self):
         ip = str(self._get_local_ip() or "")
+        ext_ip = self._get_external_ip() or ""
         cpu_pct = int(psutil.cpu_percent(interval=0))
         ram = psutil.virtual_memory()
         ram_used = ram.used // (1024 * 1024)
         ram_total = ram.total // (1024 * 1024)
         ram_percent = int(ram.percent)
 
-        # CPU temperature (try common sensors)
+        # CPU temperature
         try:
             temps = psutil.sensors_temperatures() or {}
             cand = None
@@ -348,8 +348,10 @@ class MqttBridge:
 
         ssid = str(self._get_current_ssid() or "")
         brightness = self._read_brightness_percent()
-        obj = {
-            "ip": ip,
+
+        return {
+            "ip": ip,                      # local IP
+            "external_ip": ext_ip,         # NEW: public IP
             "cpu_usage": cpu_pct,
             "cpu_temp_c": cpu_temp,
             "ram_percent": ram_percent,
@@ -359,8 +361,6 @@ class MqttBridge:
             "uptime_s": int(time.time() - self._start_ts),
             "brightness": brightness,
         }
-        #print(obj)
-        return obj
 
     # ---------- brightness ----------
     def _read_brightness_percent(self) -> Optional[int]:
@@ -628,15 +628,68 @@ class MqttBridge:
         return ip
 
     def _get_current_ssid(self) -> str:
+        # Prefer: nmcli shows the active Wi-Fi row as "yes:<SSID>"
         try:
-            r = subprocess.check_output(
-                ["nmcli", "-t", "-f", "NAME", "connection", "show", "--active"],
-                stderr=subprocess.DEVNULL, universal_newlines=True, timeout=4
+            out = subprocess.check_output(
+                ["nmcli", "-t", "-f", "ACTIVE,SSID", "dev", "wifi"],
+                text=True, stderr=subprocess.DEVNULL, timeout=4
             )
-            lines = [l for l in r.splitlines() if l]
-            return lines[0] if lines else "N/A"
+            for line in out.splitlines():
+                parts = line.split(":")
+                if len(parts) >= 2 and parts[0] == "yes":
+                    ssid = parts[1].strip()
+                    if ssid:
+                        return ssid
         except Exception:
-            return "N/A"
+            pass
+
+        # Fallback: iwgetid -r
+        try:
+            out = subprocess.check_output(
+                ["iwgetid", "-r"], text=True, stderr=subprocess.DEVNULL, timeout=3
+            )
+            ssid = out.strip()
+            if ssid:
+                return ssid
+        except Exception:
+            pass
+
+        # Last resort: active connections filtered to Wi-Fi type
+        try:
+            out = subprocess.check_output(
+                ["nmcli", "-t", "-f", "TYPE,NAME", "connection", "show", "--active"],
+                text=True, stderr=subprocess.DEVNULL, timeout=4
+            )
+            for line in out.splitlines():
+                typ, name = (line.split(":") + ["", ""])[:2]
+                if typ == "wifi" and name:
+                    return name
+        except Exception:
+            pass
+
+        return "N/A"
+
+    def _get_external_ip(self) -> Optional[str]:
+        # return cached value for 5 minutes
+        try:
+            ip, ts = self._ext_ip_cache
+            if ip and (time.time() - ts) < 300:
+                return ip
+        except Exception:
+            pass
+
+        try:
+            out = subprocess.check_output(
+                ["curl", "-sS", "--max-time", "3", "https://ipinfo.io/ip"],
+                text=True, stderr=subprocess.DEVNULL
+            ).strip()
+            if out and len(out) < 64:
+                self._ext_ip_cache = (out, time.time())
+                return out
+        except Exception:
+            pass
+        return None
+
 
     # ---------- mqtt helpers ----------
     def _publish(self, topic, payload, qos=1, retain=False):

@@ -28,7 +28,7 @@ class Sparkline(QtWidgets.QWidget):
 
         if len(self._data) < 2: return
         vals = self._data
-        vmin, vmax = min(vals), max(vals)
+        vmin, vmax = 0.0, 100.0 #min(vals), max(vals)
         rng = (vmax - vmin) or 1.0
 
         left, top, right, bottom = r.left()+6, r.top()+6, r.right()-6, r.bottom()-6

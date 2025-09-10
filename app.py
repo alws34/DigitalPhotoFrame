@@ -1,156 +1,235 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+Digital Photo Frame - Qt main (fullscreen frame; Settings at 800x600).
+"""
+
+from __future__ import annotations
 import os
 import sys
+import json
 import argparse
 import threading
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
 
-# Ensure local imports resolve
+from PySide6 import QtCore, QtGui, QtWidgets
+
+# QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, True)
+# QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, True)
+QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_DontUseNativeDialogs, True)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-if BASE_DIR not in sys.path:
-    sys.path.append(BASE_DIR)
 
-from PySide6 import QtWidgets
+from WebAPI.API import Backend         
+from Utilities.MQTT.mqtt_bridge import MqttBridge   
 
-# Conditional imports for logging and config if they exist
-try:
-    from logging_setup import init_logging
-except ImportError:
-    import logging
-    def init_logging():
-        logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+# ------------------------------ utilities ------------------------------
 
-try:
-    from config import load_settings
-except ImportError:
-    import json
-    def load_settings(path):
+def _abs_path(p: str) -> str:
+    return p if os.path.isabs(p) else os.path.abspath(os.path.join(BASE_DIR, p))
+
+
+def _load_settings(path: str) -> Dict[str, Any]:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        return {}
+    except Exception as e:
+        print(f"[PhotoFrame] Failed to load settings '{path}': {e}", file=sys.stderr)
+        return {}
+
+
+def _apply_safe_theme(app: QtWidgets.QApplication) -> None:
+    # Robust readable style regardless of system theme
+    try:
+        app.setStyle("Fusion")
+    except Exception:
+        pass
+
+    pal = app.palette()
+    pal.setColor(QtGui.QPalette.Window,           QtGui.QColor(245, 245, 245))
+    pal.setColor(QtGui.QPalette.WindowText,       QtCore.Qt.black)
+    pal.setColor(QtGui.QPalette.Base,             QtGui.QColor(255, 255, 255))
+    pal.setColor(QtGui.QPalette.AlternateBase,    QtGui.QColor(240, 240, 240))
+    pal.setColor(QtGui.QPalette.Text,             QtCore.Qt.black)
+    pal.setColor(QtGui.QPalette.Button,           QtGui.QColor(230, 230, 230))
+    pal.setColor(QtGui.QPalette.ButtonText,       QtCore.Qt.black)
+    pal.setColor(QtGui.QPalette.Highlight,        QtGui.QColor(0, 120, 215))
+    pal.setColor(QtGui.QPalette.HighlightedText,  QtCore.Qt.white)
+    app.setPalette(pal)
+
+    # Minimal stylesheet to prevent black-on-black
+    app.setStyleSheet(
+        "QWidget { background: #f5f5f5; color: #000; }"
+        "QLineEdit, QComboBox, QTableWidget, QTableView { background: #fff; }"
+        "QPushButton { background: #e6e6e6; border: 1px solid #c9c9c9; padding: 4px 8px; }"
+        "QTabWidget::pane { border: 1px solid #cfcfcf; }"
+        "QTabBar::tab { padding: 6px 10px; }"
+    )
+
+
+# ----------------------- Settings dialog sizing hook -----------------------
+
+class _SettingsSizer(QtCore.QObject):
+    """
+    Event filter that forces SettingsDialog windows to 800x600 and centers them.
+    This overrides any size the dialog tries to set in its own __init__.
+    """
+    def __init__(self, app: QtWidgets.QApplication):
+        super().__init__(app)
+        self._cls = None
         try:
-            with open(path, 'r') as f:
-                return json.load(f)
-        except FileNotFoundError:
-            return {}
+            # Import lazily so missing modules don't crash headless
+            from FrameGUI.SettingsFrom.dialog import SettingsDialog  # type: ignore
+            self._cls = SettingsDialog
+        except Exception:
+            self._cls = None
 
-# Import the Qt View and the Server
-from FrameGUI.photoframe_view_qt import PhotoFrameQtWidget
-from FrameServer.PhotoFrameServer import PhotoFrameServer
+    def eventFilter(self, obj: QtCore.QObject, ev: QtCore.QEvent) -> bool:
+        if self._cls and isinstance(obj, self._cls):
+            if ev.type() == QtCore.QEvent.Show:
+                dlg: QtWidgets.QDialog = obj  # type: ignore
+                # Force fixed 800x600 and center on the active screen
+                dlg.setMinimumSize(800, 600)
+                dlg.setMaximumSize(800, 600)
+                dlg.resize(800, 600)
+                try:
+                    screen = dlg.screen() or QtWidgets.QApplication.primaryScreen()
+                    if screen:
+                        geo = screen.availableGeometry()
+                        x = geo.x() + (geo.width() - 800) // 2
+                        y = geo.y() + (geo.height() - 600) // 2
+                        dlg.move(max(geo.x(), x), max(geo.y(), y))
+                except Exception:
+                    pass
+        return super().eventFilter(obj, ev)
 
 
-def _resolve_settings_path(path_arg: str) -> str:
-    """Resolve settings path to an absolute path."""
-    if os.path.isabs(path_arg):
-        return path_arg
-    return os.path.abspath(os.path.join(BASE_DIR, path_arg))
+# ------------------------------ runners ------------------------------
 
-
-def _headless_run(settings: Dict[str, Any], settings_path: str,
+def _run_headless(settings: Dict[str, Any], settings_path: str,
                   width: Optional[int], height: Optional[int]) -> None:
-    """
-    Start PhotoFrameServer without any GUI. Keep it running
-    (blocking) similar to a service.
-    """
-    if width is None or height is None:
-        backend = settings.get("backend_configs", {}) or {}
-        width = width or int(backend.get("stream_width", 1920))
-        height = height or int(backend.get("stream_height", 1080))
+    from FrameServer.PhotoFrameServer import PhotoFrameServer
+
+    backend_cfg = settings.get("backend_configs", {}) or {}
+    w = width or int(backend_cfg.get("stream_width", 1920))
+    h = height or int(backend_cfg.get("stream_height", 1080))
+    images_dir = settings.get("image_dir") or settings.get("images_dir") or None
+
+    print(f"[PhotoFrame] Headless mode. Resolution {w}x{h}. Settings: {settings_path}")
+
+    srv = PhotoFrameServer(width=w, height=h, iframe=None,
+                           images_dir=images_dir, settings_path=settings_path)
+
+    # Start HTTP backend ONCE and tie it to the producer
+    backend = Backend(frame=srv, settings=settings,
+                      image_dir=images_dir, settings_path=settings_path)
+    threading.Thread(target=backend.start, daemon=True).start()
+    srv.m_api = backend
+
+    # compositor loop
+    t = threading.Thread(target=srv.run_photoframe, daemon=True)
+    t.start()
+
+    # optional: MQTT if you need it headless
+    # mqtt = MqttBridge(view=srv, settings=settings)
+    # mqtt.start()
+
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        try: srv.stop_services()
+        except Exception: pass
+        # try: mqtt.stop()
+        # except Exception: pass
+
+
+def _run_gui(settings: Dict[str, Any], settings_path: str) -> None:
+    from FrameGUI.photoframe_view_qt import PhotoFrameQtWidget
+    from FrameServer.PhotoFrameServer import PhotoFrameServer
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication(sys.argv)
+    _apply_safe_theme(app)
+
+    sizer = _SettingsSizer(app)
+    app.installEventFilter(sizer)
+
+    screen = app.primaryScreen()
+    if not screen:
+        print("[PhotoFrame] No display detected. Falling back to headless mode.", file=sys.stderr)
+        _run_headless(settings, settings_path, None, None)
+        return
+
+    avail = screen.availableGeometry()
+    sw, sh = max(1, avail.width()), max(1, avail.height())
+
+    # main UI
+    view = PhotoFrameQtWidget(settings=settings, settings_path=settings_path)
+    view.showFullScreen()
 
     images_dir = settings.get("image_dir") or settings.get("images_dir") or None
 
-    print(f"[PhotoFrame] Headless mode. Resolution {width}x{height}. Settings: {settings_path}")
-    m_weather_api = settings.get("open_meteo", {})
-    print(f"[PhotoFrame] open_meteo present: {bool(m_weather_api)} lat={m_weather_api.get('latitude')} lon={m_weather_api.get('longitude')}")
+    # Producer owns frames; view is just the GUI sink
+    srv = PhotoFrameServer(width=sw, height=sh, iframe=view,
+                           images_dir=images_dir, settings_path=settings_path)
 
-    frame = PhotoFrameServer(
-        width=width,
-        height=height,
-        iframe=None,                  # no GUI
-        images_dir=images_dir,
-        settings_path=settings_path,
-    )
-    frame.main()
+    # Start HTTP backend ONCE and tie it to the producer
+    backend = Backend(frame=srv, settings=settings,
+                      image_dir=images_dir, settings_path=settings_path)
+    threading.Thread(target=backend.start, daemon=True).start()
+    srv.m_api = backend
 
+    # optional MQTT
+    mqtt = MqttBridge(view=view, settings=settings)
+    mqtt.start()
 
-def _gui_run(settings: Dict[str, Any], settings_path: str, args) -> None:
-    """
-    Start the Qt GUI and the backend PhotoFrameServer. This function now handles
-    QApplication creation and screen detection.
-    """
-    # 1. Ensure only one QApplication instance exists.
-    app = QtWidgets.QApplication.instance()
-    if not app:
-        app = QtWidgets.QApplication(sys.argv)
+    # keep refs
+    view.backend = backend
+    view.mqtt = mqtt
 
-    # 2. Detect screen size. If none is found, fall back to headless mode.
-    screen = app.primaryScreen()
-    if not screen:
-        print("[PhotoFrame] No display detected. Falling back to headless mode.")
-        _headless_run(settings, settings_path, args.width, args.height)
-        return
+    # graceful shutdown
+    def _on_quit():
+        try: mqtt.stop()
+        except Exception: pass
+        try: srv.stop_services()
+        except Exception: pass
+    app.aboutToQuit.connect(_on_quit)
 
-    screen_size = screen.size()
-    screen_w, screen_h = screen_size.width(), screen_size.height()
+    # compositor loop
+    t = threading.Thread(target=srv.run_photoframe, daemon=True)
+    t.start()
 
-    print(f"[PhotoFrame] Qt GUI mode. Screen {screen_w}x{screen_h}. Settings: {settings_path}")
-    om = settings.get("open_meteo", {})
-    print(f"[PhotoFrame] open_meteo present: {bool(om)} lat={om.get('latitude')} lon={om.get('longitude')}")
-
-    # 3. Create the GUI window (the view)
-    view = PhotoFrameQtWidget(settings=settings, settings_path=settings_path)
-    view.resize(screen_w, screen_h)
-    
-    # 4. Create the backend server, passing the view as the iFrame interface
-    server = PhotoFrameServer(
-        width=screen_w,
-        height=screen_h,
-        iframe=view, # Link server to the Qt widget
-        images_dir=settings.get("image_dir") or None,
-        settings_path=settings_path,
-    )
-
-    # 5. Set up graceful shutdown
-    app.aboutToQuit.connect(server.stop_services)
-    
-    # 6. Start the server's main logic in a background thread
-    server_thread = threading.Thread(target=server.run_photoframe, daemon=True)
-    server_thread.start()
-
-    # 7. Show the window and start the Qt event loop
-    view.showFullScreen()
+    qpa = os.environ.get("QT_QPA_PLATFORM", "(unset)")
+    print(f"[PhotoFrame] GUI fullscreen {sw}x{sh}, QPA={qpa}")
     sys.exit(app.exec())
 
 
+# ------------------------------- main -------------------------------
+
 def main() -> None:
-    init_logging()
-    os.environ.setdefault("DISPLAY", ":0")
+    p = argparse.ArgumentParser(description="Digital Photo Frame")
+    p.add_argument("--settings", default="photoframe_settings.json",
+                   help="Path to settings JSON file.")
+    p.add_argument("--headless", action="store_true",
+                   help="Run without GUI (backend server only).")
+    p.add_argument("--width", type=int, default=None,
+                   help="Headless mode: override stream width.")
+    p.add_argument("--height", type=int, default=None,
+                   help="Headless mode: override stream height.")
+    args = p.parse_args()
 
-    parser = argparse.ArgumentParser(description="Digital Photo Frame")
-    parser.add_argument(
-        "--settings",
-        default="photoframe_settings.json",
-        help="Path to settings JSON file.",
-    )
-    parser.add_argument(
-        "--headless",
-        action="store_true",
-        help="Force headless mode (no GUI). Server + API still run.",
-    )
-    parser.add_argument(
-        "--width", type=int, default=None, help="Override width in headless mode."
-    )
-    parser.add_argument(
-        "--height", type=int, default=None, help="Override height in headless mode."
-    )
-    args = parser.parse_args()
-
-    settings_path = _resolve_settings_path(args.settings)
-    settings: Dict[str, Any] = load_settings(settings_path)
+    settings_path = _abs_path(args.settings)
+    settings = _load_settings(settings_path)
 
     if args.headless:
-        _headless_run(settings, settings_path, args.width, args.height)
+        _run_headless(settings, settings_path, args.width, args.height)
         return
 
-    # A screen is assumed to exist, so we run the GUI.
-    # _gui_run will handle the fallback to headless if no screen is detected.
-    _gui_run(settings, settings_path, args)
+    _run_gui(settings, settings_path)
 
 
 if __name__ == "__main__":

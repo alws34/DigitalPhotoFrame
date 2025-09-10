@@ -11,17 +11,35 @@ class WeatherClient:
         self._impl = impl
 
     def fetch(self) -> None:
-        # Your handlers already implement a timed fetch method
         self._impl.fetch_weather_data()
 
     def data(self) -> Dict[str, Any]:
-        # Your handlers expose get_weather_data()
+        out: Dict[str, Any] = {}
         try:
             d = self._impl.get_weather_data()
-            return d if isinstance(d, dict) else {}
+            out = d if isinstance(d, dict) else {}
         except Exception:
-            logging.exception("weather_adapter.data() failed")
-            return {}
+            logging.exception("weather_adapter.data(): get_weather_data failed")
+            out = {}
+
+        # Attach icon bytes if the handler has a PIL image ready
+        try:
+            get_icon = getattr(self._impl, "get_weather_icon", None)
+            if callable(get_icon):
+                pil_img = get_icon()
+                if pil_img is not None:
+                    try:
+                        import io
+                        from PIL import Image
+                        buf = io.BytesIO()
+                        pil_img.convert("RGBA").save(buf, format="PNG")
+                        out["icon"] = buf.getvalue()  # GUI already supports bytes
+                    except Exception:
+                        logging.exception("weather_adapter.data(): failed to encode PIL icon as PNG")
+        except Exception:
+            logging.exception("weather_adapter.data(): get_weather_icon failed")
+        return out
+
         
     def initialize_weather_updates(self) -> None:
         # Optional: if a concrete handler provides its own scheduler, delegate to it.
