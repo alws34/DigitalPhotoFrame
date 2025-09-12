@@ -16,6 +16,7 @@ from FrameGUI.SettingsFrom.viewmodel import SettingsViewModel
 from FrameGUI.SettingsFrom.dialog import SettingsDialog
 from Utilities.brightness import set_brightness_percent
 from Utilities.screen_scheduler import ScreenScheduler
+from Utilities.autoupdate_utils import AutoUpdater 
 try:
     from PySide6.QtSvg import QSvgRenderer
     _HAS_SVG = True
@@ -60,6 +61,19 @@ class PhotoFrameQtWidget(QtWidgets.QWidget, iFrame, metaclass=IFrameQtWidgetMeta
             lambda off: logging.info("ScreenScheduler: %s", "OFF" if off else "ON")
         )
         
+        # --- AutoUpdater wiring ---
+        self._update_stop_evt = threading.Event()
+        self.autoupdater = AutoUpdater(
+            stop_event=self._update_stop_evt,
+            interval_sec=1800,  # check every 30 minutes
+            on_update_available=lambda n: logging.info("AutoUpdater: %d commits behind", n),
+            on_updated=lambda out: logging.info("AutoUpdater log:\n%s", out),
+            restart_service_async=self._on_restart_service_async,
+            min_restart_interval_sec=900,
+            auto_restart_on_update=True,
+        )
+        self.autoupdater.start()
+                
         # Wire signals
         self.dateTimeChanged.connect(self._update_datetime_gui)
         self.frameChanged.connect(self._canvas.set_qimage)
@@ -83,6 +97,11 @@ class PhotoFrameQtWidget(QtWidgets.QWidget, iFrame, metaclass=IFrameQtWidgetMeta
     
     def stop(self):
         """A simple method to close the window, can be expanded for more cleanup."""
+        try:
+            if hasattr(self, "_update_stop_evt"):
+                self._update_stop_evt.set()
+        except Exception:
+            pass
         self.close()
 
     def mousePressEvent(self, e: QtGui.QMouseEvent) -> None:

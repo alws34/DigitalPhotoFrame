@@ -26,6 +26,7 @@ class SettingsDialog(QtWidgets.QDialog):
         tabs = QtWidgets.QTabWidget(self); self.setLayout(QtWidgets.QVBoxLayout())
         self.layout().addWidget(tabs)
 
+        # Build tabs EXACTLY like before (these set attributes like self.cpu_graph)
         self._stats   = self._build_stats_tab()
         self._wifi    = self._build_wifi_tab()
         self._screen  = self._build_screen_tab()
@@ -33,14 +34,15 @@ class SettingsDialog(QtWidgets.QDialog):
         self._notif   = self._build_notifications_tab()
         self._config  = self._build_config_tab()
 
-        tabs.addTab(self._stats,  "Stats")
-        tabs.addTab(self._wifi,   "Wi-Fi")
-        tabs.addTab(self._screen, "Screen")
-        tabs.addTab(self._about,  "About")
-        tabs.addTab(self._notif,  "Notifications")
-        tabs.addTab(self._config, "Config")
+        # Wrap each tab in a scroll area so small screens do not overflow
+        tabs.addTab(self._wrap_scroll(self._stats),  "Stats")
+        tabs.addTab(self._wrap_scroll(self._wifi),   "Wi-Fi")
+        tabs.addTab(self._wrap_scroll(self._screen), "Screen")
+        tabs.addTab(self._wrap_scroll(self._notif),  "Notifications")
+        tabs.addTab(self._wrap_scroll(self._config), "Config")
+        tabs.addTab(self._wrap_scroll(self._about),  "About")
 
-        # wire VM signals
+        # wire VM signals (all attributes still exist as in original)
         vm.statsChanged.connect(self._on_stats_changed)
         vm.qrTextChanged.connect(self._on_qr_changed)
         vm.networksChanged.connect(self._set_networks)
@@ -58,6 +60,14 @@ class SettingsDialog(QtWidgets.QDialog):
         vm.start_local_stats(1000)
         vm.refresh_notifications()
         vm.scan_wifi()
+
+    def _wrap_scroll(self, widget: QtWidgets.QWidget) -> QtWidgets.QScrollArea:
+        """Make any tab scrollable to fit 800x480 without overlapping."""
+        sc = QtWidgets.QScrollArea()
+        sc.setWidgetResizable(True)
+        sc.setFrameShape(QtWidgets.QFrame.NoFrame)
+        sc.setWidget(widget)
+        return sc
 
     def _apply_safe_theme(self) -> None:
         """Make the dialog readable regardless of system theme."""
@@ -156,6 +166,8 @@ class SettingsDialog(QtWidgets.QDialog):
         top = QtWidgets.QWidget(); top_l = QtWidgets.QVBoxLayout(top); top_l.setAlignment(QtCore.Qt.AlignHCenter)
         self.ssid_lbl = QtWidgets.QLabel("Wi-Fi: Loading...")
         self.url_lbl  = QtWidgets.QLabel("URL: Loading...")
+        self.ssid_lbl.setWordWrap(True)
+        self.url_lbl.setWordWrap(True)
         self.qr_lbl   = QtWidgets.QLabel()
         self.qr_lbl.setMinimumSize(160,160); self.qr_lbl.setAlignment(QtCore.Qt.AlignCenter)
         for lbl in (self.ssid_lbl, self.url_lbl): lbl.setAlignment(QtCore.Qt.AlignCenter)
@@ -164,6 +176,12 @@ class SettingsDialog(QtWidgets.QDialog):
 
         # graphs
         g = QtWidgets.QWidget(); gl = QtWidgets.QFormLayout(g)
+        # Allow labels/rows to wrap on narrow widths so nothing overlaps
+        policy = getattr(QtWidgets.QFormLayout, "WrapAllRows",
+                 getattr(QtWidgets.QFormLayout, "WrapLongRows",
+                         QtWidgets.QFormLayout.DontWrapRows))
+        gl.setRowWrapPolicy(policy)
+        gl.setFieldGrowthPolicy(QtWidgets.QFormLayout.ExpandingFieldsGrow)
 
         def row(w_graph_attr: str, init_text: str) -> QtWidgets.QWidget:
             wrap = QtWidgets.QWidget()
@@ -190,6 +208,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.pull_btn = QtWidgets.QPushButton("Pull updates now", clicked=self.vm.pull_updates)
         self.restart_btn = QtWidgets.QPushButton("Restart service", clicked=self.vm.restart_service)
         self.maint_status = QtWidgets.QLabel("")
+        self.maint_status.setWordWrap(True)
         row.addWidget(self.pull_btn); row.addSpacing(8); row.addWidget(self.restart_btn); row.addSpacing(16); row.addWidget(self.maint_status, 1)
         lay.addLayout(row)
         lay.addStretch(1)
@@ -318,9 +337,6 @@ class SettingsDialog(QtWidgets.QDialog):
         btn_font = QtGui.QFont(self.font().family(), 30, QtGui.QFont.Bold) 
         self.b_minus.setFont(btn_font)
         self.b_plus.setFont(btn_font)
-        # (optional) make the buttons physically larger for touch:
-        # self.b_minus.setMinimumSize(64, 52)
-        # self.b_plus.setMinimumSize(64, 52)
 
         self.b_val = QtWidgets.QLabel(f"{int(scr.get('brightness', 100))}%")
         f = self.b_val.font(); f.setPointSize(max(35, f.pointSize() + 2)); f.setBold(True)
@@ -356,7 +372,11 @@ class SettingsDialog(QtWidgets.QDialog):
         v.addStretch(0)
         return w
 
-
+    def _current_orientation(self) -> str:
+        for b in self.orient.buttons():
+            if b.isChecked():
+                return b.property("val") or "normal"
+        return "normal"
 
     def _brightness_step(self, delta: int) -> None:
         try:
@@ -368,14 +388,12 @@ class SettingsDialog(QtWidgets.QDialog):
             self.b_val.setText(f"{new}%")
             self._debounce.start(150)
 
-
     def _apply_brightness_debounced(self):
         try:
             pct = int(self.b_val.text().rstrip("%").strip())
         except Exception:
             pct = 100
         self.vm.apply_brightness(int(pct))
-
 
     # --- scrollable, stacked schedule editor -----------------------------------
     def _build_schedules_editor(self) -> QtWidgets.QGroupBox:
@@ -550,7 +568,6 @@ class SettingsDialog(QtWidgets.QDialog):
         self._set_sched_rows_enabled(master.isChecked())
         return group
 
-
     def _set_sched_rows_enabled(self, on: bool) -> None:
         # enable/disable all schedule blocks and the Add button
         lay = self._sched_container
@@ -586,6 +603,14 @@ class SettingsDialog(QtWidgets.QDialog):
             except Exception:
                 pass
         v.addStretch(1)
+        
+        footer = QtWidgets.QLabel("Created by: alws34 \nhttps://github.com/alws34/")
+        footer.setAlignment(QtCore.Qt.AlignHCenter)
+        footer.setWordWrap(True)
+        footer.setObjectName("about_footer")
+        footer.setStyleSheet("color: #666666; font-size: 11px;")
+        v.addWidget(footer)
+
         return w
 
     @staticmethod
@@ -829,12 +854,28 @@ class SettingsDialog(QtWidgets.QDialog):
         form.addRow(lab, w); self._cfg_vars[path] = (w, "str")
 
     def _config_revert(self):
-        parent = self.parent()
-        idx = self.layout().indexOf(self._config)
-        self.layout().removeWidget(self._config)
-        self._config.deleteLater()
-        self._config = self._build_config_tab()
-        self.layout().insertWidget(idx, self._config)
+        try:
+            # find the QTabWidget hosting the pages
+            tabs = None
+            for child in self.findChildren(QtWidgets.QTabWidget):
+                tabs = child
+                break
+            if not tabs:
+                return
+
+            # locate the "Config" tab by title
+            idx = next((i for i in range(tabs.count()) if tabs.tabText(i) == "Config"), -1)
+            if idx < 0:
+                return
+
+            # rebuild the page and re-wrap it in a scroll area
+            new_cfg = self._build_config_tab()
+            self._config = new_cfg
+            tabs.removeTab(idx)
+            tabs.insertTab(idx, self._wrap_scroll(new_cfg), "Config")
+            tabs.setCurrentIndex(idx)
+        except Exception as e:
+            self._show_msg("Error", f"Failed to revert config: {e}")
 
     def _config_save(self):
         # collect values and save

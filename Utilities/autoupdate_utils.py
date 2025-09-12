@@ -1,16 +1,31 @@
-import os, time, shutil, logging, subprocess, threading, random
-from typing import Optional, Tuple, Dict, Callable
+import os, time, shutil, logging, subprocess, threading, random, re
+from datetime import datetime
+from typing import Optional, Tuple, Dict, Callable, List
 
 class AutoUpdater:
+    """
+    Tag-gated auto-updater.
+
+    Behavior:
+      - Only updates when a newer *remote* semver tag exists (e.g., v1.2.3 or V1.2.3).
+      - Backs up photoframe_settings.json (or settings.json) before switching tags
+        and restores it after update to preserve user settings.
+      - Keeps the old 'git pull' path as a fallback if no tags are found.
+      - Optionally restarts your service after a successful update.
+
+    Public:
+      start() -> None
+      pull_now() -> Tuple[bool, str]
+    """
     def __init__(
         self,
         stop_event: threading.Event,
         interval_sec: int = 1800,
-        on_update_available: Optional[Callable[[int], None]] = None, 
-        on_updated: Optional[Callable[[str], None]] = None,          
-        restart_service_async: Optional[Callable[[], None]] = None,  
-        min_restart_interval_sec: int = 900,                          
-        auto_restart_on_update: bool = True,                       
+        on_update_available: Optional[Callable[[int], None]] = None,  # kept for compatibility; called with 'behind' when branch fallback is used
+        on_updated: Optional[Callable[[str], None]] = None,
+        restart_service_async: Optional[Callable[[], None]] = None,
+        min_restart_interval_sec: int = 900,
+        auto_restart_on_update: bool = True,
     ):
         self._stop = stop_event
         self._thread: Optional[threading.Thread] = None
@@ -32,19 +47,34 @@ class AutoUpdater:
             self._thread.start()
 
     def pull_now(self) -> Tuple[bool, str]:
+        """
+        Manual update trigger used by the Settings dialog button.
+        Only updates when a newer remote tag exists. If no tag information
+        is available, falls back to branch fast-forward pull.
+        """
         repo = self._find_repo_root()
-        ok, out = self._git_pull(repo_path=repo)
-        # Optional: also trigger restart here if a real update happened
-        if ok and ("Updating" in out or "Fast-forward" in out or "Fast-Forward" in out):
-            if self._auto_restart_on_update and self._restart_service_async:
-                try:
-                    threading.Thread(target=self._restart_service_async, daemon=True).start()
-                except Exception:
-                    logging.exception("[AutoUpdate] restart hook failed (manual)")
+        if not repo:
+            msg = "Repository root not found"
+            self._record(False, msg)
+            return False, msg
+
+        ok, changed, out = self._update_to_newer_tag(repo_path=repo, timeout=180)
+        if not ok and "no tags" in out.lower():
+            # optional fallback to branch pull if tags are not used
+            ok, out = self._git_pull(repo_path=repo)
+
+        # Optional restart if code actually changed
+        if ok and changed and self._auto_restart_on_update and self._restart_service_async:
+            try:
+                threading.Thread(target=self._restart_service_async, daemon=True).start()
+            except Exception:
+                logging.exception("[AutoUpdate] restart hook failed (manual)")
+
         return ok, out
 
     # ---- worker -------------------------------------------------
     def _worker(self) -> None:
+        # random initial delay to de-synchronize many devices
         if self._stop.wait(timeout=random.uniform(5.0, 60.0)):
             return
 
@@ -53,42 +83,42 @@ class AutoUpdater:
                 repo = self._find_repo_root()
                 if repo and shutil.which("git"):
                     env = self._git_env()
-                    # Skip if no upstream configured
-                    upstream = self._upstream_ref(repo, env, 10)
-                    if upstream:
-                        _r, _b = upstream
-                        ahead, behind = self._behind_counts(repo, env, 10)
 
-                        if behind > 0:
-                            # Notify: new version available
-                            if self._on_update_available:
-                                try: self._on_update_available(behind)
-                                except Exception: pass
+                    # Preferred path: tag-based update
+                    ok, changed, out = self._update_to_newer_tag(repo_path=repo, timeout=180)
+                    if self._on_updated and out:
+                        try:
+                            self._on_updated(out)
+                        except Exception:
+                            pass
 
-                            # Pull
-                            ok, out = self._git_pull(repo, 180)
-                            if self._on_updated:
-                                try: self._on_updated(out)
-                                except Exception: pass
+                    # If tags are not present at all, use branch fast-forward fallback so devices still update.
+                    if not ok and "no tags" in out.lower():
+                        upstream = self._upstream_ref(repo, env, 10)
+                        if upstream:
+                            ahead, behind = self._behind_counts(repo, env, 10)
+                            if behind > 0 and self._on_update_available:
+                                try:
+                                    self._on_update_available(behind)
+                                except Exception:
+                                    pass
+                        ok2, out2 = self._git_pull(repo, 180)
+                        if self._on_updated and out2:
+                            try:
+                                self._on_updated(out2)
+                            except Exception:
+                                pass
+                        changed = ok2 and self._pull_changed(out2)
 
-                            # Restart if pull succeeded & changed anything
-                            if ok and ("Updating" in out or "Fast-forward" in out or "Fast-Forward" in out):
-                                now = time.time()
-                                if self._auto_restart_on_update and self._restart_service_async:
-                                    # Debounce restarts
-                                    if now - self._last_restart_ts >= self._min_restart_interval:
-                                        self._last_restart_ts = now
-                                        try:
-                                            # do it in a thread so we return quickly
-                                            threading.Thread(
-                                                target=self._restart_service_async,
-                                                daemon=True
-                                            ).start()
-                                        except Exception:
-                                            logging.exception("[AutoUpdate] restart hook failed")
-                    else:
-                        # No upstream: just try a normal pull (will likely noop)
-                        self._git_pull(repo, 60)
+                    # Restart if code actually changed
+                    if changed and self._auto_restart_on_update and self._restart_service_async:
+                        now = time.time()
+                        if now - self._last_restart_ts >= self._min_restart_interval:
+                            self._last_restart_ts = now
+                            try:
+                                threading.Thread(target=self._restart_service_async, daemon=True).start()
+                            except Exception:
+                                logging.exception("[AutoUpdate] restart hook failed")
                 else:
                     self._record(False, "git not found or repo not detected")
             except Exception:
@@ -100,11 +130,173 @@ class AutoUpdater:
                     return
                 time.sleep(1)
 
+    # ---- tag-based update ---------------------------------------
+    def _update_to_newer_tag(self, repo_path: str, timeout: int = 180) -> Tuple[bool, bool, str]:
+        """
+        Returns (ok, changed, message).
+        ok      -> the operation executed without internal error (even if no update was needed)
+        changed -> code actually changed (we switched to a newer tag)
+        message -> details (includes backup path when applicable)
+        """
+        env = self._git_env()
+        if not shutil.which("git"):
+            msg = "git not found"
+            self._record(False, msg)
+            return False, False, msg
+
+        if not repo_path or not os.path.isdir(os.path.join(repo_path, ".git")):
+            msg = f"Not a git repository: {repo_path}"
+            self._record(False, msg)
+            return False, False, msg
+
+        # Determine remote and fetch tags
+        upstream = self._upstream_ref(repo_path, env, timeout)
+        remote = upstream[0] if upstream else "origin"
+        self._fetch(repo_path, remote, env, timeout)
+        # Make sure we have all tags
+        self._run_git(["git", "-C", repo_path, "fetch", "--tags", "--prune", remote], env, timeout)
+
+        remote_tags = self._list_remote_semver_tags(remote, env, timeout)
+        local_tags  = self._list_local_semver_tags(repo_path, env, timeout)
+
+        if not remote_tags:
+            msg = "No tags found on remote; skipping tag-based update"
+            self._record(True, msg)
+            return False, False, msg  # ok=False in caller triggers branch fallback
+
+        latest_remote_tag = self._max_tag(remote_tags)
+        current_tag = self._current_semver_tag(repo_path, env, timeout)
+        # If HEAD is not at a tag, assume version 0.0.0 so we jump forward once
+        current_ver = self._parse_semver(current_tag) if current_tag else (0, 0, 0)
+
+        if self._parse_semver(latest_remote_tag) <= current_ver:
+            msg = f"Already at latest tag ({current_tag or 'unknown'}); no update needed"
+            self._record(True, msg)
+            return True, False, msg
+
+        # Newer tag exists -> backup, checkout, restore settings
+        backup_path = self._backup_settings(repo_path)
+        changed, msg_checkout = self._checkout_tag(repo_path, latest_remote_tag, env, timeout)
+
+        # Restore settings (best-effort)
+        self._restore_settings(repo_path, backup_path)
+
+        msg = f"Updated to tag {latest_remote_tag}.\n{msg_checkout}"
+        if backup_path:
+            msg += f"\nSettings backup: {backup_path}"
+
+        self._record(changed, msg)
+        return True, changed, msg
+
+    def _checkout_tag(self, repo_path: str, tag: str, env, timeout: int) -> Tuple[bool, str]:
+        """
+        Switch to the provided tag by creating/updating a local 'autoupdate' branch.
+        This avoids detached HEAD and makes future updates simpler.
+        """
+        # Resolve tag ref to a commit
+        ok_res, out_res = self._run_git(["git", "-C", repo_path, "rev-list", "-n", "1", f"refs/tags/{tag}"], env, timeout)
+        if not ok_res or not out_res:
+            return False, f"Failed to resolve tag {tag}: {out_res}"
+
+        # Create or reset 'autoupdate' branch to the tag
+        cmd = ["git", "-C", repo_path, "checkout", "-B", "autoupdate", f"refs/tags/{tag}"]
+        ok_co, out_co = self._run_git(cmd, env, timeout)
+        if not ok_co:
+            return False, f"Checkout failed: {out_co}"
+
+        return True, "Checkout succeeded"
+
+    def _list_remote_semver_tags(self, remote: str, env, timeout: int) -> List[str]:
+        ok, out = self._run_git(["git", "ls-remote", "--tags", remote], env, timeout)
+        if not ok or not out:
+            return []
+        tags = []
+        for line in out.splitlines():
+            # <sha>\trefs/tags/<name> or <sha>\trefs/tags/<name>^{}
+            try:
+                ref = line.split("\t", 1)[1]
+            except Exception:
+                continue
+            if ref.endswith("^{}"):
+                ref = ref[:-3]
+            name = ref.rsplit("/", 1)[-1]
+            if self._is_semver_tag(name):
+                tags.append(name)
+        return tags
+
+    def _list_local_semver_tags(self, repo_path: str, env, timeout: int) -> List[str]:
+        ok, out = self._run_git(["git", "-C", repo_path, "tag", "--list"], env, timeout)
+        if not ok or not out:
+            return []
+        return [t.strip() for t in out.splitlines() if self._is_semver_tag(t.strip())]
+
+    def _current_semver_tag(self, repo_path: str, env, timeout: int) -> Optional[str]:
+        # Prefer exact tag(s) pointing at HEAD
+        ok, out = self._run_git(["git", "-C", repo_path, "tag", "--points-at", "HEAD"], env, timeout)
+        if ok and out:
+            tags = [t.strip() for t in out.splitlines() if self._is_semver_tag(t.strip())]
+            if tags:
+                return self._max_tag(tags)
+        # Fallback to describe
+        ok, out = self._run_git(["git", "-C", repo_path, "describe", "--tags", "--abbrev=0"], env, timeout)
+        if ok and out and self._is_semver_tag(out.strip()):
+            return out.strip()
+        return None
+
+    @staticmethod
+    def _is_semver_tag(tag: str) -> bool:
+        # Accept v1.2.3, V1.2.3, 1.2.3
+        return re.fullmatch(r"[Vv]?\d+\.\d+\.\d+", tag) is not None
+
+    @staticmethod
+    def _parse_semver(tag: str) -> Tuple[int, int, int]:
+        m = re.fullmatch(r"[Vv]?(\d+)\.(\d+)\.(\d+)", tag or "")
+        if not m:
+            return (0, 0, 0)
+        return (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+
+    def _max_tag(self, tags: List[str]) -> str:
+        return max(tags, key=lambda t: self._parse_semver(t))
+
+    # ---- settings backup/restore --------------------------------
+    def _settings_candidates(self, repo_path: str) -> List[str]:
+        # Try your known name first, then common fallbacks
+        names = ["photoframe_settings.json", "settings.json", "Settings.json"]
+        return [os.path.join(repo_path, n) for n in names]
+
+    def _find_settings_file(self, repo_path: str) -> Optional[str]:
+        for p in self._settings_candidates(repo_path):
+            if os.path.isfile(p):
+                return p
+        return None
+
+    def _backup_settings(self, repo_path: str) -> Optional[str]:
+        spath = self._find_settings_file(repo_path)
+        if not spath:
+            return None
+        ts = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+        backup = f"{spath}.bak-{ts}"
+        try:
+            shutil.copy2(spath, backup)
+            logging.info("[AutoUpdate] Settings backed up to %s", backup)
+            return backup
+        except Exception:
+            logging.exception("[AutoUpdate] Failed to backup settings")
+            return None
+
+    def _restore_settings(self, repo_path: str, backup_path: Optional[str]) -> None:
+        if not backup_path:
+            return
+        dest = self._find_settings_file(repo_path) or os.path.join(repo_path, os.path.basename(backup_path).split(".bak-")[0])
+        try:
+            shutil.copy2(backup_path, dest)
+            logging.info("[AutoUpdate] Settings restored from %s", backup_path)
+        except Exception:
+            logging.exception("[AutoUpdate] Failed to restore settings from %s", backup_path)
 
     # ---- repo detection -----------------------------------------
     def _find_repo_root(self) -> Optional[str]:
         here = os.path.abspath(os.path.dirname(__file__))
-        # try git toplevel first
         env = self._git_env()
         ok, out = self._run_git(["git", "-C", here, "rev-parse", "--show-toplevel"], env, 10)
         if ok and out:
@@ -120,7 +312,7 @@ class AutoUpdater:
             cur = parent
         return None
 
-    # ---- git plumbing -------------------------------------------
+    # ---- git plumbing (kept, with minor helpers) ----------------
     def _git_pull(self, repo_path: Optional[str], timeout: int = 180) -> Tuple[bool, str]:
         with self._pull_lock:
             try:
@@ -132,16 +324,13 @@ class AutoUpdater:
                     self._record(False, msg); return False, msg
 
                 env = self._git_env()
-
-                # What branch are we on?
-                branch = self._current_branch(repo_path, env, timeout)  # None if detached
-                # Try upstream remote/branch (origin/main etc.)
+                branch = self._current_branch(repo_path, env, timeout)
                 upstream = self._upstream_ref(repo_path, env, timeout)
                 if upstream:
                     remote, upstream_branch = upstream
                 else:
                     remote = "origin"
-                    upstream_branch = branch  # may be None; pull will still work if upstream is set in config
+                    upstream_branch = branch
 
                 # Always fetch first
                 self._fetch(repo_path, remote, env, timeout)
@@ -172,7 +361,6 @@ class AutoUpdater:
 
     def _git_env(self) -> Dict[str, str]:
         env = os.environ.copy()
-        # ensure HOME so git can read configs
         for home in (os.environ.get("HOME"), "/home/pi", "/root"):
             if home and os.path.isdir(home):
                 env.setdefault("HOME", home); break
@@ -224,10 +412,6 @@ class AutoUpdater:
         self.last_pull = {"ok": ok, "ts": time.time(), "msg": msg}
 
     def _behind_counts(self, repo_path: str, env, timeout: int) -> Tuple[int, int]:
-        """
-        Returns (ahead, behind) relative to upstream.
-        If no upstream, returns (0, 0).
-        """
         ok, out = self._run_git(
             ["git", "-C", repo_path, "rev-list", "--left-right", "--count", "HEAD...@{u}"],
             env, timeout
@@ -239,3 +423,8 @@ class AutoUpdater:
             except Exception:
                 pass
         return (0, 0)
+
+    @staticmethod
+    def _pull_changed(out: str) -> bool:
+        o = (out or "")
+        return ("Updating" in o) or ("Fast-forward" in o) or ("Fast-Forward" in o)
