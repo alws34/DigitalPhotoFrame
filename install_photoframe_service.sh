@@ -93,21 +93,20 @@ echo "[5/10] Writing system service to $SERVICE_PATH ..."
 sudo tee "$SERVICE_PATH" >/dev/null <<EOF
 [Unit]
 Description=Photo Frame Desktop App (system-wide)
-Wants=network-online.target user@1000.service
-After=network-online.target systemd-user-sessions.service user@1000.service
+Wants=network-online.target graphical.target
+After=network-online.target graphical.target
 
 [Service]
 Type=simple
 User=pi
 Group=pi
-WorkingDirectory=$APP_DIR
+WorkingDirectory=/home/pi/Desktop/DigitalPhotoFrame
 
-# Wait until Wayland socket and user bus exist
-ExecStartPre=/bin/sh -c 'until [ -S /run/user/1000/wayland-0 ]; do sleep 1; done'
-ExecStartPre=/bin/sh -c 'until [ -S /run/user/1000/bus ]; do sleep 1; done'
+# Wait until Wayland socket exists; fail fast so Restart=always re-tries
+ExecStartPre=/usr/bin/test -S /run/user/1000/wayland-0
 
-# Launch
-ExecStart=$PYTHON $APP_DIR/app.py
+# Launch the app from the venv
+ExecStart=/home/pi/Desktop/DigitalPhotoFrame/env/bin/python /home/pi/Desktop/DigitalPhotoFrame/app.py
 
 Restart=always
 RestartSec=3
@@ -118,31 +117,30 @@ Environment=HOME=/home/pi
 Environment=XDG_RUNTIME_DIR=/run/user/1000
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
 Environment=WAYLAND_DISPLAY=wayland-0
-Environment=QT_QPA_PLATFORM=wayland
+# Let Qt fall back to X11 if Wayland is not present
+Environment=QT_QPA_PLATFORM=wayland;xcb
 
-# Prevent broken themes from forcing black-on-black palettes
+# Theme safety + DPI
 Environment=QT_QPA_PLATFORMTHEME=
 Environment=QT_STYLE_OVERRIDE=
-
-# Reasonable DPI defaults
 Environment=QT_AUTO_SCREEN_SCALE_FACTOR=1
 Environment=QT_ENABLE_HIGHDPI_SCALING=1
-
-# Optional: silence benign Wayland warnings in journal
 Environment=QT_LOGGING_RULES=qt.qpa.wayland.warning=false
 
-# Logging
 SyslogIdentifier=photoframe
 StandardOutput=journal
 StandardError=journal
 
-# Security model (unchanged)
+# Keep your existing relaxed sandbox if you need backlight/sysfs, etc.
 NoNewPrivileges=no
 ProtectSystem=off
 ProtectHome=no
 CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE
 AmbientCapabilities=CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE
 UMask=002
+
+[Install]
+WantedBy=graphical.target
 EOF
 
 echo "[5.1/10] Adding polkit rule for service restarts..."
@@ -167,9 +165,8 @@ sudo systemctl restart polkit || true
 
 echo "[6/10] Reloading and enabling service..."
 sudo systemctl daemon-reload
-sudo systemctl disable "$SERVICE_NAME" || true
 sudo systemctl enable "$SERVICE_NAME"
-sudo systemctl start "$SERVICE_NAME"
+sudo systemctl restart "$SERVICE_NAME"
 
 echo "[7/10] Status:"
 sudo systemctl status "$SERVICE_NAME" --no-pager -l || true
