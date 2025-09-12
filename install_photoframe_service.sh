@@ -177,7 +177,7 @@ sudo systemctl status "$SERVICE_NAME" --no-pager -l || true
 echo "[8/10] Quick runtime self-tests (no sudo)..."
 
 # Wi-Fi nmcli smoke test
-IFACE=\$(nmcli -t -f DEVICE,TYPE device | awk -F: '\$2=="wifi"{print \$1; exit}')
+IFACE=$(nmcli -t -f DEVICE,TYPE device | awk -F: '$2=="wifi"{print $1; exit}')
 if [ -n "\$IFACE" ]; then
   echo " - Wi-Fi interface: \$IFACE"
   nmcli device wifi rescan ifname "\$IFACE" || echo "!!! rescan failed (polkit not active yet?)"
@@ -188,7 +188,7 @@ fi
 
 # Brightness path tests (non-fatal)
 if [ -n "\$WAYLAND_DISPLAY" ] || [ -S /run/user/1000/wayland-0 ]; then
-  echo " - Wayland detected, wlr-randr present? \$(command -v wlr-randr || echo 'no')"
+  echo " - Wayland detected, wlr-randr present? $(command -v wlr-randr || echo 'no')"
   if command -v wlr-randr >/dev/null 2>&1; then
     echo "   Outputs:"
     wlr-randr || true
