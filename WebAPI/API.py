@@ -15,11 +15,12 @@ import io
 import zipfile
 import platform
 import requests
-from PIL import Image
+from PIL import Image, ImageOps
 import threading
 from flask_cors import CORS
 from iFrame import iFrame
 from concurrent.futures import ThreadPoolExecutor
+from WebAPI.WebUtils.auth_security import UserStore, ensure_csrf, validate_csrf, RateLimiter
 
 if platform.system() == "Linux" or platform.system() == "Darwin":
     try:
@@ -38,13 +39,24 @@ class Backend:
             template_folder=str(base / "./templates"),
             static_folder=str(base / "./static"),
         )
-        CORS(self.app)
-
+        CORS(self.app, supports_credentials=True)
+        env_secret = os.getenv("PHOTOFRAME_SECRET_KEY")
+        self.app.config.update(
+            SESSION_COOKIE_HTTPONLY=True,
+            SESSION_COOKIE_SECURE=False,  # set True when served over HTTPS or behind TLS terminator
+            SESSION_COOKIE_SAMESITE="Lax",
+            PERMANENT_SESSION_LIFETIME=3600,  # seconds
+        )
         # Resolve paths early (do not depend on settings yet)
         self.USER_DATA_FILE = self.set_absolute_paths("users.json")
         self.METADATA_FILE  = self.set_absolute_paths("metadata.json")
         self.LOG_FILE_PATH  = self.set_absolute_paths("PhotoFrame.log")
         self.WEATHER_CACHE  = self.set_absolute_paths("weather_cache.json")
+        
+        self._users = UserStore(self.USER_DATA_FILE)
+        
+        self._rl_login  = RateLimiter(limit=10, window_sec=60)   # 10 attempts/min/IP
+        self._rl_signup = RateLimiter(limit=5, window_sec=300)   # 5 attempts/5min/IP
 
         # Keep frame early for capture loop
         self.Frame = frame
@@ -71,6 +83,9 @@ class Backend:
         self.IMAGE_DIR = self._resolve_dir(img_cfg)
         os.makedirs(self.IMAGE_DIR, exist_ok=True)
         print(f"[Backend] Using IMAGE_DIR = {self.IMAGE_DIR}")
+        self.THUMB_DIR = os.path.join(os.path.dirname(self.IMAGE_DIR), "_thumbs")
+        os.makedirs(self.THUMB_DIR, exist_ok=True)
+
 
         # Now pull required keys with safe defaults
         backend_cfg = (
@@ -78,8 +93,7 @@ class Backend:
             if isinstance(self.settings, dict) else
             getattr(self.settings, "get", lambda *_: {})("backend_configs")
         ) or {}
-
-        self.app.secret_key = backend_cfg.get("supersecretkey", "CHANGE_ME")
+        self.app.secret_key = env_secret or backend_cfg.get("supersecretkey", "CHANGE_ME")
         self.stream_h = int(backend_cfg.get("stream_height", 1080))
         self.stream_w = int(backend_cfg.get("stream_width", 1920))
         self.port     = int(backend_cfg.get("server_port", 5001))
@@ -105,7 +119,27 @@ class Backend:
         self.setup_routes()
         Thread(target=self._capture_loop, daemon=True).start()
 
-        
+    def _client_ip(self) -> str:
+        # honor reverse proxy if you have one (ensure you trust it)
+        return request.headers.get("X-Forwarded-For", request.remote_addr or "unknown").split(",")[0].strip()
+
+    def _rotate_session(self, username: str, uid: str, role: str) -> None:
+        # Clear, set new identity, and new CSRF
+        session.clear()
+        session["uid"] = uid
+        session["user"] = username
+        session["role"] = role
+        # regenerate csrf
+        from WebAPI.WebUtils.auth_security import ensure_csrf
+        ensure_csrf(session)
+
+    def _require_csrf(self) -> None:
+        from WebAPI.WebUtils.auth_security import validate_csrf
+        token = request.form.get("csrf_token") or request.headers.get("X-CSRF-Token")
+        if not validate_csrf(session, token):
+            # Keep message generic
+            raise PermissionError("Invalid request")
+   
 
     def _resolve_dir(self, p: str) -> str:
         pth = Path(p).expanduser()
@@ -254,11 +288,8 @@ class Backend:
         with open(self.USER_DATA_FILE, 'w') as file:
             json.dump(users, file, indent=4)
 
-    def is_authenticated(self):
-        if 'user' not in session:
-            flash('You need to be logged in to access the image gallery.')
-            return False
-        return True
+    def is_authenticated(self) -> bool:
+        return "uid" in session and "user" in session
 
     def load_metadata_db(self):
         try:
@@ -348,6 +379,22 @@ class Backend:
                 f"Content-Length: {len(data)}\r\n\r\n".encode("ascii") +
                 data + b"\r\n")
 
+    def _thumb_path(self, filename: str, w: int) -> str:
+        base, _ = os.path.splitext(filename)
+        safe = base.replace(os.sep, "_")
+        return os.path.join(self.THUMB_DIR, f"{safe}_w{w}.webp")
+
+    def _make_thumb(self, src_path: str, dst_path: str, w: int) -> None:
+        with Image.open(src_path) as im:
+            # honor EXIF orientation
+            im = ImageOps.exif_transpose(im)
+            # resize preserving aspect ratio
+            ratio = w / float(im.width)
+            h = max(1, int(im.height * ratio))
+            im = im.resize((w, h), Image.Resampling.LANCZOS)
+            # write as WEBP for small thumbs
+            os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+            im.save(dst_path, "WEBP", quality=75, method=6)
 
             
             
@@ -374,7 +421,37 @@ class Backend:
                 b"\xff\xda\x00\x0c\x03\x01\x00\x02\x11\x03\x11\x00?\x00" + b"\x00"*10 + b"\xff\xd9")
 
 
-    def setup_routes(self):      
+    def setup_routes(self):   
+           
+        @self.app.context_processor
+        def inject_csrf():
+            from WebAPI.WebUtils.auth_security import ensure_csrf
+            return {"csrf_token": lambda: ensure_csrf(session)}
+        
+        
+        @self.app.before_request
+        def _csrf_for_all_posts():
+            # Only enforce for state-changing requests
+            if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+                try:
+                    self._require_csrf()
+                except Exception:
+                    # JSON/fetch -> JSON 400; normal form -> flash + redirect
+                    if request.is_json or request.headers.get("X-Requested-With") == "XMLHttpRequest":
+                        return jsonify({"error": "Bad request."}), 400
+                    flash("Invalid request.", "error")
+                    return redirect(request.referrer or url_for("index"))
+
+
+        @self.app.after_request
+        def add_security_headers(resp):
+            resp.headers["X-Content-Type-Options"] = "nosniff"
+            resp.headers["X-Frame-Options"] = "DENY"
+            resp.headers["Referrer-Policy"] = "same-origin"
+            # A relaxed CSP for your app (tighten as needed)
+            resp.headers["Content-Security-Policy"] = "default-src 'self'; img-src 'self' data: blob: http: https:; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none';"
+            return resp
+        
         @self.app.route('/stream')
         def stream():
             default_w, default_h = 1920, 1080
@@ -560,6 +637,12 @@ class Backend:
 
         @self.app.route('/upload_with_metadata', methods=['POST'])
         def upload_with_metadata():
+            if not self.is_authenticated():
+                return redirect(url_for('login'))
+            try:
+                self._require_csrf()
+            except Exception:
+                return jsonify({"error": "Bad request."}), 400
             uploaded_files = request.files.getlist("file[]")
             if not uploaded_files:
                 return jsonify({"message": "No files uploaded"}), 400
@@ -609,51 +692,121 @@ class Backend:
             self.Frame.update_images_list()
             return jsonify({"message": "Upload successful"}), 200
 
+        @self.app.route("/thumb/<path:filename>")
+        def thumb(filename):
+            if not self.is_authenticated():
+                return redirect(url_for('login'))
+
+            # Only allow files that exist under IMAGE_DIR (prevents path tricks)
+            src_path = os.path.join(self.IMAGE_DIR, filename)
+            if not (os.path.isfile(src_path) and os.path.commonpath([self.IMAGE_DIR, os.path.realpath(src_path)]) == os.path.realpath(self.IMAGE_DIR)):
+                return jsonify({"error": "File not found"}), 404
+
+            try:
+                w = int(request.args.get("w", 320))
+                w = max(64, min(w, 1920))
+            except Exception:
+                w = 320
+
+            dst_path = self._thumb_path(filename, w)
+
+            try:
+                # (re)generate when missing or source is newer
+                if (not os.path.exists(dst_path)) or (os.path.getmtime(dst_path) < os.path.getmtime(src_path)):
+                    self._make_thumb(src_path, dst_path, w)
+            except Exception:
+                # fallback to original if thumb creation fails
+                return send_from_directory(self.IMAGE_DIR, filename)
+
+            resp = send_file(dst_path, mimetype="image/webp", conditional=True)
+            resp.headers["Cache-Control"] = "public, max-age=2592000, immutable"
+            return resp
+
 
         @self.app.route('/signup', methods=['GET', 'POST'])
         def signup():
+            from WebAPI.WebUtils.auth_security import EMAIL_RE, USERNAME_RE, password_policy_ok
             if request.method == 'POST':
-                email = request.form['email']
-                username = request.form['username']
-                password = request.form['password']
-                users = self.load_users()
-                if email in users:
-                    flash('Email is already registered.')
+                # Rate limit
+                if not self._rl_signup.allow(self._client_ip()):
+                    flash('Please wait before trying again.', 'error')
                     return redirect(url_for('signup'))
-                users[email] = {
-                    'username': username,
-                    'password': generate_password_hash(password)
-                }
-                self.save_users(users)
-                flash('Signup successful. Please log in.')
+
+                # CSRF
+                try:
+                    self._require_csrf()
+                except Exception:
+                    flash('Invalid request.', 'error')
+                    return redirect(url_for('signup'))
+
+                email = (request.form.get('email') or '').strip().lower()
+                username = (request.form.get('username') or '').strip()
+                password = request.form.get('password') or ''
+
+                # Specific message for password only (signup UX); keep others generic
+                if not password_policy_ok(password):
+                    flash('Password does not meet policy. Use 10+ chars and include at least 3 of: lowercase, uppercase, digits, symbols.', 'error')
+                    # Render again with 400 so client JS can trigger shake without a full redirect if you switch to fetch later
+                    return render_template('signup.html', email=request.args.get('email', ''), username=request.args.get('username', ''))
+
+                if not (EMAIL_RE.match(email) and USERNAME_RE.match(username)):
+                    flash('Invalid input.', 'error')
+                    return redirect(url_for('signup'))
+
+                try:
+                    uid = self._users.create_user(email=email, username=username, password=password, role='user')
+                except ValueError:
+                    flash('Cannot create account.', 'error')
+                    return redirect(url_for('signup'))
+                except Exception:
+                    flash('Cannot create account.', 'error')
+                    return redirect(url_for('signup'))
+
+                flash('Signup successful. Please log in.', 'success')
                 return redirect(url_for('login'))
-            return render_template("signup.html")
+
+            return render_template('signup.html')
 
         @self.app.route('/login', methods=['GET', 'POST'])
         def login():
             if request.method == 'POST':
-                email_or_username = request.form['email_or_username']
-                password = request.form['password']
-                users = self.load_users()
-                user = None
-                for e, u in users.items():
-                    if e == email_or_username or u.get('username') == email_or_username:
-                        user = u
-                        break
-                if user and check_password_hash(user['password'], password):
-                    session['user'] = user.get('username')
-                    flash('Login successful!')
-                    return redirect(url_for('index'))
-                else:
-                    flash('Invalid credentials. Please try again.')
+                # Rate limit
+                if not self._rl_login.allow(self._client_ip()):
+                    # generic
+                    flash('Invalid credentials.')
                     return redirect(url_for('login'))
+
+                # CSRF
+                try:
+                    self._require_csrf()
+                except Exception:
+                    flash('Invalid credentials.')
+                    return redirect(url_for('login'))
+
+                identity = (request.form.get('email_or_username') or '').strip()
+                password = request.form.get('password') or ''
+                user = self._users.verify_login(identity, password)
+                if not user or not user.get("is_active", True):
+                    flash('Invalid credentials.')
+                    return redirect(url_for('login'))
+
+                self._rotate_session(user["username"], user["uid"], user.get("role", "user"))
+                flash('Login successful!')
+                return redirect(url_for('index'))
             return render_template("login.html")
 
-        @self.app.route('/logout')
+        @self.app.route('/logout', methods=['POST', 'GET'])
         def logout():
-            session.pop('user', None)
+            # Require CSRF only for POST; GET remains for convenience but you can force POST only
+            if request.method == "POST":
+                try:
+                    self._require_csrf()
+                except Exception:
+                    pass
+            session.clear()
             flash('You have been logged out.')
             return redirect(url_for('login'))
+
 
         @self.app.route('/')
         def index():
@@ -680,6 +833,12 @@ class Backend:
 
         @self.app.route('/save_settings', methods=['POST'])
         def save_settings_route():
+            if not self.is_authenticated():
+                return redirect(url_for('login'))
+            try:
+                self._require_csrf()
+            except Exception:
+                return jsonify({"error": "Bad request."}), 400
             try:
                 new_settings = {}
                 form_data = request.form.to_dict(flat=True)
@@ -720,6 +879,10 @@ class Backend:
         def upload_files():
             if not self.is_authenticated():
                 return redirect(url_for('login'))
+            try:
+                self._require_csrf()
+            except Exception:
+                return jsonify({"error": "Bad request."}), 400
             if 'file[]' not in request.files:
                 flash('No file part')
                 return redirect(url_for('index'))
@@ -743,6 +906,10 @@ class Backend:
             if not self.is_authenticated():
                 return redirect(url_for('login'))
             try:
+                self._require_csrf()
+            except Exception:
+                return jsonify({"error": "Bad request."}), 400
+            try:
                 os.remove(os.path.join(self.IMAGE_DIR, filename))
                 flash(f'File {filename} successfully deleted.')
             except FileNotFoundError:
@@ -759,6 +926,10 @@ class Backend:
         def delete_selected():
             if not self.is_authenticated():
                 return redirect(url_for('login'))
+            try:
+                self._require_csrf()
+            except Exception:
+                return jsonify({"error": "Bad request."}), 400
             selected_files = request.form.getlist('selected_files')
             for filename in selected_files:
                 try:
@@ -772,6 +943,10 @@ class Backend:
         def download_selected():
             if not self.is_authenticated():
                 return redirect(url_for('login'))
+            try:
+                self._require_csrf()
+            except Exception:
+                return jsonify({"error": "Bad request."}), 400
             selected_files = request.form.getlist('selected_files')
             if not selected_files:
                 flash('No files selected for download.')
@@ -817,6 +992,12 @@ class Backend:
 
         @self.app.route('/clear_logs', methods=['POST'])
         def clear_logs():
+            if not self.is_authenticated():
+                return redirect(url_for('login'))
+            try:
+                self._require_csrf()
+            except Exception:
+                return jsonify({"error": "Bad request."}), 400
             try:
                 with open(self.LOG_FILE_PATH, 'w') as log_file:
                     log_file.truncate(0)
@@ -851,7 +1032,11 @@ class Backend:
         def update_metadata():
             if not self.is_authenticated():
                 return redirect(url_for('login'))
-            data = request.get_json()
+            try:
+                self._require_csrf()
+            except Exception:
+                return jsonify({"error": "Bad request."}), 400
+            data = request.get_json(force=True, silent=True) or {}
             file_hash = data.get('hash')
             caption = data.get('caption', "")
             # Get the uploader from the payload

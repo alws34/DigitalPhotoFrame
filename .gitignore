@@ -6,3 +6,4 @@ PhotoFrame.log
 Images/*
 *.json
 !photoframe_settings.json
+_thumbs/*
