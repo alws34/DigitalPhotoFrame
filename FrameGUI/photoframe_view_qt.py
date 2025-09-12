@@ -15,6 +15,7 @@ from FrameGUI.SettingsFrom.model import SettingsModel
 from FrameGUI.SettingsFrom.viewmodel import SettingsViewModel
 from FrameGUI.SettingsFrom.dialog import SettingsDialog
 from Utilities.brightness import set_brightness_percent
+from Utilities.screen_scheduler import ScreenScheduler
 try:
     from PySide6.QtSvg import QSvgRenderer
     _HAS_SVG = True
@@ -53,6 +54,12 @@ class PhotoFrameQtWidget(QtWidgets.QWidget, iFrame, metaclass=IFrameQtWidgetMeta
         self._stack.setStackingMode(QtWidgets.QStackedLayout.StackAll)
         self._overlay.raise_()
 
+        self._scheduler = ScreenScheduler(self, interval_ms=30000)
+        
+        self._scheduler.stateChanged.connect(
+            lambda off: logging.info("ScreenScheduler: %s", "OFF" if off else "ON")
+        )
+        
         # Wire signals
         self.dateTimeChanged.connect(self._update_datetime_gui)
         self.frameChanged.connect(self._canvas.set_qimage)
@@ -69,6 +76,8 @@ class PhotoFrameQtWidget(QtWidgets.QWidget, iFrame, metaclass=IFrameQtWidgetMeta
         if hasattr(self, "screen") and not callable(getattr(self, "screen")):
             # (back-compat if someone assigned self.screen = ScreenController(...))
             self.screen_ctrl = getattr(self, "screen")
+            
+            
     
     
     
@@ -77,13 +86,38 @@ class PhotoFrameQtWidget(QtWidgets.QWidget, iFrame, metaclass=IFrameQtWidgetMeta
         self.close()
 
     def mousePressEvent(self, e: QtGui.QMouseEvent) -> None:
+        # record tap time (ms since boot)
         now = QtCore.QTime.currentTime().msecsSinceStartOfDay()
         self._last_clicks.append(now)
         self._last_clicks = self._last_clicks[-3:]
+
+        # triple-tap within 800 ms window
         if len(self._last_clicks) == 3 and (self._last_clicks[-1] - self._last_clicks[0] <= 800):
+            # If we have a screen controller and the panel is off/blank, wake it.
+            is_off = False
+            try:
+                if self.screen_ctrl and hasattr(self.screen_ctrl, "is_off"):
+                    is_off = bool(self.screen_ctrl.is_off())
+            except Exception:
+                # if the controller errors or doesn't expose is_off(), fall back to waking
+                is_off = True
+
+            if self.screen_ctrl and is_off:
+                try:
+                    self.screen_ctrl.wake()
+                except Exception as ex:
+                    logging.exception("Failed to wake screen: %s", ex)
+                finally:
+                    self._last_clicks.clear()
+                    return
+
+            # Otherwise, keep your existing behavior (triple-tap opens Settings)
             self._open_settings()
+            self._last_clicks.clear()
+            return
+
         super().mousePressEvent(e)
-    
+
     def _open_settings(self):
         """
         Builds Model + ViewModel + Dialog and shows it modally.
@@ -166,9 +200,15 @@ class PhotoFrameQtWidget(QtWidgets.QWidget, iFrame, metaclass=IFrameQtWidgetMeta
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Brightness error", str(e))
             return False
-    def attach_screen_controller(self, controller) -> None:
-        """Call this after creating the widget to wire the ScreenController."""
-        self.screen_ctrl = controller
+     
+        def attach_screen_controller(self, controller) -> None:
+            """Call this after creating the widget to wire the ScreenController."""
+            self.screen_ctrl = controller
+            # Ask the scheduler to re-evaluate now that we have a controller.
+            try:
+                self._scheduler.recheck_now()
+            except Exception:
+                pass
 
     # ---- Orientation ----
     def _on_apply_orientation(self, transform: str) -> bool:

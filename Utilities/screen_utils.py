@@ -13,6 +13,7 @@ class ScreenController:
         self._state = "unknown"
         self._event = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        self._wake_until_ts: float = 0.0
 
     # Public API
     def start(self) -> None:
@@ -21,6 +22,10 @@ class ScreenController:
             self._thread.start()
 
     def wake(self) -> None:
+        if grace_seconds is None:
+            grace_seconds = int(self._settings.get("screen", {}).get("wake_grace_seconds", 180))
+        grace_seconds = max(1, int(grace_seconds))
+        self._wake_until_ts = time.monotonic() + grace_seconds
         self._event.set()
 
     def set_brightness_percent(self, percent: int, allow_zero: bool = False) -> bool:
@@ -28,6 +33,15 @@ class ScreenController:
         if not dev:
             return False
         return self._set_brightness_percent(dev, percent, allow_zero=allow_zero)
+
+    def is_off(self) -> bool:
+        if self._state == "off":
+            return True
+        dev = self._pick_default_backlight()
+        if not dev:
+            return False
+        cur, maxb = self._read_brightness(dev)
+        return (cur == 0 and (maxb or 1) > 0)
 
     # Internal scheduling
     def _screen_cfg(self) -> Dict:
@@ -37,6 +51,12 @@ class ScreenController:
         scr.setdefault("schedule_enabled", False)
         scr.setdefault("off_hour", 0)
         scr.setdefault("on_hour", 7)
+        # keep the data model consistent with the UI/editor
+        scr.setdefault("schedules", [{
+            "enabled": False, "off_hour": 0, "on_hour": 7, "days": [0,1,2,3,4,5,6]
+        }])
+        # if you use the wake grace window, keep it here too
+        scr.setdefault("wake_grace_seconds", 180)
         return scr
 
     def _worker(self) -> None:
@@ -48,10 +68,15 @@ class ScreenController:
                 scr = self._screen_cfg()
                 enabled = bool(scr.get("schedule_enabled", False))
                 off_h = int(scr.get("off_hour", 0)) % 24
-                on_h = int(scr.get("on_hour", 7)) % 24
+                on_h  = int(scr.get("on_hour", 7)) % 24
                 now_h = self._hour_now()
 
+                # Desired state from schedule
                 desired = "off" if (enabled and self._in_off_period(now_h, off_h, on_h)) else "on"
+
+                # NEW: override with wake grace window
+                if desired == "off" and time.monotonic() < float(self._wake_until_ts or 0):
+                    desired = "on"
 
                 dev = self._pick_default_backlight()
                 if not dev:
@@ -76,8 +101,13 @@ class ScreenController:
             except Exception:
                 logging.exception("screen worker tick failed")
 
+            # Wait until next tick or an explicit wake()
             if ev.wait(timeout=30.0):
                 ev.clear()
+                # On an explicit wake, ensure we immediately move to "on" in case we were off.
+                # The grace check above will cause 'desired' to be "on" on the next loop.
+                # No extra work is strictly needed here.
+                pass
 
     # Helpers
     @staticmethod

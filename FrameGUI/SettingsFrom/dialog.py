@@ -100,7 +100,8 @@ class SettingsDialog(QtWidgets.QDialog):
             /* buttons */
             QPushButton {
                 background: #e6e6e6; color: #000000;
-                border: 1px solid #c9c9c9; padding: 4px 8px;
+                border: 1px solid #c9c9c9; padding: 6px 10px; /* larger padding for touch */
+                min-width: 44px; min-height: 36px;           /* touch target */
             }
             QPushButton:disabled { color: #666666; }
             /* group boxes */
@@ -149,13 +150,12 @@ class SettingsDialog(QtWidgets.QDialog):
         dlg.resize(420, dlg.sizeHint().height())
         dlg.exec()
 
-
     # ---------- Stats ----------
     def _build_stats_tab(self):
         w = QtWidgets.QWidget(); lay = QtWidgets.QVBoxLayout(w)
         top = QtWidgets.QWidget(); top_l = QtWidgets.QVBoxLayout(top); top_l.setAlignment(QtCore.Qt.AlignHCenter)
-        self.ssid_lbl = QtWidgets.QLabel("Wi-Fi: Loading…")
-        self.url_lbl  = QtWidgets.QLabel("URL: Loading…")
+        self.ssid_lbl = QtWidgets.QLabel("Wi-Fi: Loading...")
+        self.url_lbl  = QtWidgets.QLabel("URL: Loading...")
         self.qr_lbl   = QtWidgets.QLabel()
         self.qr_lbl.setMinimumSize(160,160); self.qr_lbl.setAlignment(QtCore.Qt.AlignCenter)
         for lbl in (self.ssid_lbl, self.url_lbl): lbl.setAlignment(QtCore.Qt.AlignCenter)
@@ -164,7 +164,7 @@ class SettingsDialog(QtWidgets.QDialog):
 
         # graphs
         g = QtWidgets.QWidget(); gl = QtWidgets.QFormLayout(g)
-        
+
         def row(w_graph_attr: str, init_text: str) -> QtWidgets.QWidget:
             wrap = QtWidgets.QWidget()
             hl = QtWidgets.QHBoxLayout(wrap); hl.setContentsMargins(0,0,0,0)
@@ -178,7 +178,7 @@ class SettingsDialog(QtWidgets.QDialog):
             hl.addWidget(graph, 1)
             hl.addWidget(val_lbl, 0)
             return wrap
-        
+
         self.cpu_graph = Sparkline(maxlen=60); self.ram_graph = Sparkline(maxlen=60); self.tmp_graph = Sparkline(maxlen=60)
         gl.addRow("CPU %",  row("cpu_graph", "0%"))
         gl.addRow("RAM %",  row("ram_graph", "0%"))
@@ -260,150 +260,305 @@ class SettingsDialog(QtWidgets.QDialog):
     def _wifi_result(self, ok: bool, msg: str):
         self._show_msg("Wi-Fi" if ok else "Connection failed",
                    msg.strip() or ("OK" if ok else "Unknown error"))
-        
+
     # ---------- Screen ----------
     def _build_screen_tab(self):
-        w = QtWidgets.QWidget(); v = QtWidgets.QVBoxLayout(w)
+        w = QtWidgets.QWidget()
+        v = QtWidgets.QVBoxLayout(w)
+        v.setSpacing(10)
+
+        # Touch-friendly sizing inside this tab
+        w.setStyleSheet("""
+            QCheckBox::indicator { width: 28px; height: 28px; }
+            QRadioButton::indicator { width: 26px; height: 26px; }
+            QPushButton { min-height: 40px; }
+            QToolButton { min-height: 52px; min-width: 64px; padding: 8px 14px; }
+            QComboBox, QLineEdit { min-height: 36px; }
+            QLabel.valueLabel { font-weight: bold; }
+        """)
+
         scr = self.model.ensure_screen_struct()
 
-        # Orientation
-        box = QtWidgets.QGroupBox("Orientation"); gl = QtWidgets.QGridLayout(box)
+        # --- Orientation (unchanged functionally) ---
+        box = QtWidgets.QGroupBox("Orientation")
+        gl = QtWidgets.QGridLayout(box)
         self.orient = QtWidgets.QButtonGroup(self)
         options = [("Normal","normal"),("Left (90)","90"),("Inverted (180)","180"),("Right (270)","270")]
         for i,(label,val) in enumerate(options):
-            rb = QtWidgets.QRadioButton(label); self.orient.addButton(rb); rb.setProperty("val", val)
-            if scr.get("orientation") == val: rb.setChecked(True)
+            rb = QtWidgets.QRadioButton(label)
+            self.orient.addButton(rb)
+            rb.setProperty("val", val)
+            if scr.get("orientation") == val:
+                rb.setChecked(True)
             gl.addWidget(rb, 0, i)
-        apply_btn = QtWidgets.QPushButton("Apply Orientation", clicked=lambda: self.vm.apply_orientation(self._current_orientation()))
+        apply_btn = QtWidgets.QPushButton("Apply Orientation",
+                                        clicked=lambda: self.vm.apply_orientation(self._current_orientation()))
         gl.addWidget(apply_btn, 1, 0, 1, len(options))
         v.addWidget(box)
 
-        # Brightness
+        # --- Brightness (STEPper buttons) ---
         bgrp = QtWidgets.QGroupBox("Brightness")
-        bl = QtWidgets.QGridLayout(bgrp)
-        bl.addWidget(QtWidgets.QLabel("Level:"), 0, 0)
-        self.b_val = QtWidgets.QLabel(f"{int(scr.get('brightness',100))}%"); bl.addWidget(self.b_val, 0, 2)
-        self.b_scale = QtWidgets.QSlider(QtCore.Qt.Horizontal)
-        self.b_scale.setRange(10,100)
-        self.b_scale.setValue(int(scr.get("brightness",100)))
-        bl.addWidget(self.b_scale, 0, 1)
+        bl = QtWidgets.QHBoxLayout(bgrp)
+        bl.setContentsMargins(12, 8, 12, 8)
+        bl.setSpacing(12)
 
-        self.b_status = QtWidgets.QLabel("")
-        self.b_status.setWordWrap(True)
-        self.vm.maintStatusChanged.connect(self.b_status.setText)
-        #bl.addWidget(self.b_status, 1, 0, 1, 3)
+        self.b_minus = QtWidgets.QToolButton()
+        self.b_minus.setText("-")
+        self.b_minus.setAutoRepeat(True)
+        self.b_minus.setAutoRepeatDelay(300)
+        self.b_minus.setAutoRepeatInterval(120)
 
+        self.b_plus = QtWidgets.QToolButton()
+        self.b_plus.setText("+")
+        self.b_plus.setAutoRepeat(True)
+        self.b_plus.setAutoRepeatDelay(300)
+        self.b_plus.setAutoRepeatInterval(120)
+
+        # >>> ADD: enlarge +/- text <<<
+        btn_font = QtGui.QFont(self.font().family(), 30, QtGui.QFont.Bold) 
+        self.b_minus.setFont(btn_font)
+        self.b_plus.setFont(btn_font)
+        # (optional) make the buttons physically larger for touch:
+        # self.b_minus.setMinimumSize(64, 52)
+        # self.b_plus.setMinimumSize(64, 52)
+
+        self.b_val = QtWidgets.QLabel(f"{int(scr.get('brightness', 100))}%")
+        f = self.b_val.font(); f.setPointSize(max(35, f.pointSize() + 2)); f.setBold(True)
+        self.b_val.setFont(f)
+        self.b_val.setAlignment(QtCore.Qt.AlignCenter)
+        self.b_val.setMinimumWidth(72)
+
+        bl.addStretch(1)
+        bl.addWidget(self.b_minus, 0)
+        bl.addWidget(self.b_val,   0)
+        bl.addWidget(self.b_plus,  0)
+        bl.addStretch(1)
         v.addWidget(bgrp)
 
-        # debounce + snap to 10
+        # debounce timer
         self._debounce = QtCore.QTimer(self)
         self._debounce.setSingleShot(True)
         self._debounce.timeout.connect(self._apply_brightness_debounced)
 
-        def on_slide(val):
-            snapped = max(10, min(100, int(round(val/10.0)*10)))
-            if snapped != val:
-                self.b_scale.blockSignals(True); self.b_scale.setValue(snapped); self.b_scale.blockSignals(False)
-            self.b_val.setText(f"{snapped}%")
-            self._debounce.start(150)
-        self.b_scale.valueChanged.connect(on_slide)
+        # handlers
+        self.b_minus.clicked.connect(lambda: self._brightness_step(-10))
+        self.b_plus.clicked.connect(lambda: self._brightness_step(+10))
 
-        # keep status label updated via the existing VM signal
+        # status line
+        self.b_status = QtWidgets.QLabel("")
+        self.b_status.setWordWrap(True)
         self.vm.maintStatusChanged.connect(self.b_status.setText)
+        v.addWidget(self.b_status)
 
-        # Schedules
-        v.addWidget(self._build_schedules_editor())
-        v.addStretch(1)
+        # --- Schedules ---
+        v.addWidget(self._build_schedules_editor(), 1)  # give it stretch to favor scrolling
+
+        v.addStretch(0)
         return w
 
-    def _current_orientation(self) -> str:
-        for b in self.orient.buttons():
-            if b.isChecked(): return b.property("val")
-        return "normal"
+
+
+    def _brightness_step(self, delta: int) -> None:
+        try:
+            cur = int(self.b_val.text().rstrip("%").strip())
+        except Exception:
+            cur = 100
+        new = max(10, min(100, ((cur + delta + 5) // 10) * 10))
+        if new != cur:
+            self.b_val.setText(f"{new}%")
+            self._debounce.start(150)
+
 
     def _apply_brightness_debounced(self):
-        self.vm.apply_brightness(int(self.b_scale.value()))
+        try:
+            pct = int(self.b_val.text().rstrip("%").strip())
+        except Exception:
+            pct = 100
+        self.vm.apply_brightness(int(pct))
 
+
+    # --- scrollable, stacked schedule editor -----------------------------------
     def _build_schedules_editor(self) -> QtWidgets.QGroupBox:
         scr = self.model.ensure_screen_struct()
-        group = QtWidgets.QGroupBox("Auto screen on/off schedules (OFF during each window)")
+        group = QtWidgets.QGroupBox("Auto screen on/off schedules")
         outer = QtWidgets.QVBoxLayout(group)
+        outer.setSpacing(10)
+        outer.setContentsMargins(8, 8, 8, 8)
 
-        self._sched_area = QtWidgets.QVBoxLayout(); outer.addLayout(self._sched_area)
+        # Master toggle
+        master = QtWidgets.QCheckBox("Enable scheduling (screen is OFF during each window)")
+        master.setChecked(bool(scr.get("schedule_enabled", False)))
+        def on_master(on: bool):
+            scr["schedule_enabled"] = bool(on)
+            self.model.save()
+            self.vm.maintStatusChanged.emit("Scheduling enabled" if on else "Scheduling disabled")
+            self._set_sched_rows_enabled(on)
+        master.toggled.connect(on_master)
+        outer.addWidget(master)
 
+        # Scroll area for all schedules (touch friendly)
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        outer.addWidget(scroll, 1)  # take available space
+
+        container = QtWidgets.QWidget()
+        self._sched_container = QtWidgets.QVBoxLayout(container)
+        self._sched_container.setSpacing(10)
+        self._sched_container.setContentsMargins(0, 0, 0, 0)
+        scroll.setWidget(container)
+
+        # Render rows
         def render():
-            # clear
-            while self._sched_area.count():
-                it = self._sched_area.takeAt(0)
-                w = it.widget()
-                if w: w.deleteLater()
+            # clear container
+            while self._sched_container.count():
+                item = self._sched_container.takeAt(0)
+                w = item.widget()
+                if w:
+                    w.deleteLater()
 
-            for idx, item in enumerate(scr.get("schedules", [])):
-                row = QtWidgets.QFrame(); row.setFrameShape(QtWidgets.QFrame.StyledPanel)
-                hl = QtWidgets.QHBoxLayout(row)
-                enabled = QtWidgets.QCheckBox(); enabled.setChecked(bool(item.get("enabled", False)))
-                hl.addWidget(enabled)
+            schedules = scr.get("schedules", [])
 
-                # days
-                days_lbl = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
-                day_checks = []
-                days_box = QtWidgets.QWidget(); db = QtWidgets.QHBoxLayout(days_box); db.setContentsMargins(0,0,0,0)
-                chosen = set(int(d) for d in item.get("days", []))
-                for d in range(7):
-                    cb = QtWidgets.QCheckBox(days_lbl[d]); cb.setChecked(d in chosen); db.addWidget(cb); day_checks.append(cb)
-                hl.addWidget(days_box, 1)
+            for idx, item in enumerate(schedules):
+                block = QtWidgets.QFrame()
+                block.setFrameShape(QtWidgets.QFrame.StyledPanel)
+                block.setStyleSheet("QFrame { background: #ffffff; border: 1px solid #cfcfcf; border-radius: 6px; }")
+                col = QtWidgets.QVBoxLayout(block)
+                col.setSpacing(8)
+                col.setContentsMargins(8, 8, 8, 8)
 
-                def mk_hour(initial: int):
-                    wrap = QtWidgets.QWidget(); gl = QtWidgets.QGridLayout(wrap); gl.setContentsMargins(0,0,0,0)
-                    sc = QtWidgets.QSlider(QtCore.Qt.Horizontal); sc.setRange(0,23); sc.setValue(int(initial)%24)
-                    lbl = QtWidgets.QLabel(f"{int(initial)%24:02d}:00")
-                    def on(v): lbl.setText(f"{int(v)%24:02d}:00")
-                    sc.valueChanged.connect(on)
-                    gl.addWidget(sc,0,0); gl.addWidget(lbl,0,1)
-                    return wrap, sc
-                off_w, off_sc = mk_hour(item.get("off_hour", 0))
-                on_w,  on_sc  = mk_hour(item.get("on_hour", 7))
-                win_lbl = QtWidgets.QLabel("")
-
-                def update_win():
-                    win_lbl.setText(f"{off_sc.value():02d}:00 → {on_sc.value():02d}:00")
-                update_win()
-
-                hl.addWidget(off_w); hl.addWidget(on_w); hl.addWidget(win_lbl)
-
+                # Row 0: enabled + delete
+                r0 = QtWidgets.QHBoxLayout()
+                enabled = QtWidgets.QCheckBox("Enabled")
+                enabled.setChecked(bool(item.get("enabled", False)))
                 del_btn = QtWidgets.QPushButton("Delete")
-                hl.addWidget(del_btn)
+                r0.addWidget(enabled, 0)
+                r0.addStretch(1)
+                r0.addWidget(del_btn, 0)
+                col.addLayout(r0)
 
-                def commit():
-                    days = [d for d,cb in enumerate(day_checks) if cb.isChecked()]
-                    scr["schedules"][idx] = {
+                # Row 1: days as big toggle buttons
+                days_lbls = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
+                chosen = set(int(d) for d in item.get("days", []))
+                days_wrap = QtWidgets.QWidget()
+                days = QtWidgets.QGridLayout(days_wrap)
+                days.setContentsMargins(0,0,0,0)
+                days.setHorizontalSpacing(6)
+                days.setVerticalSpacing(6)
+                day_buttons: List[QtWidgets.QToolButton] = []
+                for d, name in enumerate(days_lbls):
+                    btn = QtWidgets.QToolButton()
+                    btn.setText(name)
+                    btn.setCheckable(True)
+                    btn.setChecked(d in chosen)
+                    btn.setMinimumSize(72, 44)
+                    btn.setStyleSheet("""
+                        QToolButton { border: 1px solid #c0c0c0; border-radius: 6px; }
+                        QToolButton:checked { background: #d0e8ff; border-color: #7fb3ff; }
+                    """)
+                    day_buttons.append(btn)
+                    # grid 4 columns to avoid cramming on narrow screens
+                    days.addWidget(btn, d // 4, d % 4)
+                col.addWidget(QtWidgets.QLabel("Days:"))
+                col.addWidget(days_wrap)
+
+                # Row 2: time selectors (two vertical columns), large dials
+                time_row = QtWidgets.QHBoxLayout()
+                time_row.setSpacing(16)
+
+                def time_col(title: str, init_val: int):
+                    wrap = QtWidgets.QVBoxLayout()
+                    wrap.setSpacing(6)
+                    wrap.addWidget(QtWidgets.QLabel(title))
+                    dial = QtWidgets.QDial()
+                    dial.setRange(0, 23)
+                    dial.setWrapping(True)
+                    dial.setNotchesVisible(True)
+                    dial.setFixedSize(120, 120)
+                    dial.setValue(int(init_val) % 24)
+                    lbl = QtWidgets.QLabel(f"{dial.value():02d}:00")
+                    lf = lbl.font(); lf.setPointSize(max(13, lf.pointSize() + 1)); lf.setBold(True)
+                    lbl.setFont(lf)
+                    lbl.setAlignment(QtCore.Qt.AlignHCenter)
+                    wrap.addWidget(dial, 0, QtCore.Qt.AlignHCenter)
+                    wrap.addWidget(lbl, 0, QtCore.Qt.AlignHCenter)
+                    return wrap, dial, lbl
+
+                off_col, off_dial, off_lbl = time_col("Off at:", item.get("off_hour", 0))
+                on_col,  on_dial,  on_lbl  = time_col("On at:",  item.get("on_hour", 7))
+
+                time_row.addLayout(off_col, 1)
+                time_row.addStretch(1)
+                time_row.addLayout(on_col, 1)
+                col.addLayout(time_row)
+
+                # Row 3: summary
+                summary = QtWidgets.QLabel(f"{off_dial.value():02d}:00 -> {on_dial.value():02d}:00")
+                sf = summary.font(); sf.setBold(True); summary.setFont(sf)
+                summary.setAlignment(QtCore.Qt.AlignCenter)
+                col.addWidget(summary)
+
+                # Commit logic
+                def update_labels():
+                    off_lbl.setText(f"{off_dial.value():02d}:00")
+                    on_lbl.setText(f"{on_dial.value():02d}:00")
+                    summary.setText(f"{off_dial.value():02d}:00 -> {on_dial.value():02d}:00")
+
+                def commit(i=idx):
+                    days_sel = [d for d,btn in enumerate(day_buttons) if btn.isChecked()]
+                    scr["schedules"][i] = {
                         "enabled": enabled.isChecked(),
-                        "off_hour": int(off_sc.value()),
-                        "on_hour":  int(on_sc.value()),
-                        "days": days
+                        "off_hour": int(off_dial.value()),
+                        "on_hour":  int(on_dial.value()),
+                        "days": days_sel
                     }
-                    update_win()
                     self.model.mirror_first_enabled_schedule_to_legacy()
                     self.model.save()
                     self.vm.set_schedules(scr["schedules"])
+                    update_labels()
 
-                enabled.toggled.connect(lambda _=None: commit())
-                for cb in day_checks: cb.toggled.connect(lambda _=None: commit())
-                off_sc.sliderReleased.connect(lambda _=None: commit())
-                on_sc.sliderReleased.connect(lambda _=None: commit())
-                del_btn.clicked.connect(lambda _=None, i=idx: (scr["schedules"].pop(i), self.model.save(), render(), self.vm.set_schedules(scr["schedules"])))
+                enabled.toggled.connect(lambda _=None, i=idx: commit(i))
+                for d_btn in day_buttons:
+                    d_btn.toggled.connect(lambda _=None, i=idx: commit(i))
+                off_dial.valueChanged.connect(lambda _=None, i=idx: commit(i))
+                on_dial.valueChanged.connect(lambda _=None, i=idx: commit(i))
 
-                self._sched_area.addWidget(row)
+                del_btn.clicked.connect(lambda _=None, i=idx: (
+                    scr["schedules"].pop(i),
+                    self.model.save(),
+                    render(),
+                    self.vm.set_schedules(scr["schedules"])
+                ))
 
-            # add button
+                self._sched_container.addWidget(block)
+
+            # Add schedule button (inside the scrollable area)
             add = QtWidgets.QPushButton("Add schedule")
-            add.clicked.connect(lambda: (scr["schedules"].append({
-                "enabled": True, "off_hour": 0, "on_hour": 7, "days": [0,1,2,3,4,5,6]
-            }), self.model.save(), render(), self.vm.set_schedules(scr["schedules"])))
-            self._sched_area.addWidget(add)
+            add.clicked.connect(lambda: (
+                scr["schedules"].append({
+                    "enabled": True, "off_hour": 0, "on_hour": 7, "days": [0,1,2,3,4,5,6]
+                }),
+                self.model.save(),
+                render(),
+                self.vm.set_schedules(scr["schedules"])
+            ))
+            self._sched_container.addWidget(add)
+            self._sched_container.addStretch(1)  # keep items stacked top-to-bottom
 
         render()
+        # respect master toggle state for row enablement
+        self._set_sched_rows_enabled(master.isChecked())
         return group
+
+
+    def _set_sched_rows_enabled(self, on: bool) -> None:
+        # enable/disable all schedule blocks and the Add button
+        lay = self._sched_container
+        for i in range(lay.count()):
+            it = lay.itemAt(i)
+            w = it.widget()
+            if w:
+                w.setEnabled(on)
 
     # ---------- About ----------
     def _build_about_tab(self):
@@ -544,8 +699,6 @@ class SettingsDialog(QtWidgets.QDialog):
 
         return outer
 
-
-
     def _set_config_splitter_50_50(self) -> None:
         try:
             sp = getattr(self, "_config_splitter", None)
@@ -567,6 +720,8 @@ class SettingsDialog(QtWidgets.QDialog):
         # Keep the 50/50 ratio on user/in-code resizes
         self._set_config_splitter_50_50()
 
+    # NOTE: The following three helper definitions were duplicated in your file.
+    # Keeping them as-is to preserve behavior and avoid refactors.
 
     def _render_dict_into_tab(self, layout: QtWidgets.QVBoxLayout, title: str, data: dict, path: tuple):
         free, nested = {}, {}
@@ -605,7 +760,6 @@ class SettingsDialog(QtWidgets.QDialog):
                 sub_v.addStretch(1)
 
                 sub_nb.addTab(sub_scroll, str(key))
-
 
     def _render_dict_into_tab(self, layout: QtWidgets.QVBoxLayout, title: str, data: dict, path: tuple):
         free, nested = {}, {}
