@@ -83,17 +83,45 @@ class PhotoFrameQtWidget(QtWidgets.QWidget, iFrame, metaclass=IFrameQtWidgetMeta
         self._last_clicks = []
         self._settings_vm = None
         self.backend_port = int(self.settings.get("backend_configs", {}).get("server_port", 5001))
-        # optional, if not already set elsewhere:
         self.service_name = self.settings.get("service_name", "photoframe")
-        self.screen_ctrl = None
-        # adopt any preattached controller if the app set one before:
-        if hasattr(self, "screen") and not callable(getattr(self, "screen")):
-            # (back-compat if someone assigned self.screen = ScreenController(...))
-            self.screen_ctrl = getattr(self, "screen")
-            
+        self.screen_ctrl = getattr(self, "screen", None) if hasattr(self, "screen") else None
+        QtCore.QTimer.singleShot(800, self._apply_startup_orientation) 
+           
             
     
-    
+    def _apply_startup_orientation(self) -> None:
+        """
+        Apply the saved screen.orientation at startup. Runs once per boot.
+        Uses the same wlr-randr path as the manual Apply button.
+        """
+        try:
+            scr = {}
+            if isinstance(self.settings, dict):
+                scr = (self.settings.get("screen") or {}) if "screen" in self.settings else {}
+
+            transform = str(scr.get("orientation", "") or "").strip().lower()
+            # normalize common values
+            trans_map = {
+                "0": "normal",
+                "normal": "normal",
+                "90": "90",
+                "left": "90",
+                "270": "270",
+                "right": "270",
+                "180": "180",
+                "inverted": "180"
+            }
+            transform = trans_map.get(transform, "normal")
+
+            # Avoid unnecessary system calls if already normal
+            # but still call to ensure consistency across compositors.
+            ok = self._on_apply_orientation(transform)
+            if not ok:
+                # Optional: log but do not block UI
+                logging.warning("Startup orientation apply failed: %s", transform)
+        except Exception as e:
+            logging.exception("Startup orientation crash: %s", e)
+
     
     def stop(self):
         """A simple method to close the window, can be expanded for more cleanup."""
