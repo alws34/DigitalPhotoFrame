@@ -1,36 +1,65 @@
 from __future__ import annotations
-from datetime import time
-import subprocess
-import sys
+
 import os
+import cv2
+import numpy as np
 import threading
 import logging
-from typing import Any, Dict, Optional
-import cv2
+import subprocess
+from typing import Any, Dict, Optional, List
+
 from PySide6 import QtCore, QtGui, QtWidgets
-import numpy as np
-from PIL import Image
+
+# Optional SVG
+try:
+    from PySide6.QtSvg import QSvgRenderer  # noqa: F401
+    _HAS_SVG = True
+except Exception:
+    _HAS_SVG = False
+
+# Optional PIL support
+try:
+    from PIL import Image  # noqa: F401
+    from PIL.ImageQt import ImageQt  # noqa: F401
+    _HAS_PIL = True
+except Exception:
+    _HAS_PIL = False
+
 from iFrame import iFrame
 from FrameGUI.SettingsFrom.model import SettingsModel
 from FrameGUI.SettingsFrom.viewmodel import SettingsViewModel
 from FrameGUI.SettingsFrom.dialog import SettingsDialog
 from Utilities.brightness import set_brightness_percent
 from Utilities.screen_scheduler import ScreenScheduler
-from Utilities.autoupdate_utils import AutoUpdater 
-try:
-    from PySide6.QtSvg import QSvgRenderer
-    _HAS_SVG = True
-except Exception:
-    _HAS_SVG = False
+from Utilities.autoupdate_utils import AutoUpdater
+
+
+# ---------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------
+
+def cv2_to_rgb_bytes(bgr: np.ndarray) -> bytes:
+    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    return rgb.tobytes()
+
+
+# ---------------------------------------------------------------------
+# Metaclass to mix Qt widget and iFrame
+# ---------------------------------------------------------------------
 
 class IFrameQtWidgetMeta(type(QtWidgets.QWidget), type(iFrame)):
     pass
 
+
+# ---------------------------------------------------------------------
+# Main widget
+# ---------------------------------------------------------------------
+
 class PhotoFrameQtWidget(QtWidgets.QWidget, iFrame, metaclass=IFrameQtWidgetMeta):
     dateTimeChanged = QtCore.Signal(str)
     frameChanged = QtCore.Signal(QtGui.QImage)
-    weatherChanged  = QtCore.Signal(object) 
-    
+    weatherChanged = QtCore.Signal(object)
+
     def __init__(self, parent: Optional[QtWidgets.QWidget] = None,
                  settings: Dict[str, Any] = None, settings_path: str = None):
         super().__init__(parent)
@@ -43,29 +72,29 @@ class PhotoFrameQtWidget(QtWidgets.QWidget, iFrame, metaclass=IFrameQtWidgetMeta
         self.setStyleSheet("background-color: black;")
         self.setCursor(QtCore.Qt.BlankCursor)
 
-        # Stack: image canvas + overlay
+        # Image canvas + overlay stacked
         self._stack = QtWidgets.QStackedLayout(self)
-        self._stack.setContentsMargins(0,0,0,0)
+        self._stack.setContentsMargins(0, 0, 0, 0)
         self.setLayout(self._stack)
 
-        self._canvas  = ImageCanvas(self)
-        self._overlay = OverlayPanel(self, settings=self.settings)   # <-- pass settings
+        self._canvas = ImageCanvas(self)
+        self._overlay = OverlayPanel(self, settings=self.settings)
         self._stack.addWidget(self._canvas)
         self._stack.addWidget(self._overlay)
         self._stack.setStackingMode(QtWidgets.QStackedLayout.StackAll)
         self._overlay.raise_()
 
+        # Screen scheduler
         self._scheduler = ScreenScheduler(self, interval_ms=30000)
-        
         self._scheduler.stateChanged.connect(
             lambda off: logging.info("ScreenScheduler: %s", "OFF" if off else "ON")
         )
-        
-        # --- AutoUpdater wiring ---
+
+        # AutoUpdater
         self._update_stop_evt = threading.Event()
         self.autoupdater = AutoUpdater(
             stop_event=self._update_stop_evt,
-            interval_sec=1800,  # check every 30 minutes
+            interval_sec=1800,  # every 30m
             on_update_available=lambda n: logging.info("AutoUpdater: %d commits behind", n),
             on_updated=lambda out: logging.info("AutoUpdater log:\n%s", out),
             restart_service_async=self._on_restart_service_async,
@@ -73,58 +102,28 @@ class PhotoFrameQtWidget(QtWidgets.QWidget, iFrame, metaclass=IFrameQtWidgetMeta
             auto_restart_on_update=True,
         )
         self.autoupdater.start()
-                
-        # Wire signals
+
+        # Signals
         self.dateTimeChanged.connect(self._update_datetime_gui)
         self.frameChanged.connect(self._canvas.set_qimage)
         self.weatherChanged.connect(self._update_weather_gui)
-        
-        # setting form
-        self._last_clicks = []
+
+        # Settings form state
+        self._last_clicks: List[int] = []
         self._settings_vm = None
         self.backend_port = int(self.settings.get("backend_configs", {}).get("server_port", 5001))
         self.service_name = self.settings.get("service_name", "photoframe")
-        self.screen_ctrl = getattr(self, "screen", None) if hasattr(self, "screen") else None
-        QtCore.QTimer.singleShot(800, self._apply_startup_orientation) 
-           
-            
-    
-    def _apply_startup_orientation(self) -> None:
-        """
-        Apply the saved screen.orientation at startup. Runs once per boot.
-        Uses the same wlr-randr path as the manual Apply button.
-        """
-        try:
-            scr = {}
-            if isinstance(self.settings, dict):
-                scr = (self.settings.get("screen") or {}) if "screen" in self.settings else {}
 
-            transform = str(scr.get("orientation", "") or "").strip().lower()
-            # normalize common values
-            trans_map = {
-                "0": "normal",
-                "normal": "normal",
-                "90": "90",
-                "left": "90",
-                "270": "270",
-                "right": "270",
-                "180": "180",
-                "inverted": "180"
-            }
-            transform = trans_map.get(transform, "normal")
+        # IMPORTANT: do NOT grab QWidget.screen(). Keep None until caller attaches a real controller.
+        self.screen_ctrl = None
 
-            # Avoid unnecessary system calls if already normal
-            # but still call to ensure consistency across compositors.
-            ok = self._on_apply_orientation(transform)
-            if not ok:
-                # Optional: log but do not block UI
-                logging.warning("Startup orientation apply failed: %s", transform)
-        except Exception as e:
-            logging.exception("Startup orientation crash: %s", e)
+        # Apply orientation after startup
+        QtCore.QTimer.singleShot(800, self._apply_startup_orientation)
 
-    
-    def stop(self):
-        """A simple method to close the window, can be expanded for more cleanup."""
+    # -----------------------------------------------------------------
+    # Public lifecycle
+    # -----------------------------------------------------------------
+    def stop(self) -> None:
         try:
             if hasattr(self, "_update_stop_evt"):
                 self._update_stop_evt.set()
@@ -132,44 +131,52 @@ class PhotoFrameQtWidget(QtWidgets.QWidget, iFrame, metaclass=IFrameQtWidgetMeta
             pass
         self.close()
 
+    # -----------------------------------------------------------------
+    # Input handling
+    # -----------------------------------------------------------------
     def mousePressEvent(self, e: QtGui.QMouseEvent) -> None:
-        # record tap time (ms since boot)
+        # record tap time (ms since midnight)
         now = QtCore.QTime.currentTime().msecsSinceStartOfDay()
         self._last_clicks.append(now)
         self._last_clicks = self._last_clicks[-3:]
 
-        # triple-tap within 800 ms window
+        # triple-tap within 800 ms
         if len(self._last_clicks) == 3 and (self._last_clicks[-1] - self._last_clicks[0] <= 800):
-            # If we have a screen controller and the panel is off/blank, wake it.
-            is_off = False
+            # If panel is off and we have a controller, wake it
             try:
-                if self.screen_ctrl and hasattr(self.screen_ctrl, "is_off"):
-                    is_off = bool(self.screen_ctrl.is_off())
-            except Exception:
-                # if the controller errors or doesn't expose is_off(), fall back to waking
-                is_off = True
+                sc = self.screen_ctrl
+                is_off = False
+                if sc and hasattr(sc, "is_off") and callable(sc.is_off):
+                    is_off = bool(sc.is_off())
+                if sc and is_off and hasattr(sc, "wake") and callable(sc.wake):
+                    try:
+                        sc.wake()
+                    finally:
+                        self._last_clicks.clear()
+                        return
+            except Exception as ex:
+                logging.exception("Screen wake sequence failed: %s", ex)
 
-            if self.screen_ctrl and is_off:
-                try:
-                    self.screen_ctrl.wake()
-                except Exception as ex:
-                    logging.exception("Failed to wake screen: %s", ex)
-                finally:
-                    self._last_clicks.clear()
-                    return
-
-            # Otherwise, keep your existing behavior (triple-tap opens Settings)
+            # Otherwise open settings
             self._open_settings()
             self._last_clicks.clear()
             return
 
         super().mousePressEvent(e)
 
-    def _open_settings(self):
-        """
-        Builds Model + ViewModel + Dialog and shows it modally.
-        """
+    # -----------------------------------------------------------------
+    # Settings dialog
+    # -----------------------------------------------------------------
+    def _open_settings(self) -> None:
         model = SettingsModel(self.settings, getattr(self, "settings_path", None))
+
+        # Safely pass optional callbacks
+        sc = self.screen_ctrl
+        if sc and hasattr(sc, "wake") and callable(sc.wake):
+            wake_cb = sc.wake
+        else:
+            wake_cb = (lambda: None)
+
         vm = SettingsViewModel(
             model=model,
             backend_port=self.backend_port,
@@ -177,14 +184,16 @@ class PhotoFrameQtWidget(QtWidgets.QWidget, iFrame, metaclass=IFrameQtWidgetMeta
             on_apply_orientation=self._on_apply_orientation,
             on_autoupdate_pull=self._on_autoupdate_pull,
             on_restart_service_async=self._on_restart_service_async,
-            wake_screen_worker=(self.screen_ctrl.wake if self.screen_ctrl else (lambda: None)),
+            wake_screen_worker=wake_cb,
             notifications=(self.notifications if hasattr(self, "notifications") else None),
             parent=self,
         )
         dlg = SettingsDialog(vm, model, parent=self)
         dlg.exec()
 
-        
+    # -----------------------------------------------------------------
+    # iFrame API
+    # -----------------------------------------------------------------
     def set_frame(self, bgr: np.ndarray) -> None:
         if bgr is None:
             return
@@ -198,26 +207,71 @@ class PhotoFrameQtWidget(QtWidgets.QWidget, iFrame, metaclass=IFrameQtWidgetMeta
 
     def set_weather(self, weather_data: dict) -> None:
         self.weatherChanged.emit(weather_data or {})
-    # endregion
 
-    # region Private GUI Slots (Run on Main Thread)
+    # -----------------------------------------------------------------
+    # Qt slots
+    # -----------------------------------------------------------------
     @QtCore.Slot(str)
-    def _update_datetime_gui(self, text: str):
+    def _update_datetime_gui(self, text: str) -> None:
         self._overlay.update_time_and_date(text)
 
     @QtCore.Slot(object)
-    def _update_weather_gui(self, weather_obj: dict):
-        self._overlay.update_weather(weather_obj)  
-    # endregion
+    def _update_weather_gui(self, weather_obj: dict) -> None:
+        self._overlay.update_weather(weather_obj)
 
-    #region settings_form
+    # -----------------------------------------------------------------
+    # Startup orientation
+    # -----------------------------------------------------------------
+    def _apply_startup_orientation(self) -> None:
+        try:
+            scr = {}
+            if isinstance(self.settings, dict):
+                scr = (self.settings.get("screen") or {}) if "screen" in self.settings else {}
+
+            transform = str(scr.get("orientation", "") or "").strip().lower()
+            trans_map = {
+                "0": "normal", "normal": "normal",
+                "90": "90", "left": "90",
+                "270": "270", "right": "270",
+                "180": "180", "inverted": "180"
+            }
+            transform = trans_map.get(transform, "normal")
+            ok = self._on_apply_orientation(transform)
+            if not ok:
+                logging.warning("Startup orientation apply failed: %s", transform)
+        except Exception as e:
+            logging.exception("Startup orientation crash: %s", e)
+
+    # -----------------------------------------------------------------
+    # Screen controller attach
+    # -----------------------------------------------------------------
+    def attach_screen_controller(self, controller) -> None:
+        """
+        Call this after creating the widget to wire the ScreenController.
+        The controller may expose:
+          - is_off() -> bool
+          - wake() -> None
+          - set_brightness_percent(pct:int, allow_zero:bool=False) -> bool
+        """
+        self.screen_ctrl = controller
+        try:
+            self._scheduler.recheck_now()
+        except Exception:
+            pass
+
+    # -----------------------------------------------------------------
+    # Utilities for settings form
+    # -----------------------------------------------------------------
     @staticmethod
     def _list_outputs() -> list[str]:
         try:
-            out = subprocess.check_output(["wlr-randr"], universal_newlines=True, stderr=subprocess.DEVNULL, timeout=3)
+            out = subprocess.check_output(
+                ["wlr-randr"], universal_newlines=True,
+                stderr=subprocess.DEVNULL, timeout=3
+            )
         except Exception:
             return []
-        names = []
+        names: list[str] = []
         for line in out.splitlines():
             line = line.strip()
             if not line or line.startswith(" "):
@@ -232,30 +286,21 @@ class PhotoFrameQtWidget(QtWidgets.QWidget, iFrame, metaclass=IFrameQtWidgetMeta
         outs.sort(key=lambda n: (0 if n.upper().startswith("DSI") else 1, n))
         return outs[0] if outs else None
 
-
     # ---- Brightness ----
     def _on_apply_brightness(self, pct: int) -> bool:
         try:
             pct = max(10, min(100, int(pct)))
-            if not self.screen_ctrl:
+            sc = self.screen_ctrl
+            if not sc or not hasattr(sc, "set_brightness_percent") or not callable(sc.set_brightness_percent):
                 QtWidgets.QMessageBox.warning(self, "Brightness", "Screen controller not available.")
                 return False
-            ok = self.screen_ctrl.set_brightness_percent(pct, allow_zero=False)
+            ok = sc.set_brightness_percent(pct, allow_zero=False)
             if ok:
                 self.settings.setdefault("screen", {})["brightness"] = pct
             return bool(ok)
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Brightness error", str(e))
             return False
-     
-        def attach_screen_controller(self, controller) -> None:
-            """Call this after creating the widget to wire the ScreenController."""
-            self.screen_ctrl = controller
-            # Ask the scheduler to re-evaluate now that we have a controller.
-            try:
-                self._scheduler.recheck_now()
-            except Exception:
-                pass
 
     # ---- Orientation ----
     def _on_apply_orientation(self, transform: str) -> bool:
@@ -270,14 +315,11 @@ class PhotoFrameQtWidget(QtWidgets.QWidget, iFrame, metaclass=IFrameQtWidgetMeta
             subprocess.run(["wlr-randr", "--output", output, "--transform", transform], check=True)
             return True
         except subprocess.CalledProcessError as e:
-            QtWidgets.QMessageBox.critical(self, "Failed to set orientation", e.stdout or str(e))
+            QtWidgets.QMessageBox.critical(self, "Failed to set orientation", (e.stdout or str(e)))
             return False
 
     # ---- Auto-update (pull now) ----
     def _on_autoupdate_pull(self) -> None:
-        """
-        Asynchronous pull with notifications and a result dialog.
-        """
         def worker():
             ok, msg = False, "Unknown"
             try:
@@ -287,7 +329,6 @@ class PhotoFrameQtWidget(QtWidgets.QWidget, iFrame, metaclass=IFrameQtWidgetMeta
             except Exception as e:
                 ok, msg = False, f"pull_now() crashed: {e}"
 
-            # file a notification
             try:
                 if hasattr(self, "notifications") and self.notifications:
                     self.notifications.add(
@@ -297,7 +338,6 @@ class PhotoFrameQtWidget(QtWidgets.QWidget, iFrame, metaclass=IFrameQtWidgetMeta
             except Exception:
                 pass
 
-            # UI feedback
             def ui():
                 QtWidgets.QMessageBox.information(
                     self,
@@ -310,9 +350,6 @@ class PhotoFrameQtWidget(QtWidgets.QWidget, iFrame, metaclass=IFrameQtWidgetMeta
 
     # ---- Restart service (async) ----
     def _on_restart_service_async(self) -> None:
-        """
-        Asks systemd to restart the desktop app service. No sudo here; polkit rules handle auth.
-        """
         def worker():
             unit = "PhotoFrame_Desktop_App.service"  # adjust if needed
             systemctl = "/usr/bin/systemctl"
@@ -339,23 +376,24 @@ class PhotoFrameQtWidget(QtWidgets.QWidget, iFrame, metaclass=IFrameQtWidgetMeta
                         f"{' '.join(cmd)}\nstdout:\n{r.stdout}\n\nstderr:\n{r.stderr}"
                     )
                 QtCore.QTimer.singleShot(0, ui_err)
+
         threading.Thread(target=worker, daemon=True).start()
 
-    #endregion
 
-    
+# ---------------------------------------------------------------------
+# Canvas
+# ---------------------------------------------------------------------
 
 class ImageCanvas(QtWidgets.QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._qimage: Optional[QtGui.QImage] = None
-        # Make sure we expand to fill any parent container
         self.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
 
     @QtCore.Slot(QtGui.QImage)
     def set_qimage(self, qimage: QtGui.QImage) -> None:
         self._qimage = qimage
-        self.update()  # schedule repaint
+        self.update()
 
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:
         painter = QtGui.QPainter(self)
@@ -372,66 +410,44 @@ class ImageCanvas(QtWidgets.QWidget):
         if iw <= 0 or ih <= 0 or ww <= 0 or wh <= 0:
             return
 
-        # Compute a crop rect on the source image so that it "covers" the widget
         image_ar = iw / float(ih)
         widget_ar = ww / float(wh)
 
         if widget_ar > image_ar:
-            # Widget is wider than the image: crop vertically
             new_h = int(round(iw / widget_ar))
             new_h = min(new_h, ih)
             y = max(0, (ih - new_h) // 2)
             src = QtCore.QRect(0, y, iw, new_h)
         else:
-            # Widget is taller (or equal): crop horizontally
             new_w = int(round(ih * widget_ar))
             new_w = min(new_w, iw)
             x = max(0, (iw - new_w) // 2)
             src = QtCore.QRect(x, 0, new_w, ih)
 
-        # Draw the cropped portion scaled to exactly fill the widget
         painter.drawImage(self.rect(), self._qimage, src)
 
 
-from PySide6 import QtCore, QtGui, QtWidgets
-try:
-    from PySide6.QtSvg import QSvgRenderer
-    _HAS_SVG = True
-except Exception:
-    _HAS_SVG = False
-
-import os
-import io
-import logging
-from typing import Dict, Any
-
-# Optional PIL support for converting PIL.Image -> QPixmap
-try:
-    from PIL import Image as _PIL_Image  # noqa: F401
-    from PIL.ImageQt import ImageQt
-    _HAS_PIL = True
-except Exception:
-    _HAS_PIL = False
-
+# ---------------------------------------------------------------------
+# Overlay
+# ---------------------------------------------------------------------
 
 class OverlayPanel(QtWidgets.QWidget):
     def __init__(self, parent=None, settings: Dict[str, Any] = None):
         super().__init__(parent)
         self.settings = settings or {}
 
-        # Transparent overlay
         self.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
         self.setAttribute(QtCore.Qt.WA_NoSystemBackground, True)
         self.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
 
-        # ---- Settings (font + margins) ----
+        # Settings (font + margins)
         self.font_name = self.settings.get("font_name", "Arial")
-        self.time_px   = int(self.settings.get("time_font_size", 120))
-        self.date_px   = int(self.settings.get("date_font_size", 80))
-        self.ml        = int(self.settings.get("margin_left", 50))
-        self.mr        = int(self.settings.get("margin_right", 50))
-        self.mb        = int(self.settings.get("margin_bottom", 50))
-        self.mt        = int(self.settings.get("margin_top", self.mb))
+        self.time_px = int(self.settings.get("time_font_size", 120))
+        self.date_px = int(self.settings.get("date_font_size", 80))
+        self.ml = int(self.settings.get("margin_left", 50))
+        self.mr = int(self.settings.get("margin_right", 50))
+        self.mb = int(self.settings.get("margin_bottom", 50))
+        self.mt = int(self.settings.get("margin_top", self.mb))
 
         dpr = getattr(self, "devicePixelRatioF", lambda: 1.0)()
         self.shadow_alpha = int(self.settings.get("shadow_alpha", 200))
@@ -439,18 +455,16 @@ class OverlayPanel(QtWidgets.QWidget):
 
         self._maybe_load_font(self.font_name)
 
-        # ---- Time + Date (bottom-left) ----
+        # Time + Date
         self._time_label = QtWidgets.QLabel("00:00:00")
         self._date_label = QtWidgets.QLabel("-")
         for lbl in (self._time_label, self._date_label):
             lbl.setStyleSheet("color: white;")
             lbl.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Maximum)
 
-        # font
         self._apply_font(self._time_label, self.time_px, bold=True)
         self._apply_font(self._date_label, self.date_px, bold=False)
 
-        # Prefer fixed-pitch digits for time
         f = self._time_label.font()
         f.setKerning(False)
         f.setStyleHint(QtGui.QFont.Monospace, QtGui.QFont.PreferDefault)
@@ -458,7 +472,9 @@ class OverlayPanel(QtWidgets.QWidget):
         self._time_label.setFont(f)
         if not QtGui.QFontInfo(self._time_label.font()).fixedPitch():
             mono = QtGui.QFontDatabase.systemFont(QtGui.QFontDatabase.FixedFont)
-            mono.setPixelSize(self.time_px); mono.setBold(True); mono.setKerning(False)
+            mono.setPixelSize(self.time_px)
+            mono.setBold(True)
+            mono.setKerning(False)
             self._time_label.setFont(mono)
 
         fm_time = QtGui.QFontMetrics(self._time_label.font())
@@ -467,12 +483,11 @@ class OverlayPanel(QtWidgets.QWidget):
         self._time_label.setFixedWidth(fixed_w)
         self._time_label.setAlignment(QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter)
 
-        # Shadows for time/date
-        self._time_shadow_r  = int(max(12,  self.time_px * 0.18) * dpr)
-        self._time_shadow_dx = int(max(2,   self.time_px * 0.04)  * dpr)
+        self._time_shadow_r = int(max(12, self.time_px * 0.18) * dpr)
+        self._time_shadow_dx = int(max(2, self.time_px * 0.04) * dpr)
         self._time_shadow_dy = self._time_shadow_dx
-        self._date_shadow_r  = int(max(10,  self.date_px * 0.16)  * dpr)
-        self._date_shadow_dx = int(max(2,   self.date_px * 0.035) * dpr)
+        self._date_shadow_r = int(max(10, self.date_px * 0.16) * dpr)
+        self._date_shadow_dx = int(max(2, self.date_px * 0.035) * dpr)
         self._date_shadow_dy = self._date_shadow_dx
 
         pad_time = self._time_shadow_r // 3
@@ -493,19 +508,16 @@ class OverlayPanel(QtWidgets.QWidget):
         self._left_widget.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
         self._left_widget.setStyleSheet("background: transparent;")
 
-        # ---- Weather (bottom-right) ----
-        # Temperature matches time size; condition text matches date size.
-        self.weather_num_px  = self.time_px
+        # Weather (bottom-right)
+        self.weather_num_px = self.time_px
         self.weather_desc_px = self.date_px
 
-        # Big temp
         self._weather_num = QtWidgets.QLabel("")
         self._weather_num.setStyleSheet("color: white;")
         self._weather_num.setAlignment(QtCore.Qt.AlignHCenter)
         self._weather_num.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Maximum)
         self._apply_font(self._weather_num, self.weather_num_px, bold=True)
 
-        # Condition row: [emoji] [description], emoji right next to text
         self._weather_emoji = QtWidgets.QLabel("")
         self._weather_emoji.setStyleSheet("color: white;")
         self._weather_emoji.setAlignment(QtCore.Qt.AlignVCenter | QtCore.Qt.AlignRight)
@@ -522,9 +534,8 @@ class OverlayPanel(QtWidgets.QWidget):
         cond_row.setSpacing(max(8, self.weather_desc_px // 4))
         cond_row.setContentsMargins(0, 0, 0, 0)
         cond_row.addWidget(self._weather_emoji, 0, QtCore.Qt.AlignVCenter)
-        cond_row.addWidget(self._weather_desc,  0, QtCore.Qt.AlignVCenter)
+        cond_row.addWidget(self._weather_desc, 0, QtCore.Qt.AlignVCenter)
 
-        # Stack: temp on top, condition row beneath
         weather_col = QtWidgets.QVBoxLayout()
         weather_col.setSpacing(max(6, self.weather_desc_px // 4))
         weather_col.setContentsMargins(0, 0, 0, 0)
@@ -537,28 +548,26 @@ class OverlayPanel(QtWidgets.QWidget):
         self._weather_widget.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
         self._weather_widget.setSizePolicy(QtWidgets.QSizePolicy.Maximum, QtWidgets.QSizePolicy.Maximum)
 
-        # One shadow on the whole weather block
-        self._weather_shadow_r  = int(max(10, self.weather_num_px * 0.16) * dpr)
-        self._weather_shadow_dx = int(max(2,  self.weather_num_px * 0.035) * dpr)
+        self._weather_shadow_r = int(max(10, self.weather_num_px * 0.16) * dpr)
+        self._weather_shadow_dx = int(max(2, self.weather_num_px * 0.035) * dpr)
         self._weather_shadow_dy = self._weather_shadow_dx
         pad = max(4, self._weather_shadow_r // 4)
         self._weather_widget.setContentsMargins(pad, pad, pad, pad)
-        self._apply_shadow(self._weather_widget, self._weather_shadow_r,
-                           self._weather_shadow_dx, self._weather_shadow_dy)
+        self._apply_shadow(self._weather_widget, self._weather_shadow_r, self._weather_shadow_dx, self._weather_shadow_dy)
 
-        # ---- Main grid (corners) ----
+        # Main grid
         main = QtWidgets.QGridLayout(self)
         main.setContentsMargins(self.ml, self.mt, self.mr, self.mb)
         main.setHorizontalSpacing(0)
         main.setVerticalSpacing(0)
-        main.addWidget(self._left_widget,    1, 0, QtCore.Qt.AlignLeft  | QtCore.Qt.AlignBottom)
+        main.addWidget(self._left_widget, 1, 0, QtCore.Qt.AlignLeft | QtCore.Qt.AlignBottom)
         main.addWidget(self._weather_widget, 1, 1, QtCore.Qt.AlignRight | QtCore.Qt.AlignBottom)
         main.setRowStretch(0, 1)
         main.setRowStretch(1, 0)
         main.setColumnStretch(0, 1)
         main.setColumnStretch(1, 0)
 
-    # ---- public updates ----
+    # Public updates
     def update_time_and_date(self, time_text: str) -> None:
         self._time_label.setText(time_text)
         date_fmt = self.settings.get("date_format", "dddd, MMM d, yyyy")
@@ -567,30 +576,26 @@ class OverlayPanel(QtWidgets.QWidget):
     def update_weather(self, data: dict) -> None:
         data = data or {}
 
-        # Temperature string
         temp = data.get("temp", "")
         unit = data.get("unit", "")
         if isinstance(temp, (int, float)):
-            temp_str = f"{int(round(temp))} °{unit}".strip()  # ASCII only
+            temp_str = f"{int(round(temp))} °{unit}".strip()
         else:
             temp_str = f"{str(temp)} °{unit}".strip()
         self._weather_num.setText(temp_str)
 
-        # Condition text matches the date size
         desc = str(data.get("description", "") or "")
         self._weather_desc.setText(desc)
 
-        # Emoji near the condition (fallback from AccuWeather id)
         symbol = ""
         icon_obj = data.get("icon")
         if isinstance(icon_obj, int):
             symbol = self._accuweather_symbol(icon_obj)
-        # If you later carry WMO codes, you can map them here, too.
 
         self._weather_emoji.setText(symbol)
         self._weather_emoji.setVisible(bool(symbol))
 
-    # ---- helpers ----
+    # Helpers
     def _apply_shadow(self, widget: QtWidgets.QWidget, radius: int, dx: float, dy: float, alpha: int = None) -> None:
         eff = QtWidgets.QGraphicsDropShadowEffect(self)
         eff.setBlurRadius(int(radius))
@@ -620,22 +625,23 @@ class OverlayPanel(QtWidgets.QWidget):
         label.setFont(f)
 
     def _accuweather_symbol(self, icon_id: int) -> str:
-        # Minimal readable mapping. Extend as needed.
+        # Simple ASCII mapping (extend as needed)
+        # Use plain ASCII per your request.
         day = icon_id < 30
-        if icon_id in (1, 2, 33, 34):        return "☀" if day else "☾"
-        if icon_id in (3, 4, 35, 36):        return "⛅" if day else "☁"
-        if icon_id in (6, 7):                return "☁"
-        if icon_id in (11, 20):              return "〰"
-        if icon_id in (12, 13, 14, 39, 40):  return "🌧"
-        if icon_id in (15, 41, 42):          return "⛈"
-        if icon_id in (18, 26):              return "🌧"
-        if icon_id in (22, 29):              return "❄"
-        return "☁"
-
-def cv2_to_rgb_bytes(bgr: np.ndarray) -> bytes:
-    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-    return rgb.tobytes()
-
-
-
-
+        if icon_id in (1, 2, 33, 34):
+            return "o" if day else "c"  # sun / moon placeholder
+        if icon_id in (3, 4, 35, 36):
+            return "o"  # partly cloudy placeholder
+        if icon_id in (6, 7):
+            return "o"  # cloudy placeholder
+        if icon_id in (11, 20):
+            return "~"  # fog/wind placeholder
+        if icon_id in (12, 13, 14, 39, 40):
+            return "r"  # rain placeholder
+        if icon_id in (15, 41, 42):
+            return "t"  # thunder placeholder
+        if icon_id in (18, 26):
+            return "r"
+        if icon_id in (22, 29):
+            return "*"
+        return "o"
