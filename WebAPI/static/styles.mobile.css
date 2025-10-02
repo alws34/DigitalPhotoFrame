@@ -1,0 +1,20 @@
+/* Small refinements for very narrow screens */
+@media (max-width: 480px) {
+  .top-bar { padding: 0 8px; }
+  .welcome-message { font-size: 14px; }
+  .dropdown-menu .menu-item { width: 160px; }
+
+  .frame { border-width: 1px; border-radius: 8px; }
+  .drawer { padding-top: 56px; border-radius: 8px 8px 0 0; }
+
+  .gallery { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
+  .image-card { padding: 8px; border-radius: 8px; }
+  .image-card img { border-radius: 6px; }
+
+  .container { padding: 12px; }
+  .card { padding: 16px; }
+  .form input[type="text"],
+  .form input[type="password"],
+  .form input[type="email"] { padding: 12px; }
+  .btn { padding: 12px; }
+}
