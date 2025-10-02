@@ -1,29 +1,34 @@
 #!/bin/bash
 set -euo pipefail
 
+# Paths
 APP_DIR="/home/pi/Desktop/DigitalPhotoFrame"
 ROOT_DIR="/home/pi/Desktop/DigitalPhotoFrame"
 REQS_FILE="$ROOT_DIR/requirements.txt"
 VENV_DIR="$APP_DIR/env"
 PYTHON="$VENV_DIR/bin/python"
+
+# System artifacts
 SERVICE_NAME="PhotoFrame_Desktop_App"
 SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
 POLKIT_RULE="/etc/polkit-1/rules.d/45-allow-nm-wifi-for-pi.rules"
+POLKIT_SVC_RULE="/etc/polkit-1/rules.d/46-allow-photoframe-restart.rules"
+UDEV_BACKLIGHT_RULE="/etc/udev/rules.d/90-backlight.rules"
+
+# Desktop helpers
 DESKTOP_DIR="/home/pi/Desktop"
 START_SH="$DESKTOP_DIR/StartPhotoFrame.sh"
 STOP_SH="$DESKTOP_DIR/StopPhotoFrame.sh"
 RESTART_SH="$DESKTOP_DIR/RestartPhotoFrame.sh"
-UDEV_BACKLIGHT_RULE="/etc/udev/rules.d/90-backlight.rules"
 
 echo "[0/10] Installing NetworkManager + polkit (if missing)..."
 sudo apt-get update
-sudo apt-get install -y network-manager policykit-1
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y network-manager policykit-1
 
-echo "[0.1/10] Enabling NetworkManager and making sure it's running..."
-sudo systemctl enable NetworkManager
-sudo systemctl restart NetworkManager
+echo "[0.1/10] Enabling NetworkManager..."
+sudo systemctl enable --now NetworkManager
 
-echo "[0.2/10] Creating polkit rule to allow members of 'netdev' to manage Wi-Fi without sudo..."
+echo "[0.2/10] Polkit rule for 'netdev' Wi-Fi control..."
 sudo tee "$POLKIT_RULE" >/dev/null <<'EOF'
 /* Allow Wi-Fi scan/connect and system connection changes for netdev group */
 polkit.addRule(function(action, subject) {
@@ -41,33 +46,34 @@ polkit.addRule(function(action, subject) {
 });
 EOF
 
-echo "[0.21/10] Adding 'pi' to netdev and video groups (video needed for backlight)..."
+echo "[0.21/10] Adding 'pi' to netdev and video groups..."
 sudo usermod -aG netdev pi
 sudo usermod -aG video pi
+echo "Note: new group membership applies on next login."
 
-echo "[0.3/10] Reloading polkit (best effort)..."
+echo "[0.3/10] Reloading polkit..."
 sudo systemctl restart polkit || true
 
 echo "[1/10] Installing OS packages required by the app..."
-sudo apt-get install -y \
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
   python3 python3-venv python3-dev python3-tk python3-pip \
   libatlas-base-dev libopenjp2-7 libjpeg-dev zlib1g-dev \
   libxcb-render0 libxcb-shm0 libxkbcommon-x11-0 libxcb-cursor0 \
   libheif1 libheif-dev fonts-dejavu ca-certificates curl git \
   wlr-randr
 
-echo "[1.1/10] Installing Qt Wayland runtime bits..."
-sudo apt-get install -y \
+echo "[1.1/10] Qt Wayland runtime..."
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
   qt6-wayland qt6-qpa-plugins qt6-gtk-platformtheme \
-  fonts-dejavu fonts-liberation
+  fonts-liberation
 
-echo "[1.2/10] Applying udev rule for backlight write access (sysfs fallback path)..."
+echo "[1.2/10] Udev rule for backlight write access..."
 sudo tee "$UDEV_BACKLIGHT_RULE" >/dev/null <<'EOF'
 # Make backlight writable by the 'video' group for non-root user sessions
 SUBSYSTEM=="backlight", GROUP="video", MODE="0664"
 EOF
 
-echo "[1.3/10] Reloading udev rules and triggering backlight..."
+echo "[1.3/10] Reloading udev..."
 sudo udevadm control --reload
 sudo udevadm trigger --subsystem-match=backlight || true
 
@@ -79,22 +85,17 @@ echo "[3/10] Upgrading pip/setuptools/wheel..."
 
 echo "[4/10] Installing Python dependencies from $REQS_FILE ..."
 if [ ! -f "$REQS_FILE" ]; then
-  echo "requirements.txt not found at $REQS_FILE"
+  echo "requirements.txt not found at $REQS_FILE" >&2
   exit 1
 fi
 "$VENV_DIR/bin/pip" install -r "$REQS_FILE"
 
-XAUTH_LINE=""
-if [ -f "/home/pi/.Xauthority" ]; then
-  XAUTH_LINE="Environment=XAUTHORITY=/home/pi/.Xauthority"
-fi
-
 echo "[5/10] Writing system service to $SERVICE_PATH ..."
-sudo tee "$SERVICE_PATH" >/dev/null <<EOF
+sudo tee "$SERVICE_PATH" >/dev/null <<'EOF'
 [Unit]
 Description=Photo Frame Desktop App (system-wide)
-Wants=network-online.target graphical.target
-After=network-online.target graphical.target
+Wants=network-online.target user@1000.service graphical.target
+After=network-online.target systemd-user-sessions.service user@1000.service graphical.target
 
 [Service]
 Type=simple
@@ -102,8 +103,9 @@ User=pi
 Group=pi
 WorkingDirectory=/home/pi/Desktop/DigitalPhotoFrame
 
-# Wait until Wayland socket exists; fail fast so Restart=always re-tries
-ExecStartPre=/usr/bin/test -S /run/user/1000/wayland-0
+# Wait until Wayland socket and the user bus exist (robust on cold boot)
+ExecStartPre=/bin/sh -c 'until [ -S /run/user/1000/wayland-0 ]; do sleep 1; done'
+ExecStartPre=/bin/sh -c 'until [ -S /run/user/1000/bus ]; do sleep 1; done'
 
 # Launch the app from the venv
 ExecStart=/home/pi/Desktop/DigitalPhotoFrame/env/bin/python /home/pi/Desktop/DigitalPhotoFrame/app.py
@@ -117,7 +119,7 @@ Environment=HOME=/home/pi
 Environment=XDG_RUNTIME_DIR=/run/user/1000
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
 Environment=WAYLAND_DISPLAY=wayland-0
-# Let Qt fall back to X11 if Wayland is not present
+# Prefer Wayland, allow fallback to X11 if needed
 Environment=QT_QPA_PLATFORM=wayland;xcb
 
 # Theme safety + DPI
@@ -131,7 +133,7 @@ SyslogIdentifier=photoframe
 StandardOutput=journal
 StandardError=journal
 
-# Keep your existing relaxed sandbox if you need backlight/sysfs, etc.
+# Relaxed sandbox (only if you need it)
 NoNewPrivileges=no
 ProtectSystem=off
 ProtectHome=no
@@ -143,8 +145,8 @@ UMask=002
 WantedBy=graphical.target
 EOF
 
-echo "[5.1/10] Adding polkit rule for service restarts..."
-sudo tee /etc/polkit-1/rules.d/46-allow-photoframe-restart.rules >/dev/null <<'EOF'
+echo "[5.1/10] Polkit rule: allow pi to manage ONLY this service..."
+sudo tee "$POLKIT_SVC_RULE" >/dev/null <<'EOF'
 /* Allow pi to manage ONLY PhotoFrame_Desktop_App.service */
 polkit.addRule(function(action, subject) {
   if (action.id == "org.freedesktop.systemd1.manage-units" &&
@@ -163,40 +165,39 @@ EOF
 echo "[5.2/10] Reloading polkit..."
 sudo systemctl restart polkit || true
 
-echo "[6/10] Reloading and enabling service..."
+echo "[6/10] Reloading daemon, enabling and starting service..."
 sudo systemctl daemon-reload
-sudo systemctl enable "$SERVICE_NAME"
-sudo systemctl restart "$SERVICE_NAME"
+sudo systemctl enable --now "$SERVICE_NAME"
 
 echo "[7/10] Status:"
 sudo systemctl status "$SERVICE_NAME" --no-pager -l || true
 
 echo "[8/10] Quick runtime self-tests (no sudo)..."
-
 # Wi-Fi nmcli smoke test
 IFACE=$(nmcli -t -f DEVICE,TYPE device | awk -F: '$2=="wifi"{print $1; exit}')
-if [ -n "\$IFACE" ]; then
-  echo " - Wi-Fi interface: \$IFACE"
-  nmcli device wifi rescan ifname "\$IFACE" || echo "!!! rescan failed (polkit not active yet?)"
-  nmcli -t -f IN-USE,SSID,SECURITY,SIGNAL device wifi list ifname "\$IFACE" | head -n 5 || true
+if [ -n "$IFACE" ]; then
+  echo " - Wi-Fi interface: $IFACE"
+  nmcli device wifi rescan ifname "$IFACE" || echo "!!! rescan failed (polkit or group not active yet?)"
+  nmcli -t -f IN-USE,SSID,SECURITY,SIGNAL device wifi list ifname "$IFACE" | head -n 5 || true
 else
-  echo "No Wi-Fi interface detected."
+  echo " - No Wi-Fi interface detected."
 fi
 
-# Brightness path tests (non-fatal)
-if [ -n "\$WAYLAND_DISPLAY" ] || [ -S /run/user/1000/wayland-0 ]; then
-  echo " - Wayland detected, wlr-randr present? $(command -v wlr-randr || echo 'no')"
+# Wayland presence
+if [ -n "${WAYLAND_DISPLAY:-}" ] || [ -S /run/user/1000/wayland-0 ]; then
+  echo " - Wayland detected, wlr-randr: $(command -v wlr-randr || echo 'no')"
   if command -v wlr-randr >/dev/null 2>&1; then
-    echo "   Outputs:"
+    echo "   Outputs (best effort):"
     wlr-randr || true
   fi
 fi
 
+# Backlight
 if ls /sys/class/backlight/*/brightness >/dev/null 2>&1; then
   echo " - Backlight sysfs present. Permissions:"
   ls -l /sys/class/backlight/*/brightness || true
 else
-  echo " - No /sys/class/backlight device (likely external monitor via HDMI/DP)."
+  echo " - No /sys/class/backlight device (likely external HDMI/DP)."
 fi
 
 echo "[9/10] Creating Desktop control scripts..."
@@ -241,5 +242,5 @@ echo "  $STOP_SH"
 echo "  $RESTART_SH"
 echo
 echo "Notes:"
-echo " - Brightness uses Wayland (wlr-randr) when available."
-echo " - Sysfs fallback works if /sys/class/backlight exists and 'pi' is in the 'video' group (rule installed)."
+echo " - Adding 'pi' to netdev/video requires a new login to be effective."
+echo " - Service is bound to graphical.target and user@1000.service for stable GUI startup."
