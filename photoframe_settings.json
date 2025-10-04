@@ -18,6 +18,7 @@
   "allow_translucent_background": true,
   "image_dir": "Images",
   "date_format": "dddd, MMM d, yyyy",
+  "log_file_path": "./FrameServer/PhotoFrame.log",
   "open_meteo": {
     "latitude": "32.0853",
     "longitude": "34.7818",

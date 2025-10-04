@@ -24,12 +24,136 @@ from WebAPI.WebUtils.auth_security import UserStore, ensure_csrf, validate_csrf,
 
 if platform.system() == "Linux" or platform.system() == "Darwin":
     try:
+        from pillow_heif import register_heif
+        register_heif()
+        has_pillow_heif = True
+    except Exception:
+        has_pillow_heif = False
+    try:
         import pyheif
         has_pyheif = True
     except ImportError:
         has_pyheif = False
 else:
     has_pyheif = False
+
+
+def _parse_value(s: str):
+    if isinstance(s, bool):
+        return s
+    if not isinstance(s, str):
+        return s
+    v = s.strip()
+    # checkbox pattern: "true"/"false", "on"/"off"
+    if v.lower() in ("true", "on"):
+        return True
+    if v.lower() in ("false", "off"):
+        return False
+    # int
+    try:
+        if v.isdigit() or (v.startswith("-") and v[1:].isdigit()):
+            return int(v)
+    except Exception:
+        pass
+    # float
+    try:
+        return float(v)
+    except Exception:
+        return v
+
+def _split_bracketed(key: str):
+    # "a[b][c]" -> ["a","b","c"], "arr[0]" -> ["arr","0"]
+    parts = []
+    i = 0
+    while i < len(key):
+        j = key.find("[", i)
+        if j == -1:
+            parts.append(key[i:])
+            break
+        parts.append(key[i:j])
+        k = key.find("]", j + 1)
+        parts.append(key[j + 1:k])
+        i = k + 1
+    return [p for p in parts if p != ""]
+
+def _assign_path(root, parts, value):
+    """
+    Assign value into root following parts (list). Numeric parts become list indices.
+    Auto-creates dicts or lists as needed. Supports deep nesting.
+    """
+    cur = root
+    for idx, part in enumerate(parts):
+        is_last = idx == len(parts) - 1
+        # list index?
+        is_int = False
+        try:
+            i_part = int(part)
+            is_int = True
+        except Exception:
+            i_part = None
+
+        if is_last:
+            if is_int:
+                if not isinstance(cur, list):
+                    # convert current container to list
+                    cur_key_err = f"Expected list for index {part}, got {type(cur).__name__}"
+                    if isinstance(cur, dict):
+                        # Not expected in normal form post; create a list in place
+                        # This happens when mixing dict keys and numeric children under same parent; prefer list
+                        # Caller ensures parent value is a list container during earlier steps
+                        pass
+                    # If parent is scalar, replace with list
+                    # But we cannot mutate parent's ref easily here; caller constructs containers before
+                # ensure size
+                while len(cur) <= i_part:
+                    cur.append(None)
+                cur[i_part] = value
+            else:
+                if isinstance(cur, list):
+                    # Ambiguous, but treat as dict-like by appending a new dict with single key
+                    cur.append({part: value})
+                else:
+                    cur[part] = value
+            return
+
+        # Not last: descend and create container if missing
+        if is_int:
+            # we need a list here
+            if part == "" and isinstance(cur, list):
+                nxt = {}
+                cur.append(nxt)
+                cur = nxt
+                continue
+            if not isinstance(cur, list):
+                # create list in place
+                # if cur is dict, we cannot set by index; caller should have set a key earlier
+                # this path only occurs when parent was created as list previously
+                # best-effort: convert to list
+                # This situation is rare with standard bracket forms.
+                return
+            while len(cur) <= i_part:
+                cur.append({})
+            if not isinstance(cur[i_part], (dict, list)):
+                cur[i_part] = {}
+            cur = cur[i_part]
+        else:
+            # dict branch
+            if not isinstance(cur, dict):
+                # convert list slot to dict if needed
+                return
+            if part not in cur or not isinstance(cur[part], (dict, list)):
+                # Heuristic: if next token is int -> list; else dict
+                nxt_is_int = False
+                if idx + 1 < len(parts):
+                    try:
+                        _ = int(parts[idx + 1])
+                        nxt_is_int = True
+                    except Exception:
+                        pass
+                cur[part] = [] if nxt_is_int else {}
+            cur = cur[part]
+
+
 
 class Backend:
     def __init__(self, frame: iFrame, settings, image_dir=None, settings_path=None):
@@ -86,6 +210,23 @@ class Backend:
         self.THUMB_DIR = os.path.join(os.path.dirname(self.IMAGE_DIR), "_thumbs")
         os.makedirs(self.THUMB_DIR, exist_ok=True)
 
+
+        try:
+            cfg_log_path = None
+            if isinstance(self.settings, dict):
+                cfg_log_path = self.settings.get("log_file_path")
+            if cfg_log_path:
+                # accept absolute path as-is; resolve relative via set_absolute_paths
+                self.LOG_FILE_PATH = cfg_log_path if os.path.isabs(cfg_log_path) else self.set_absolute_paths(cfg_log_path)
+                # Ensure the file exists so /logs does not 404 if the directory is valid
+                log_dir = os.path.dirname(self.LOG_FILE_PATH)
+                if log_dir and not os.path.exists(log_dir):
+                    os.makedirs(log_dir, exist_ok=True)
+                if not os.path.exists(self.LOG_FILE_PATH):
+                    with open(self.LOG_FILE_PATH, "a", encoding="utf-8"):
+                        pass
+        except Exception as e:
+            print(f"[Backend] Could not apply log_file_path override: {e}")
 
         # Now pull required keys with safe defaults
         backend_cfg = (
@@ -431,12 +572,13 @@ class Backend:
         
         @self.app.before_request
         def _csrf_for_all_posts():
-            # Only enforce for state-changing requests
             if request.method in ("POST", "PUT", "PATCH", "DELETE"):
+                # ⬇️ allow this one POST endpoint without CSRF
+                if request.path == "/heic_preview":
+                    return None
                 try:
                     self._require_csrf()
                 except Exception:
-                    # JSON/fetch -> JSON 400; normal form -> flash + redirect
                     if request.is_json or request.headers.get("X-Requested-With") == "XMLHttpRequest":
                         return jsonify({"error": "Bad request."}), 400
                     flash("Invalid request.", "error")
@@ -448,9 +590,19 @@ class Backend:
             resp.headers["X-Content-Type-Options"] = "nosniff"
             resp.headers["X-Frame-Options"] = "DENY"
             resp.headers["Referrer-Policy"] = "same-origin"
-            # A relaxed CSP for your app (tighten as needed)
-            resp.headers["Content-Security-Policy"] = "default-src 'self'; img-src 'self' data: blob: http: https:; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none';"
+
+            # Allow heic2any from unpkg, its Blob worker, and both JS+WASM eval
+            resp.headers["Content-Security-Policy"] = (
+                "default-src 'self'; "
+                "img-src 'self' data: blob: http: https:; "
+                "script-src 'self' https://unpkg.com 'unsafe-eval' 'wasm-unsafe-eval'; "
+                "worker-src 'self' blob:; "
+                "connect-src 'self' blob:; "
+                "style-src 'self' 'unsafe-inline'; "
+                "frame-ancestors 'none';"
+            )
             return resp
+            
         
         @self.app.route('/stream')
         def stream():
@@ -501,6 +653,49 @@ class Backend:
             return Response(gen(),
                             mimetype="multipart/x-mixed-replace; boundary=frame",
                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+        @self.app.route("/heic_preview", methods=["POST"])
+        def heic_preview():
+            # Optional: keep auth check
+            if not self.is_authenticated():
+                return jsonify({"error": "unauthorized"}), 401
+
+            f = request.files.get("file")
+            if f is None:
+                return jsonify({"error": "no file"}), 400
+
+            data = f.read()
+            if not data:
+                return jsonify({"error": "empty file"}), 400
+
+            # Try Pillow with pillow-heif (preferred)
+            try:
+                if has_pillow_heif:
+                    from PIL import Image
+                    img = Image.open(io.BytesIO(data))
+                    buf = io.BytesIO()
+                    img.save(buf, format="JPEG", quality=85)
+                    buf.seek(0)
+                    return send_file(buf, mimetype="image/jpeg")
+            except Exception:
+                pass
+
+            # Fallback to pyheif
+            try:
+                if has_pyheif:
+                    import pyheif
+                    heif = pyheif.read(data)
+                    from PIL import Image
+                    img = Image.frombytes(heif.mode, heif.size, heif.data, "raw", heif.mode, heif.stride)
+                    buf = io.BytesIO()
+                    img.save(buf, format="JPEG", quality=85)
+                    buf.seek(0)
+                    return send_file(buf, mimetype="image/jpeg")
+            except Exception as e:
+                return jsonify({"error": f"decode failed: {e}"}), 415
+
+            return jsonify({"error": "server HEIC decode unavailable"}), 501
+
 
         @self.app.route("/system_stats")
         def system_stats():
@@ -812,20 +1007,55 @@ class Backend:
         def index():
             if not self.is_authenticated():
                 return redirect(url_for('login'))
+
             images = self.get_images_from_directory()
             image_count = len(images)
             settings = self.load_settings()
+
+            # Load metadata DB once
+            metadata_db = self.load_metadata_db()  # {hash: {filename, date_added, ...}}
+
+            # Helper: find date_added by filename; fall back to file mtime
+            def _date_for_filename(fn: str) -> str:
+                # try metadata lookup by filename
+                for meta in metadata_db.values():
+                    if meta.get("filename") == fn and meta.get("date_added"):
+                        return meta["date_added"]
+                # fallback to file mtime
+                fp = os.path.join(self.IMAGE_DIR, fn)
+                try:
+                    ts = os.path.getmtime(fp)
+                    return datetime.fromtimestamp(ts).isoformat()
+                except Exception:
+                    return ""  # template will treat as 0
+
+            # Build images_data for template (name + date)
+            images_data = [{"name": fn, "date_added": _date_for_filename(fn)} for fn in images]
+
+            # Keep latest_metadata for the top area
             latest_metadata = {}
             if images:
-                filepath = os.path.join(self.IMAGE_DIR, images[0])
-                file_hash = self.compute_image_hash(filepath)
-                metadata_db = self.load_metadata_db()
-                if file_hash in metadata_db:
-                    latest_metadata = metadata_db[file_hash]
+                # try to find metadata by filename for first image
+                first = images[0]
+                entry = None
+                for meta in metadata_db.values():
+                    if meta.get("filename") == first:
+                        entry = meta
+                        break
+                if entry:
+                    latest_metadata = entry
+
             username = session.get('user', 'Guest')
-            return render_template("index.html", images=images, image_count=image_count,
-                                   settings=settings, latest_metadata=latest_metadata,
-                                   username=username)
+            return render_template(
+                "index.html",
+                images=images,                 # keep for backwards-compat (unused by new markup)
+                images_data=images_data,       # new: used by gallery w/ sorting
+                image_count=image_count,
+                settings=settings,
+                latest_metadata=latest_metadata,
+                username=username
+            )
+
 
         @self.app.route("/get_latest_metadata")
         def latest_metadata():
@@ -839,31 +1069,23 @@ class Backend:
                 self._require_csrf()
             except Exception:
                 return jsonify({"error": "Bad request."}), 400
+
             try:
-                new_settings = {}
-                form_data = request.form.to_dict(flat=True)
-                for key, value in form_data.items():
-                    if '[' in key and ']' in key:
-                        parent_key, sub_key = key.split('[', 1)
-                        sub_key = sub_key.rstrip(']')
-                        if parent_key not in new_settings:
-                            new_settings[parent_key] = {}
-                        if value.lower() in ['true', 'on']:
-                            value = True
-                        elif value.lower() in ['false', 'off']:
-                            value = False
-                        elif value.isdigit():
-                            value = int(value)
-                        new_settings[parent_key][sub_key] = value
-                    else:
-                        if value.lower() in ['true', 'on']:
-                            value = True
-                        elif value.lower() in ['false', 'off']:
-                            value = False
-                        elif value.isdigit():
-                            value = int(value)
-                        new_settings[key] = value
-                self.save_settings(new_settings)
+                # Reconstruct full nested structure from bracketed keys
+                nested = {}
+
+                # request.form is ImmutableMultiDict; combine identical keys (arrays)
+                # We iterate items preserving multiplicity
+                for k in request.form:
+                    if k == "csrf_token":
+                        continue
+                    values = request.form.getlist(k)
+                    for v in values:
+                        parts = _split_bracketed(k)
+                        _assign_path(nested, parts, _parse_value(v))
+
+                # Persist
+                self.save_settings(nested)
                 flash('Settings updated successfully.')
             except Exception as e:
                 flash(f'Failed to update settings: {e}')
@@ -963,6 +1185,16 @@ class Backend:
                 download_name='selected_images.zip',
                 as_attachment=True
             )
+
+        @self.app.route("/download_logs")
+        def download_logs():
+            try:
+                # Force a friendly filename no matter what the real path is
+                return send_file(self.LOG_FILE_PATH, as_attachment=True, download_name="PhotoFrame.log")
+            except FileNotFoundError:
+                return jsonify({"error": "Log file not found"}), 404
+            except Exception as e:
+                return jsonify({"error": str(e)}), 500
 
         @self.app.route("/logs", methods=["GET"])
         def get_logs():

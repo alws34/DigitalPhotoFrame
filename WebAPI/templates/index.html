@@ -6,8 +6,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="csrf-token" content="{{ csrf_token() }}" />
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.mobile.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.mobile.css') }}" media="(max-width: 480px)" />
+    <script defer src="{{ url_for('static', filename='vendor/heic2any.min.js') }}"></script>
     <script defer src="{{ url_for('static', filename='scripts.js') }}"></script>
+
   </head>
   <body>
     <!-- Top Bar -->
@@ -38,45 +40,76 @@
         <div>Date Added: <span id="dateField" data-format="datetime" data-formatted=""></span></div>
       </section>
 
-      <!-- Gallery / Settings Drawer -->
-      <section id="bottom-scrollable" class="drawer" hidden>
-        <div class="action-bar">
-          <button id="btn-download-selected">Download Selected</button>
-          <button id="btn-delete-selected">Delete Selected</button>
-          <button id="btn-close-settings" class="close-btn" aria-label="Close panel">x</button>
-        </div>
+      <!-- App Settings Modal -->
+      <dialog id="appSettingsModal" class="modal" aria-labelledby="app-settings-title">
+        <form id="appSettingsForm" class="modal-content" method="post" action="/save_settings">
+          <h2 id="app-settings-title">Application Settings</h2>
 
-        <div id="gallery" class="gallery">
-          {% for image in images %}
-          <article class="image-card" data-image="{{ image }}">
-            <img
-              src="{{ url_for('thumb', filename=image) }}?w=320"
-              srcset="
-                {{ url_for('thumb', filename=image) }}?w=240 240w,
-                {{ url_for('thumb', filename=image) }}?w=320 320w,
-                {{ url_for('thumb', filename=image) }}?w=480 480w,
-                {{ url_for('thumb', filename=image) }}?w=640 640w"
-              sizes="(max-width: 480px) 45vw, (max-width: 1024px) 30vw, 240px"
-              alt="{{ image }}"
-              loading="lazy"
-              decoding="async"
-              fetchpriority="low"
-              width="240"
-              height="160"
-              data-full="{{ url_for('serve_image', filename=image) }}"
-            />
-            <label class="select-row">
-              <input type="checkbox" class="select-checkbox" value="{{ image }}" />
-              <span>Select</span>
-            </label>
-            <div class="row">
-              <button class="btn-edit" data-image="{{ image }}" type="button">Edit</button>
-            </div>
-          </article>
-          {% endfor %}
-        </div>
-      </section>
+          <!-- CSRF -->
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+
+          <!-- Container populated at runtime from /settings -->
+          <div id="settingsDynamicContainer" class="form-group"></div>
+
+          <div class="modal-actions">
+            <button type="submit" id="app-settings-save">Save</button>
+            <button type="button" id="app-settings-cancel">Cancel</button>
+            <button type="button" id="app-settings-close">Close</button>
+          </div>
+        </form>
+      </dialog>
+
+
     </main>
+
+    <!-- Gallery / Settings Drawer (NOT a modal) -->
+    <section id="bottom-scrollable" class="drawer" hidden>
+      <div class="action-bar">
+        <div class="left-actions">
+          <button id="btn-download-selected" type="button">Download Selected</button>
+          <button id="btn-delete-selected" type="button">Delete Selected</button>
+        </div>
+        <div class="right-actions">
+          <label for="sortSelect">Sort:</label>
+          <select id="sortSelect">
+            <option value="new" selected>Newest first</option>
+            <option value="old">Oldest first</option>
+          </select>
+          <button id="btn-close-settings" class="close-btn" aria-label="Close panel" type="button">x</button>
+        </div>
+      </div>
+
+      <div id="gallery" class="gallery">
+  {% for item in images_data %}
+  <article class="image-card" data-image="{{ item.name }}" data-date="{{ item.date_added }}">
+    <img
+      src="{{ url_for('thumb', filename=item.name) }}?w=320"
+      srcset="
+        {{ url_for('thumb', filename=item.name) }}?w=240 240w,
+        {{ url_for('thumb', filename=item.name) }}?w=320 320w,
+        {{ url_for('thumb', filename=item.name) }}?w=480 480w,
+        {{ url_for('thumb', filename=item.name) }}?w=640 640w"
+      sizes="(max-width: 480px) 45vw, (max-width: 1024px) 30vw, 240px"
+      alt="{{ item.name }}"
+      loading="lazy"
+      decoding="async"
+      fetchpriority="low"
+      width="240"
+      height="240"
+      data-full="{{ url_for('serve_image', filename=item.name) }}"
+    />
+    <label class="select-row">
+      <input type="checkbox" class="select-checkbox" value="{{ item.name }}" />
+      <span>Select</span>
+    </label>
+    <div class="row">
+      <button class="btn-edit" data-image="{{ item.name }}" type="button">Edit</button>
+    </div>
+  </article>
+  {% endfor %}
+</div>
+
+    </section>
 
     <!-- Logs Modal -->
     <dialog id="logsModal" class="modal" aria-labelledby="logs-title">
@@ -127,9 +160,29 @@
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
         <div id="dropZone" role="button" tabindex="0" aria-label="Drag and drop images or press Enter to browse">
           <p>Drag & Drop Images Here or Click to Browse</p>
-          <input type="file" id="fileInput" name="file[]" multiple accept="image/*" hidden />
-          <button type="button" id="btn-browse">Browse</button>
+
+          <!-- Library (no capture => shows chooser) -->
+          <input type="file"
+                id="fileFromLibrary"
+                name="file[]"
+                multiple
+                accept="image/*,.heic,.heif,.jpg,.jpeg,.png,.gif,.webp"
+                hidden />
+
+          <!-- Camera (explicit capture) -->
+          <input type="file"
+                id="fileFromCamera"
+                name="file[]"
+                accept="image/*"
+                capture="environment"
+                hidden />
+
+          <div class="btn-row">
+            <button type="button" id="btn-choose-library">Choose from Gallery</button>
+            <button type="button" id="btn-take-photo">Take Photo</button>
+          </div>
         </div>
+
         <div id="previewContainer" class="previews"></div>
         <div class="form-actions">
           <button type="submit">Upload</button>

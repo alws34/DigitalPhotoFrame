@@ -96,7 +96,6 @@ img { display: block; max-width: 100%; }
   display: flex; align-items: center; justify-content: space-between;
   padding: 0 12px;
 }
-
 .welcome-message { font-weight: bold; color: #e0e0e0; font-size: 15px; }
 
 .hamburger {
@@ -110,8 +109,7 @@ img { display: block; max-width: 100%; }
 }
 .hamburger:focus { outline: 2px solid var(--accent); }
 
-/* Dropdown menu */
-/* ensure vertical stacking when menu is shown via display:flex */
+/* Dropdown menu (uses [hidden]) */
 .dropdown-menu {
   position: absolute;
   top: 50px;
@@ -120,34 +118,20 @@ img { display: block; max-width: 100%; }
   border: 1px solid #444;
   border-radius: 6px;
   padding: 10px;
-  display: none;           /* stays hidden by default */
-  flex-direction: column;  /* <- forces vertical layout */
-  gap: 8px;                /* space between items */
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   z-index: 1003;
 }
-
-/* make buttons behave like vertical list items */
-.dropdown-menu button {
-  display: block;      /* stack vertically */
-  width: 180px;        /* or 100% if you prefer */
-  text-align: left;
-  background-color: #444;
-  color: white;
-  border: none;
-  padding: 8px 12px;
-  border-radius: 4px;
-  cursor: pointer;
-}
-.dropdown-menu button:hover { background-color: #555; }
-
 .dropdown-menu[hidden] { display: none; }
 .dropdown-menu .menu-item {
-  text-align: left;
+  display: block;
   width: 180px;
+  text-align: left;
   background: #444;
-  color: white;
+  color: #fff;
   border: none;
-  padding: 8px 10px;
+  padding: 8px 12px;
   border-radius: 4px;
   cursor: pointer;
 }
@@ -175,7 +159,7 @@ img { display: block; max-width: 100%; }
 }
 #caption span { font-weight: bold; }
 
-/* Drawer (gallery/settings) */
+/* Drawer (gallery/settings) - remains, not a modal */
 .drawer {
   margin: 12px auto 0;
   padding: 60px 12px 12px;
@@ -186,6 +170,7 @@ img { display: block; max-width: 100%; }
   position: relative;
   border-radius: 12px 12px 0 0;
 }
+.drawer[hidden] { display: none; }
 .action-bar {
   position: absolute;
   top: 8px; right: 12px;
@@ -199,10 +184,10 @@ img { display: block; max-width: 100%; }
   padding: 4px 10px;
 }
 
-/* Gallery grid: auto-fit responsive tiles */
+/* Gallery grid: guarantee >=2 items per row on desktop; auto-fill otherwise */
 .gallery {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); /* desktop default */
   gap: 12px;
 }
 .image-card {
@@ -258,7 +243,7 @@ img { display: block; max-width: 100%; }
 }
 .form-group { display: grid; gap: 6px; }
 
-/* Drop zone and previews */
+/* Upload drop zone and previews */
 #dropZone {
   border: 2px dashed #aaa;
   padding: 16px;
@@ -267,17 +252,60 @@ img { display: block; max-width: 100%; }
   cursor: pointer;
 }
 .previews { display: grid; gap: 8px; margin-top: 8px; }
-.preview-item {
-  display: grid;
-  grid-template-columns: 80px 1fr;
-  gap: 8px;
-  align-items: center;
-}
-.preview-item img {
-  width: 80px; height: 80px; object-fit: cover; border-radius: 6px;
-}
+.image-preview { display: grid; gap: 8px; }
 
 /* Motion preference */
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
+}
+
+/* Mobile overrides live ONLY on small screens (desktop layout preserved) */
+@media (max-width: 480px) {
+  .top-bar { padding: 0 8px; }
+  .welcome-message { font-size: 14px; }
+  .dropdown-menu .menu-item { width: 160px; }
+
+  .frame { border-width: 1px; border-radius: 8px; }
+  .drawer { padding-top: 56px; border-radius: 8px 8px 0 0; }
+
+  /* Tighter grid for phones */
+.gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+.image-card img { aspect-ratio: 1 / 1; object-fit: cover; }
+
+  .image-card img { border-radius: 6px; }
+
+  .container { padding: 12px; }
+  .card { padding: 16px; }
+  .form input[type="text"],
+  .form input[type="password"],
+  .form input[type="email"] { padding: 12px; }
+  .btn { padding: 12px; }
+}
+/* Ensure upload modal content scrolls on mobile */
+#uploadModal .modal-content {
+  max-height: 90vh;
+  overflow: auto;
+}
+
+/* Make previews stack nicely on narrow screens */
+#previewContainer.previews {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+}
+@media (min-width: 640px) {
+  #previewContainer.previews {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+#previewContainer .image-preview table {
+  width: 100%;
+}
+#previewContainer .image-preview input {
+  width: 100%;
+  box-sizing: border-box;
 }
