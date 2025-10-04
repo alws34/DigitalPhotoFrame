@@ -60,7 +60,8 @@ class SettingsDialog(QtWidgets.QDialog):
         vm.start_local_stats(1000)
         vm.refresh_notifications()
         vm.scan_wifi()
-
+        self._set_version_label()
+        
     def _wrap_scroll(self, widget: QtWidgets.QWidget) -> QtWidgets.QScrollArea:
         """Make any tab scrollable to fit 800x480 without overlapping."""
         sc = QtWidgets.QScrollArea()
@@ -170,8 +171,18 @@ class SettingsDialog(QtWidgets.QDialog):
         self.url_lbl.setWordWrap(True)
         self.qr_lbl   = QtWidgets.QLabel()
         self.qr_lbl.setMinimumSize(160,160); self.qr_lbl.setAlignment(QtCore.Qt.AlignCenter)
+        
         for lbl in (self.ssid_lbl, self.url_lbl): lbl.setAlignment(QtCore.Qt.AlignCenter)
-        top_l.addWidget(self.ssid_lbl); top_l.addWidget(self.url_lbl); top_l.addWidget(self.qr_lbl)
+        top_l.addWidget(self.ssid_lbl)
+        top_l.addWidget(self.url_lbl)
+        top_l.addWidget(self.qr_lbl)
+
+        # NEW: version label under the QR
+        self.version_lbl = QtWidgets.QLabel("")
+        self.version_lbl.setAlignment(QtCore.Qt.AlignCenter)
+        self.version_lbl.setObjectName("version_lbl")
+        top_l.addWidget(self.version_lbl)
+
         lay.addWidget(top)
 
         # graphs
@@ -213,6 +224,16 @@ class SettingsDialog(QtWidgets.QDialog):
         lay.addLayout(row)
         lay.addStretch(1)
         return w
+
+    def _set_version_label(self) -> None:
+        try:
+            data = self.model.data if isinstance(self.model.data, dict) else {}
+            about = data.get("about", {}) if isinstance(data.get("about", {}), dict) else {}
+            ver = data.get("version") or about.get("version") or "N/A"
+            if hasattr(self, "version_lbl") and self.version_lbl is not None:
+                self.version_lbl.setText(f"Version: {ver}")
+        except Exception:
+            pass
 
     @QtCore.Slot(str,str)
     def _on_stats_changed(self, ssid: str, url: str):
@@ -902,6 +923,7 @@ class SettingsDialog(QtWidgets.QDialog):
                 val = w.text()
             set_by_path(self.model.data, path, val)
 
-        self.model.mirror_first_enabled_schedule_to_legacy()
-        self.model.save()
-        self._show_msg("Saved", "Settings saved.")
+            self.model.mirror_first_enabled_schedule_to_legacy()
+            self.model.save()
+            self._set_version_label()  # refresh Version label if it changed
+            self._show_msg("Saved", "Settings saved.")

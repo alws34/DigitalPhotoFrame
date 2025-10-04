@@ -46,7 +46,8 @@
   },
   "about": {
     "text": "Digital Photo Frame by alws34. This app streams images over HTTP (MJPEG), overlays time/date/weather, and runs on Raspberry Pi or desktop. Use the Settings dialog to connect Wi-Fi, tweak screen options, and manage the service.",
-    "image_path": ""
+    "image_path": "",
+    "version": "1.0.2"
   },
   "screen": {
     "orientation": 270,
