@@ -84,9 +84,15 @@ class MqttBridge:
         self.t_brightness_state = f"{self.base_topic}/{self.device_id}/brightness"
         self.t_service_state = f"{self.base_topic}/{self.device_id}/service_state"
         self.t_cmd_brightness = f"{self.base_topic}/{self.device_id}/cmd/brightness"
+        self.t_cmd_update   = f"{self.base_topic}/{self.device_id}/cmd/update"
+        self.t_cmd_restart  = f"{self.base_topic}/{self.device_id}/cmd/restart"
+        self.t_cmd_service  = f"{self.base_topic}/{self.device_id}/cmd/service"
+        self.t_cmd_screen   = f"{self.base_topic}/{self.device_id}/cmd/screen"
         
         self._ext_ip_cache = (None, 0) 
 
+        self._last_nonzero_brightness = 60 
+        
         self.client: Optional[MqttClient] = None
         self.connected = False
         self.stop_event = threading.Event()
@@ -159,6 +165,10 @@ class MqttBridge:
 
         # subscribe commands
         self.client.subscribe(self.t_cmd_brightness, qos=1)
+        self.client.subscribe(self.t_cmd_update, qos=1)
+        self.client.subscribe(self.t_cmd_restart, qos=1)
+        self.client.subscribe(self.t_cmd_service, qos=1)
+        self.client.subscribe(self.t_cmd_screen, qos=1) 
 
         if self.discovery:
             self._publish_discovery_all()
@@ -184,6 +194,23 @@ class MqttBridge:
             self._async(self._handle_cmd_restart)
         elif topic == self.t_cmd_service:
             self._async(self._handle_cmd_service, payload)
+        elif topic == self.t_cmd_screen:
+            self._async(self._handle_cmd_screen, payload)
+
+    def _handle_cmd_screen(self, payload: str):
+        target = (payload or "").strip().lower()
+        if target not in ("on", "off"):
+            self._log(f"Unknown screen payload: {payload!r}", logging.WARNING)
+            return
+
+        if target == "off":
+            # go to 0%
+            self._handle_cmd_brightness("0")
+        else:
+            # restore last nonzero brightness (fall back to 60)
+            pct = max(10, min(100, int(self._last_nonzero_brightness or 60)))
+            self._handle_cmd_brightness(str(pct))
+
 
     # ---------- worker ----------
     def _run(self):
@@ -232,15 +259,16 @@ class MqttBridge:
             pub(f"{dp}/sensor/{did}/{object_id}/config", cfg)
 
         # Controls
+        # Screen brightness as a slider 0..100
         number_brightness = {
             "name": "Screen Brightness",
             "unique_id": f"{did}_screen_brightness",
             "state_topic": self.t_brightness_state,
             "command_topic": self.t_cmd_brightness,
             "availability_topic": self.t_avail,
-            "min": 10,
+            "min": 0,                 # was 10; now 0 to allow OFF
             "max": 100,
-            "step": 10,
+            "step": 1,
             "unit_of_measurement": "%",
             "mode": "slider",
             "device": dev,
@@ -248,38 +276,56 @@ class MqttBridge:
         }
         pub(f"{dp}/number/{did}/screen_brightness/config", number_brightness)
 
-        # button_update = {
-        #     "name": "Pull Update",
-        #     "unique_id": f"{did}_pull_update",
-        #     "command_topic": self.t_cmd_update,
-        #     "availability_topic": self.t_avail,
-        #     "device": dev,
-        #     "icon": "mdi:update",
-        # }
-        # pub(f"{dp}/button/{did}/pull_update/config", button_update)
+        # NEW: screen power switch (maps to 0% / last nonzero)
+        switch_screen = {
+            "name": "Screen Power",
+            "unique_id": f"{did}_screen_power",
+            "state_topic": self.t_brightness_state,
+            "command_topic": self.t_cmd_screen,
+            "availability_topic": self.t_avail,
+            "payload_on": "on",
+            "payload_off": "off",
+            # Derive switch state from brightness %
+            "value_template": "{{ 'on' if (value|int(0)) > 0 else 'off' }}",
+            "device": dev,
+            "icon": "mdi:monitor"
+        }
+        pub(f"{dp}/switch/{did}/screen_power/config", switch_screen)
 
-        # button_restart = {
-        #     "name": "Restart Service",
-        #     "unique_id": f"{did}_restart_service",
-        #     "command_topic": self.t_cmd_restart,
-        #     "availability_topic": self.t_avail,
-        #     "device": dev,
-        #     "icon": "mdi:restart",
-        # }
-        # pub(f"{dp}/button/{did}/restart_service/config", button_restart)
+        # Optional: service switch / restart / pull update
+        button_update = {
+            "name": "Pull Update",
+            "unique_id": f"{did}_pull_update",
+            "command_topic": self.t_cmd_update,
+            "availability_topic": self.t_avail,
+            "device": dev,
+            "icon": "mdi:update",
+        }
+        pub(f"{dp}/button/{did}/pull_update/config", button_update)
 
-        # switch_service = {
-        #     "name": "Service",
-        #     "unique_id": f"{did}_service",
-        #     "state_topic": self.t_service_state,
-        #     "command_topic": self.t_cmd_service,
-        #     "availability_topic": self.t_avail,
-        #     "payload_on": "ON",
-        #     "payload_off": "OFF",
-        #     "device": dev,
-        #     "icon": "mdi:application-cog",
-        # }
-        # pub(f"{dp}/switch/{did}/service/config", switch_service)
+        button_restart = {
+            "name": "Restart Service",
+            "unique_id": f"{did}_restart_service",
+            "command_topic": self.t_cmd_restart,
+            "availability_topic": self.t_avail,
+            "device": dev,
+            "icon": "mdi:restart",
+        }
+        pub(f"{dp}/button/{did}/restart_service/config", button_restart)
+
+        switch_service = {
+            "name": "Service",
+            "unique_id": f"{did}_service",
+            "state_topic": self.t_service_state,
+            "command_topic": self.t_cmd_service,
+            "availability_topic": self.t_avail,
+            "payload_on": "ON",
+            "payload_off": "OFF",
+            "device": dev,
+            "icon": "mdi:application-cog",
+        }
+        pub(f"{dp}/switch/{did}/service/config", switch_service)
+
 
         # Sensors from state JSON
         sensor(
@@ -400,11 +446,17 @@ class MqttBridge:
         except Exception:
             self._log(f"Bad brightness payload: {payload!r}", logging.WARNING)
             return
-        pct = max(10, min(100, pct))
+
+        pct = max(0, min(100, pct))  # allow 0 now
+
+        # remember last nonzero brightness so we can restore after screen on
+        if pct > 0:
+            self._last_nonzero_brightness = pct
+
         try:
             sc = getattr(self.view, "screen", None)
             if sc and hasattr(sc, "set_brightness_percent"):
-                ok = bool(sc.set_brightness_percent(pct, allow_zero=False))
+                ok = bool(sc.set_brightness_percent(pct, allow_zero=True))  # allow zero
                 if not ok:
                     self._log("ScreenController refused brightness change.", logging.WARNING)
                 self._publish_brightness_state()
@@ -418,10 +470,11 @@ class MqttBridge:
             if not dev:
                 self._log("No backlight device found.", logging.ERROR)
                 return
-            _ = self._write_brightness_percent(dev, pct)
+            _ = self._write_brightness_percent(dev, pct, allow_zero=True)  # allow zero
             self._publish_brightness_state()
         except Exception as e:
             self._log(f"Fallback brightness write failed: {e}", logging.ERROR)
+
 
     # ---------- update / service ----------
     def _handle_cmd_update(self):
@@ -534,7 +587,7 @@ class MqttBridge:
         except Exception:
             return None, None
 
-    def _write_brightness_percent(self, dev, pct: int) -> bool:
+    def _write_brightness_percent(self, dev, pct: int, allow_zero: bool = False) -> bool:
         import os
         base = f"/sys/class/backlight/{dev}"
         try:
@@ -542,7 +595,10 @@ class MqttBridge:
                 maxb = int(f.read().strip())
         except Exception:
             return False
-        pct = max(10, min(100, int(pct)))
+        if allow_zero:
+            pct = max(0, min(100, int(pct)))
+        else:
+            pct = max(10, min(100, int(pct)))
         value = int(round(pct * maxb / 100.0))
         path = os.path.join(base, "brightness")
         try:
@@ -552,7 +608,8 @@ class MqttBridge:
         except PermissionError:
             cmd = f"echo {value} | sudo tee {path}"
             try:
-                subprocess.run(cmd, shell=True, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run(cmd, shell=True, check=True,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 return True
             except subprocess.CalledProcessError:
                 return False
