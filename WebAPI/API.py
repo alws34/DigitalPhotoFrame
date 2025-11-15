@@ -6,6 +6,7 @@ import hashlib
 from datetime import datetime
 from queue import Queue, Full, Empty
 from threading import Thread, Event
+from tqdm import tqdm
 
 import cv2
 from flask import (
@@ -37,7 +38,6 @@ from numpy import ndarray
 from iFrame import iFrame
 from concurrent.futures import ThreadPoolExecutor
 from WebAPI.WebUtils.auth_security import UserStore, ensure_csrf, validate_csrf, RateLimiter
-from tqdm import tqdm
 
 # ---------------------------------------------------------------------
 # HEIC support

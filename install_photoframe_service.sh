@@ -1,35 +1,54 @@
 #!/bin/bash
 set -euo pipefail
 
-# Paths
+###############################################################################
+# Config
+###############################################################################
+
 APP_DIR="/home/pi/Desktop/DigitalPhotoFrame"
-ROOT_DIR="/home/pi/Desktop/DigitalPhotoFrame"
-REQS_FILE="$ROOT_DIR/requirements.txt"
 VENV_DIR="$APP_DIR/env"
+REQS_FILE="$APP_DIR/requirements.txt"
 PYTHON="$VENV_DIR/bin/python"
 
-# System artifacts
 SERVICE_NAME="PhotoFrame_Desktop_App"
 SERVICE_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
-POLKIT_RULE="/etc/polkit-1/rules.d/45-allow-nm-wifi-for-pi.rules"
-POLKIT_SVC_RULE="/etc/polkit-1/rules.d/46-allow-photoframe-restart.rules"
+
+POLKIT_RULE_WIFI="/etc/polkit-1/rules.d/45-allow-nm-wifi-for-pi.rules"
+POLKIT_RULE_SVC="/etc/polkit-1/rules.d/46-allow-photoframe-restart.rules"
 UDEV_BACKLIGHT_RULE="/etc/udev/rules.d/90-backlight.rules"
 
-# Desktop helpers
 DESKTOP_DIR="/home/pi/Desktop"
 START_SH="$DESKTOP_DIR/StartPhotoFrame.sh"
 STOP_SH="$DESKTOP_DIR/StopPhotoFrame.sh"
 RESTART_SH="$DESKTOP_DIR/RestartPhotoFrame.sh"
 
-echo "[0/10] Installing NetworkManager + polkit (if missing)..."
+###############################################################################
+# 0. Basic checks
+###############################################################################
+
+if [ ! -d "$APP_DIR" ]; then
+  echo "ERROR: App directory not found at $APP_DIR"
+  exit 1
+fi
+
+if [ ! -f "$REQS_FILE" ]; then
+  echo "ERROR: requirements.txt not found at $REQS_FILE"
+  exit 1
+fi
+
+###############################################################################
+# 0.x NetworkManager + polkit
+###############################################################################
+
+echo "[0/10] Installing NetworkManager + polkit..."
 sudo apt-get update
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y network-manager policykit-1
 
 echo "[0.1/10] Enabling NetworkManager..."
-sudo systemctl enable --now NetworkManager
+sudo systemctl enable --now NetworkManager || true
 
-echo "[0.2/10] Polkit rule for 'netdev' Wi-Fi control..."
-sudo tee "$POLKIT_RULE" >/dev/null <<'EOF'
+echo "[0.2/10] Polkit rule for netdev Wi-Fi control..."
+sudo tee "$POLKIT_RULE_WIFI" >/dev/null <<'EOF'
 /* Allow Wi-Fi scan/connect and system connection changes for netdev group */
 polkit.addRule(function(action, subject) {
   if (subject.isInGroup("netdev")) {
@@ -46,13 +65,17 @@ polkit.addRule(function(action, subject) {
 });
 EOF
 
-echo "[0.21/10] Adding 'pi' to netdev and video groups..."
+echo "[0.3/10] Adding 'pi' to netdev and video groups..."
 sudo usermod -aG netdev pi
 sudo usermod -aG video pi
-echo "Note: new group membership applies on next login."
+echo "    Note: group changes require a new login."
 
-echo "[0.3/10] Reloading polkit..."
+echo "[0.4/10] Reloading polkit..."
 sudo systemctl restart polkit || true
+
+###############################################################################
+# 1. OS packages
+###############################################################################
 
 echo "[1/10] Installing OS packages required by the app..."
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
@@ -67,6 +90,10 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
   qt6-wayland qt6-qpa-plugins qt6-gtk-platformtheme \
   fonts-liberation
 
+###############################################################################
+# 1.2 Backlight udev rule
+###############################################################################
+
 echo "[1.2/10] Udev rule for backlight write access..."
 sudo tee "$UDEV_BACKLIGHT_RULE" >/dev/null <<'EOF'
 # Make backlight writable by the 'video' group for non-root user sessions
@@ -77,18 +104,23 @@ echo "[1.3/10] Reloading udev..."
 sudo udevadm control --reload
 sudo udevadm trigger --subsystem-match=backlight || true
 
+###############################################################################
+# 2. Virtualenv
+###############################################################################
+
 echo "[2/10] Creating virtual environment at $VENV_DIR ..."
+rm -rf "$VENV_DIR"
 python3 -m venv "$VENV_DIR"
 
 echo "[3/10] Upgrading pip/setuptools/wheel..."
 "$VENV_DIR/bin/pip" install --upgrade pip setuptools wheel
 
 echo "[4/10] Installing Python dependencies from $REQS_FILE ..."
-if [ ! -f "$REQS_FILE" ]; then
-  echo "requirements.txt not found at $REQS_FILE" >&2
-  exit 1
-fi
 "$VENV_DIR/bin/pip" install -r "$REQS_FILE"
+
+###############################################################################
+# 5. systemd service
+###############################################################################
 
 echo "[5/10] Writing system service to $SERVICE_PATH ..."
 sudo tee "$SERVICE_PATH" >/dev/null <<'EOF'
@@ -114,12 +146,13 @@ Restart=always
 RestartSec=3
 TimeoutStartSec=0
 
-# GUI env for Wayland
+# GUI env for Wayland + Xwayland fallback
 Environment=HOME=/home/pi
 Environment=XDG_RUNTIME_DIR=/run/user/1000
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
 Environment=WAYLAND_DISPLAY=wayland-0
-# Prefer Wayland, allow fallback to X11 if needed
+Environment=DISPLAY=:0
+Environment=XDG_SESSION_TYPE=wayland
 Environment=QT_QPA_PLATFORM=wayland;xcb
 
 # Theme safety + DPI
@@ -133,7 +166,6 @@ SyslogIdentifier=photoframe
 StandardOutput=journal
 StandardError=journal
 
-# Relaxed sandbox (only if you need it)
 NoNewPrivileges=no
 ProtectSystem=off
 ProtectHome=no
@@ -145,8 +177,12 @@ UMask=002
 WantedBy=graphical.target
 EOF
 
+###############################################################################
+# 5.1 Polkit rule for service control
+###############################################################################
+
 echo "[5.1/10] Polkit rule: allow pi to manage ONLY this service..."
-sudo tee "$POLKIT_SVC_RULE" >/dev/null <<'EOF'
+sudo tee "$POLKIT_RULE_SVC" >/dev/null <<'EOF'
 /* Allow pi to manage ONLY PhotoFrame_Desktop_App.service */
 polkit.addRule(function(action, subject) {
   if (action.id == "org.freedesktop.systemd1.manage-units" &&
@@ -165,31 +201,42 @@ EOF
 echo "[5.2/10] Reloading polkit..."
 sudo systemctl restart polkit || true
 
+###############################################################################
+# 6. Enable service
+###############################################################################
+
 echo "[6/10] Reloading daemon, enabling and starting service..."
 sudo systemctl daemon-reload
 sudo systemctl enable --now "$SERVICE_NAME"
 
-echo "[7/10] Status:"
-sudo systemctl status "$SERVICE_NAME" --no-pager -l || true
+echo "[7/10] Status (one-shot):"
+sudo systemctl status "$SERVICE_NAME" --no-pager -l | sed -n '1,20p' || true
 
-echo "[8/10] Quick runtime self-tests (no sudo)..."
+###############################################################################
+# 8. Diagnostics (optional)
+###############################################################################
+
+echo "[8/10] Quick runtime diagnostics..."
+
 # Wi-Fi nmcli smoke test
-IFACE=$(nmcli -t -f DEVICE,TYPE device | awk -F: '$2=="wifi"{print $1; exit}')
+IFACE=$(nmcli -t -f DEVICE,TYPE device | awk -F: '$2=="wifi"{print $1; exit}' || true)
 if [ -n "$IFACE" ]; then
   echo " - Wi-Fi interface: $IFACE"
-  nmcli device wifi rescan ifname "$IFACE" || echo "!!! rescan failed (polkit or group not active yet?)"
+  nmcli device wifi rescan ifname "$IFACE" || echo "   !!! rescan failed (polkit or group not active yet?)"
   nmcli -t -f IN-USE,SSID,SECURITY,SIGNAL device wifi list ifname "$IFACE" | head -n 5 || true
 else
   echo " - No Wi-Fi interface detected."
 fi
 
 # Wayland presence
-if [ -n "${WAYLAND_DISPLAY:-}" ] || [ -S /run/user/1000/wayland-0 ]; then
-  echo " - Wayland detected, wlr-randr: $(command -v wlr-randr || echo 'no')"
+if [ -S /run/user/1000/wayland-0 ]; then
+  echo " - Wayland detected at /run/user/1000/wayland-0"
   if command -v wlr-randr >/dev/null 2>&1; then
     echo "   Outputs (best effort):"
     wlr-randr || true
   fi
+else
+  echo " - No Wayland socket detected (yet). If you just installed, reboot and log in as pi."
 fi
 
 # Backlight
@@ -199,6 +246,10 @@ if ls /sys/class/backlight/*/brightness >/dev/null 2>&1; then
 else
   echo " - No /sys/class/backlight device (likely external HDMI/DP)."
 fi
+
+###############################################################################
+# 9. Desktop helper scripts
+###############################################################################
 
 echo "[9/10] Creating Desktop control scripts..."
 mkdir -p "$DESKTOP_DIR"
@@ -229,18 +280,20 @@ EORESTART
 
 chmod +x "$START_SH" "$STOP_SH" "$RESTART_SH"
 
+###############################################################################
+# 10. Done
+###############################################################################
+
 echo
-echo "[10/10] Done."
+echo "[10/10] Install finished."
 echo "Manage with:"
 echo "  sudo systemctl status  $SERVICE_NAME"
 echo "  sudo systemctl restart $SERVICE_NAME"
 echo "  sudo systemctl stop    $SERVICE_NAME"
 echo
-echo "Desktop scripts created:"
+echo "Desktop scripts:"
 echo "  $START_SH"
 echo "  $STOP_SH"
 echo "  $RESTART_SH"
 echo
-echo "Notes:"
-echo " - Adding 'pi' to netdev/video requires a new login to be effective."
-echo " - Service is bound to graphical.target and user@1000.service for stable GUI startup."
+echo "If you just added pi to netdev/video, reboot once to apply group changes."
