@@ -12,3 +12,4 @@ qrcode[pil]
 PySide6
 pyheif
 tqdm
+pillow-heif
