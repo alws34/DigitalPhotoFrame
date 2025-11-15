@@ -1,15 +1,80 @@
 // ==========================================================
 // scripts.js (drop-in replacement)
-// - Single DOMContentLoaded block
-// - <dialog> modals use showModal()/close() with Escape handling
-// - Hamburger menu uses [hidden] consistently with ARIA
-// - Robust SSE with exponential backoff
-// - Drag-and-drop previews with object URLs (revoked to avoid leaks)
-// - Drawer stays for image editing (not a modal); grid guarantees >=2 cols on desktop
-// - Edit modal now shows the image being edited in #editImagePreview
+// - Theme toggle (dark/light) with Material-style chips
+//   * Dark is default
+//   * Uses document.documentElement[data-theme]
+//   * Persists to localStorage ("ui_theme")
+//   * Also surfaces in /settings as "ui_theme"
+// - Existing features unchanged:
+//   * CSRF helpers
+//   * <dialog> modals
+//   * Hamburger menu + dropdown
+//   * SSE metadata stream
+//   * Upload + HEIC conversion
+//   * Dynamic settings form
+//   * Edit metadata modal with preview
 // ==========================================================
 
+// ---------- Theme helpers ----------
+
+const THEME_STORAGE_KEY = "ui_theme";
+
+function applyTheme(theme) {
+  const root = document.documentElement;
+  const value = theme === "light" ? "light" : "dark";
+
+  root.setAttribute("data-theme", value);
+  try {
+    window.localStorage.setItem(THEME_STORAGE_KEY, value);
+  } catch (_) {
+    // ignore
+  }
+
+  const chips = document.querySelectorAll(".theme-chip");
+  chips.forEach((chip) => {
+    const target = chip.dataset.theme;
+    const isActive = target === value;
+    chip.classList.toggle("is-active", isActive);
+    chip.setAttribute("aria-pressed", isActive ? "true" : "false");
+  });
+}
+
+// Set initial theme as early as possible (before DOMContentLoaded)
+(function bootTheme() {
+  let initial = "dark";
+  try {
+    const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
+    if (stored === "light" || stored === "dark") {
+      initial = stored;
+    }
+  } catch (_) {
+    // ignore
+  }
+  document.documentElement.setAttribute("data-theme", initial);
+})();
+
+function initThemeToggle() {
+  const container = document.querySelector(".theme-toggle");
+  if (!container) {
+    // No toggle on this page (e.g. login) but theme still applied via bootTheme
+    return;
+  }
+
+  // Sync toggle UI to current theme
+  const current =
+    document.documentElement.getAttribute("data-theme") || "dark";
+  applyTheme(current);
+
+  container.addEventListener("click", (e) => {
+    const btn = e.target.closest(".theme-chip");
+    if (!btn) return;
+    const next = btn.dataset.theme === "light" ? "light" : "dark";
+    applyTheme(next);
+  });
+}
+
 // ---------- CSRF helpers ----------
+
 function getCsrf() {
   return (
     document.querySelector('meta[name="csrf-token"]')?.content ||
@@ -33,8 +98,13 @@ function csrfFetch(url, options = {}) {
 }
 
 // ---------- Generic utils ----------
-function $(sel, root = document) { return root.querySelector(sel); }
-function $all(sel, root = document) { return Array.from(root.querySelectorAll(sel)); }
+
+function $(sel, root = document) {
+  return root.querySelector(sel);
+}
+function $all(sel, root = document) {
+  return Array.from(root.querySelectorAll(sel));
+}
 function onClick(sel, handler) {
   document.addEventListener("click", (e) => {
     const el = e.target.closest(sel);
@@ -45,17 +115,27 @@ function onClick(sel, handler) {
   });
 }
 function trapEscape(closeFn) {
-  return (e) => { if (e.key === "Escape") closeFn(); };
+  return (e) => {
+    if (e.key === "Escape") closeFn();
+  };
 }
 function safeShowDialog(d) {
   if (!d) return;
-  try { d.showModal(); }
-  catch (_) { d.removeAttribute("hidden"); d.style.display = "block"; }
+  try {
+    d.showModal();
+  } catch (_) {
+    d.removeAttribute("hidden");
+    d.style.display = "block";
+  }
 }
 function safeCloseDialog(d) {
   if (!d) return;
-  try { d.close(); }
-  catch (_) { d.setAttribute("hidden", ""); d.style.display = "none"; }
+  try {
+    d.close();
+  } catch (_) {
+    d.setAttribute("hidden", "");
+    d.style.display = "none";
+  }
 }
 function formatDate(isoDateStr) {
   if (!isoDateStr) return "";
@@ -64,6 +144,7 @@ function formatDate(isoDateStr) {
 }
 
 // ---------- Auth / simple actions ----------
+
 function logout() {
   const form = addCsrfToForm(document.createElement("form"));
   form.method = "POST";
@@ -86,6 +167,7 @@ function deleteImage(imageName) {
 }
 
 // ---------- Top menu (hamburger) ----------
+
 function initMenu() {
   const menu = $("#dropdown-menu");
   const hamburger = $("#hamburger");
@@ -115,10 +197,13 @@ function initMenu() {
     }
   });
 
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideMenu(); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") hideMenu();
+  });
 }
 
 // ---------- Drawer (Edit Images panel - NOT a modal) ----------
+
 function showDrawer(panel) {
   panel.removeAttribute("hidden");
   panel.style.display = "";
@@ -138,7 +223,8 @@ function hideDrawer(panel) {
 function toggleSettingsDrawer() {
   const panel = document.getElementById("bottom-scrollable");
   if (!panel) return;
-  const isHidden = panel.hasAttribute("hidden") || panel.style.display === "none";
+  const isHidden =
+    panel.hasAttribute("hidden") || panel.style.display === "none";
   isHidden ? showDrawer(panel) : hideDrawer(panel);
 }
 function initDrawer() {
@@ -147,6 +233,7 @@ function initDrawer() {
 }
 
 // ---------- Logs modal (<dialog>) ----------
+
 function initLogsModal() {
   const dlg = $("#logsModal");
   if (!dlg) return;
@@ -161,14 +248,15 @@ function initLogsModal() {
 
   onClick("#btn-logs", open);
   onClick("#logs-close", close);
-  onClick("#btn-download-logs", () => window.location.href = "/download_logs");
+  onClick("#btn-download-logs", () => (window.location.href = "/download_logs"));
   onClick("#btn-clear-logs", () => {
     csrfFetch("/clear_logs", { method: "POST" })
       .then(async (r) => {
         const data = await r.json().catch(() => ({}));
         if (!r.ok) throw new Error(data.error || "Failed to clear logs");
         alert(data.message || "Logs cleared");
-        const t = $("#logText"); if (t) t.value = "";
+        const t = $("#logText");
+        if (t) t.value = "";
       })
       .catch((e) => alert(e.message));
   });
@@ -185,15 +273,17 @@ function fetchLogs() {
       const lines = data.logs || [];
       if (t) t.value = lines.length ? lines.join("\n") : "(no log lines found)";
     })
-    .catch((err) => { if (t) t.value = `Error: ${err.message}`; });
+    .catch((err) => {
+      if (t) t.value = `Error: ${err.message}`;
+    });
 }
 
-// ---------- App settings modal (<dialog>) ----------
 // ---------- Settings dynamic form renderer ----------
+
 function toName(pathParts) {
   if (!pathParts.length) return "";
   const [head, ...rest] = pathParts;
-  return head + rest.map(p => `[${p}]`).join("");
+  return head + rest.map((p) => `[${p}]`).join("");
 }
 function coerceType(val) {
   if (typeof val === "boolean") return "boolean";
@@ -348,6 +438,7 @@ function renderSettingsObject(container, obj, path = []) {
     }
   });
 }
+
 async function populateSettingsForm() {
   const container = document.getElementById("settingsDynamicContainer");
   const form = document.getElementById("appSettingsForm");
@@ -357,21 +448,85 @@ async function populateSettingsForm() {
 
   let data = {};
   try {
-    const res = await fetch("/settings", { headers: { "X-Requested-With": "XMLHttpRequest" } });
+    const res = await fetch("/settings", {
+      headers: { "X-Requested-With": "XMLHttpRequest" },
+    });
     data = await res.json();
-    if (!res.ok || !data || typeof data !== "object") throw new Error("Failed to load settings");
+    if (!res.ok || !data || typeof data !== "object") {
+      throw new Error("Failed to load settings");
+    }
   } catch (e) {
     data = {
       image_dir: "Images",
       image_quality_encoding: 80,
-      backend_configs: { stream_width: 1920, stream_height: 1080, idle_fps: 5, server_port: 5001, host: "0.0.0.0" },
+      backend_configs: {
+        stream_width: 1920,
+        stream_height: 1080,
+        idle_fps: 5,
+        server_port: 5001,
+        host: "0.0.0.0",
+      },
       weather_api_key: "",
-      location_key: ""
+      location_key: "",
     };
   }
 
+  // Inject theme into the settings object so it is persisted with all other settings
+  if (
+    !Object.prototype.hasOwnProperty.call(data, "ui_theme") ||
+    (data.ui_theme !== "light" && data.ui_theme !== "dark")
+  ) {
+    let fromStorage = "dark";
+    try {
+      const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
+      if (stored === "light" || stored === "dark") {
+        fromStorage = stored;
+      }
+    } catch (_) {
+      // ignore
+    }
+    data.ui_theme =
+      document.documentElement.getAttribute("data-theme") || fromStorage;
+  } else {
+    // If server already has a theme, apply it
+    applyTheme(data.ui_theme);
+  }
+
   renderSettingsObject(container, data);
+
+  // Optionally convert ui_theme text input into a select with Light/Dark
+  const uiThemeInput = container.querySelector('input[name="ui_theme"]');
+  if (uiThemeInput) {
+    const currentVal =
+      uiThemeInput.value === "light" || uiThemeInput.value === "dark"
+        ? uiThemeInput.value
+        : "dark";
+    const select = document.createElement("select");
+    select.name = uiThemeInput.name;
+    select.id = uiThemeInput.id;
+
+    const optDark = document.createElement("option");
+    optDark.value = "dark";
+    optDark.textContent = "Dark";
+    const optLight = document.createElement("option");
+    optLight.value = "light";
+    optLight.textContent = "Light";
+
+    select.appendChild(optDark);
+    select.appendChild(optLight);
+    select.value = currentVal;
+
+    const wrapper = uiThemeInput.closest(".form-group");
+    if (wrapper) {
+      const label = wrapper.querySelector("label");
+      if (label) label.textContent = "UI Theme";
+      uiThemeInput.replaceWith(select);
+    } else {
+      uiThemeInput.replaceWith(select);
+    }
+  }
 }
+
 function initAppSettingsModal() {
   const dlg = $("#appSettingsModal");
   const form = $("#appSettingsForm");
@@ -381,7 +536,9 @@ function initAppSettingsModal() {
     await populateSettingsForm();
     safeShowDialog(dlg);
   }
-  function close() { safeCloseDialog(dlg); }
+  function close() {
+    safeCloseDialog(dlg);
+  }
 
   onClick("#btn-app-settings", open);
   onClick("#app-settings-cancel", close);
@@ -391,12 +548,16 @@ function initAppSettingsModal() {
   if (form) {
     form.addEventListener("submit", function () {
       const saveBtn = $("#app-settings-save");
-      if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = "Saving..."; }
+      if (saveBtn) {
+        saveBtn.disabled = true;
+        saveBtn.textContent = "Saving...";
+      }
     });
   }
 }
 
 // ---------- Edit metadata modal (<dialog>) ----------
+
 function initEditModal() {
   const dlg = $("#editModal");
   const editForm = $("#editForm");
@@ -408,11 +569,9 @@ function initEditModal() {
   function showPreviewPlaceholder(imageName) {
     const wrapper = preview.parentElement || dlg;
 
-    // Hide the <img> element
     preview.style.display = "none";
     preview.removeAttribute("src");
 
-    // Reuse or create a simple placeholder div
     let placeholder = wrapper.querySelector(".edit-preview-fallback");
     if (!placeholder) {
       placeholder = document.createElement("div");
@@ -445,14 +604,12 @@ function initEditModal() {
     preview.src = url;
     preview.alt = alt || "";
 
-    // If the browser cannot display the resulting image, fall back to placeholder
     preview.onerror = function () {
       showPreviewPlaceholder(alt);
     };
   }
 
   async function openWith(imageName, fullUrl) {
-    // Clean up any previous blob URL
     if (previewObjUrl) {
       try {
         URL.revokeObjectURL(previewObjUrl);
@@ -472,7 +629,6 @@ function initEditModal() {
       showPreviewPlaceholder(imageName);
     }
 
-    // Load metadata from the server as before
     fetch(`/image_metadata?filename=${encodeURIComponent(imageName)}`)
       .then((res) => res.json())
       .then((data) => {
@@ -484,7 +640,9 @@ function initEditModal() {
         $("#editImageName").value = imageName;
         $("#editCaption").value = data.caption || "";
         $("#editUploader").value = data.uploader || "";
-        $("#editDateAdded").value = data.date_added ? formatDate(data.date_added) : "";
+        $("#editDateAdded").value = data.date_added
+          ? formatDate(data.date_added)
+          : "";
         $("#editHash").value = data.hash || "";
 
         safeShowDialog(dlg);
@@ -513,7 +671,6 @@ function initEditModal() {
       fullUrl = `/images/${encodeURIComponent(name)}`;
     }
 
-    // Fire-and-forget; async handles preview + metadata
     openWith(name, fullUrl);
   });
 
@@ -583,13 +740,16 @@ async function createPreviewUrlForExistingImage(fileName, fullUrl) {
     }
   }
 
-  console.warn("HEIC preview: no PNG/JPEG sibling found, using original URL; browser may not show it.");
+  console.warn(
+    "HEIC preview: no PNG/JPEG sibling found, using original URL; browser may not show it."
+  );
   return fullUrl;
 }
 
-
-
 // ---------- Upload modal (<dialog>) ----------
+
+let stagedFiles = [];
+
 function initUploadModal() {
   const dlg = $("#uploadModal");
   const previews = $("#previewContainer");
@@ -605,7 +765,7 @@ function initUploadModal() {
     el.style.fontSize = "12px";
     el.style.opacity = "0.8";
     el.style.margin = "8px 0";
-    const ok = (typeof window.heic2any === "function");
+    const ok = typeof window.heic2any === "function";
     el.textContent = ok
       ? "HEIC conversion: available (will preview & upload as JPEG)"
       : "HEIC conversion: unavailable (no preview; original HEIC will upload)";
@@ -617,7 +777,7 @@ function initUploadModal() {
       const existing = $("#heicStatus");
       if (existing) {
         existing.textContent =
-          (typeof window.heic2any === "function")
+          typeof window.heic2any === "function"
             ? "HEIC conversion: available (will preview & upload as JPEG)"
             : "HEIC conversion: unavailable (no preview; original HEIC will upload)";
       } else {
@@ -629,7 +789,9 @@ function initUploadModal() {
 
   function close() {
     $all("#previewContainer .image-preview img[data-objurl]").forEach((img) => {
-      try { URL.revokeObjectURL(img.getAttribute("data-objurl")); } catch (_) { }
+      try {
+        URL.revokeObjectURL(img.getAttribute("data-objurl"));
+      } catch (_) {}
     });
     if (previews) previews.innerHTML = "";
     if (fileFromLibrary) fileFromLibrary.value = "";
@@ -661,19 +823,26 @@ function initUploadModal() {
     }
   });
 
-  if (fileFromLibrary) fileFromLibrary.addEventListener("change", previewFiles);
+  if (fileFromLibrary)
+    fileFromLibrary.addEventListener("change", previewFiles);
   if (fileFromCamera) fileFromCamera.addEventListener("change", previewFiles);
 
   const dropZone = $("#dropZone");
   if (dropZone) {
-    dropZone.addEventListener("dragover", (e) => e.preventDefault(), { passive: false });
+    dropZone.addEventListener(
+      "dragover",
+      (e) => e.preventDefault(),
+      { passive: false }
+    );
     dropZone.addEventListener("drop", (e) => {
       e.preventDefault();
       if (fileFromLibrary && e.dataTransfer?.files?.length) {
         previewFiles(e.dataTransfer.files);
       }
     });
-    dropZone.addEventListener("click", () => fileFromLibrary && fileFromLibrary.click());
+    dropZone.addEventListener("click", () => {
+      fileFromLibrary && fileFromLibrary.click();
+    });
     dropZone.addEventListener("keydown", (e) => {
       if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
@@ -697,22 +866,35 @@ function initUploadModal() {
         if (!f) continue;
         const block = blocks[i];
         fd.append("file[]", f, f.name);
-        fd.append(`uploader_${i}`, (block.querySelector(`input[name="uploader_${i}"]`)?.value || "").trim());
-        fd.append(`caption_${i}`, (block.querySelector(`input[name="caption_${i}"]`)?.value || "").trim());
+        fd.append(
+          `uploader_${i}`,
+          (block.querySelector(`input[name="uploader_${i}"]`)?.value || "").trim()
+        );
+        fd.append(
+          `caption_${i}`,
+          (block.querySelector(`input[name="caption_${i}"]`)?.value || "").trim()
+        );
       }
 
       csrfFetch("/upload_with_metadata", { method: "POST", body: fd })
         .then(async (res) => {
           const data = await res.json().catch(() => ({}));
-          if (!res.ok) throw new Error(data.error || data.message || `Upload failed (${res.status})`);
+          if (!res.ok)
+            throw new Error(
+              data.error || data.message || `Upload failed (${res.status})`
+            );
           return data;
         })
         .then((data) => {
           alert(data.message || "Upload successful!");
           stagedFiles = [];
-          $all("#previewContainer .image-preview img[data-objurl]").forEach((img) => {
-            try { URL.revokeObjectURL(img.getAttribute("data-objurl")); } catch (_) { }
-          });
+          $all("#previewContainer .image-preview img[data-objurl]").forEach(
+            (img) => {
+              try {
+                URL.revokeObjectURL(img.getAttribute("data-objurl"));
+              } catch (_) {}
+            }
+          );
           $("#previewContainer").innerHTML = "";
           $("#fileFromLibrary") && ($("#fileFromLibrary").value = "");
           $("#fileFromCamera") && ($("#fileFromCamera").value = "");
@@ -727,55 +909,32 @@ function initUploadModal() {
   }
 }
 
-function initGallerySort() {
-  const select = $("#sortSelect");
-  const container = $("#gallery");
-  if (!select || !container) return;
-
-  function parseDate(el) {
-    const d = new Date(el.dataset.date || 0);
-    const t = d.getTime();
-    return Number.isFinite(t) ? t : 0;
-  }
-
-  function applySort() {
-    const cards = $all(".image-card", container);
-    cards.sort((a, b) => {
-      const ad = parseDate(a);
-      const bd = parseDate(b);
-      return select.value === "new" ? bd - ad : ad - bd;
-    });
-    cards.forEach((c) => container.appendChild(c));
-  }
-
-  select.addEventListener("change", applySort);
-  applySort();
-
-  document.addEventListener("click", (e) => {
-    if (e.target.closest("#btn-edit-images")) {
-      setTimeout(applySort, 0);
-    }
-  });
-}
-
-// ---------- HEIC/HEIF detection & conversion ----------
 function isHeicLike(file) {
   const name = (file.name || "").toLowerCase();
   const t = (file.type || "").toLowerCase();
   return /\.heic$|\.heif$/.test(name) || /heic|heif/.test(t);
 }
 function canDisplayInImg(mime, name) {
-  const ok = new Set(["image/jpeg", "image/png", "image/gif", "image/webp", "image/bmp"]);
+  const ok = new Set([
+    "image/jpeg",
+    "image/png",
+    "image/gif",
+    "image/webp",
+    "image/bmp",
+  ]);
   if (ok.has((mime || "").toLowerCase())) return true;
   const ext = (name || "").toLowerCase();
   return /\.(jpe?g|png|gif|webp|bmp)$/.test(ext);
 }
 
 async function convertHeicToJpeg(file, quality = 0.85) {
-  // Try client-side HEIC -> JPEG if heic2any is available
   if (typeof window.heic2any === "function") {
     try {
-      const out = await window.heic2any({ blob: file, toType: "image/jpeg", quality });
+      const out = await window.heic2any({
+        blob: file,
+        toType: "image/jpeg",
+        quality,
+      });
       const blob = Array.isArray(out) ? out[0] : out;
       const newName = file.name.replace(/\.(heic|heif)$/i, "") + ".jpg";
       return new File([blob], newName, {
@@ -783,15 +942,14 @@ async function convertHeicToJpeg(file, quality = 0.85) {
         lastModified: Date.now(),
       });
     } catch (e) {
-      console.warn("Client HEIC preview conversion failed; uploading original file instead", e);
-      // Just fall through to "no preview" path
+      console.warn(
+        "Client HEIC preview conversion failed; uploading original file instead",
+        e
+      );
     }
   }
   throw new Error("HEIC preview not supported in this browser");
 }
-
-
-let stagedFiles = [];
 
 async function previewFiles(filesOverride) {
   const container = $("#previewContainer");
@@ -800,7 +958,9 @@ async function previewFiles(filesOverride) {
   if (!container) return;
 
   $all("#previewContainer .image-preview img[data-objurl]").forEach((img) => {
-    try { URL.revokeObjectURL(img.getAttribute("data-objurl")); } catch (_) { }
+    try {
+      URL.revokeObjectURL(img.getAttribute("data-objurl"));
+    } catch (_) {}
   });
 
   container.innerHTML = "";
@@ -880,6 +1040,7 @@ async function previewFiles(filesOverride) {
 }
 
 // ---------- Bulk actions ----------
+
 function getSelectedFiles() {
   return $all(".select-checkbox:checked").map((cb) => cb.value);
 }
@@ -902,7 +1063,8 @@ function downloadSelected() {
 function deleteSelected() {
   const selected = getSelectedFiles();
   if (!selected.length) return alert("No images selected.");
-  if (!confirm(`Are you sure you want to delete ${selected.length} image(s)?`)) return;
+  if (!confirm(`Are you sure you want to delete ${selected.length} image(s)?`))
+    return;
   const form = addCsrfToForm(document.createElement("form"));
   form.method = "POST";
   form.action = "/delete_selected";
@@ -922,6 +1084,7 @@ function initBulkActions() {
 }
 
 // ---------- Metadata live updates (SSE with backoff) ----------
+
 function initMetadataStream() {
   const url = "/metadata_stream";
   let es = null;
@@ -940,11 +1103,13 @@ function initMetadataStream() {
         $("#dateField").textContent = data.date_added
           ? new Date(data.date_added).toLocaleDateString("en-GB")
           : "Unknown";
-      } catch (_) { }
+      } catch (_) {}
     };
 
     es.onerror = () => {
-      try { es.close(); } catch (_) { }
+      try {
+        es.close();
+      } catch (_) {}
       attempt = Math.min(attempt + 1, 6);
       const delay = Math.min(500 * attempt, maxDelay);
       setTimeout(connect, delay);
@@ -952,15 +1117,110 @@ function initMetadataStream() {
   }
 
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible" && (!es || es.readyState === 2)) connect();
+    if (
+      document.visibilityState === "visible" &&
+      (!es || es.readyState === 2)
+    )
+      connect();
   });
-  window.addEventListener("beforeunload", () => { try { es && es.close(); } catch (_) { } });
+  window.addEventListener("beforeunload", () => {
+    try {
+      es && es.close();
+    } catch (_) {}
+  });
 
   connect();
 }
 
+// ---------- Gallery sort ----------
+
+function initGallerySort() {
+  const select = $("#sortSelect");
+  const container = $("#gallery");
+  if (!select || !container) return;
+
+  function parseDate(el) {
+    const d = new Date(el.dataset.date || 0);
+    const t = d.getTime();
+    return Number.isFinite(t) ? t : 0;
+  }
+
+  function applySort() {
+    const cards = $all(".image-card", container);
+    cards.sort((a, b) => {
+      const ad = parseDate(a);
+      const bd = parseDate(b);
+      return select.value === "new" ? bd - ad : ad - bd;
+    });
+    cards.forEach((c) => container.appendChild(c));
+  }
+
+  select.addEventListener("change", applySort);
+  applySort();
+
+  document.addEventListener("click", (e) => {
+    if (e.target.closest("#btn-edit-images")) {
+      setTimeout(applySort, 0);
+    }
+  });
+}
+
+// ---------- Signup password helper (kept as-is) ----------
+
+(function () {
+  var box = document.getElementById("signupBox");
+  if (box && box.dataset.hadError === "true") {
+    box.classList.remove("shake");
+    void box.offsetWidth;
+    box.classList.add("shake");
+  }
+
+  var pw = document.getElementById("password");
+  var btn = document.getElementById("submitBtn");
+  var ruleLength = document.getElementById("ruleLength");
+  var ruleClasses = document.getElementById("ruleClasses");
+
+  if (!pw || !btn || !ruleLength || !ruleClasses) return;
+
+  function classify(p) {
+    var lower = /[a-z]/.test(p);
+    var upper = /[A-Z]/.test(p);
+    var digit = /[0-9]/.test(p);
+    var symbol = /[!@#$%^&*()_+\-=\[\]{};':",.<>\/?\\|]/.test(p);
+    var classes =
+      (lower ? 1 : 0) + (upper ? 1 : 0) + (digit ? 1 : 0) + (symbol ? 1 : 0);
+    return { lengthOK: p.length >= 10, classesOK: classes >= 3 };
+  }
+
+  function update() {
+    var v = pw.value || "";
+    var res = classify(v);
+    ruleLength.classList.toggle("ok", res.lengthOK);
+    ruleClasses.classList.toggle("ok", res.classesOK);
+    btn.disabled = !(res.lengthOK && res.classesOK);
+  }
+
+  pw.addEventListener("input", update);
+  update();
+
+  var form = document.getElementById("signupForm");
+  if (form)
+    form.addEventListener("submit", function (e) {
+      if (btn.disabled) {
+        e.preventDefault();
+        if (box) {
+          box.classList.remove("shake");
+          void box.offsetWidth;
+          box.classList.add("shake");
+        }
+      }
+    });
+})();
+
 // ---------- Wire up everything once ----------
+
 document.addEventListener("DOMContentLoaded", () => {
+  initThemeToggle();
   initMenu();
   initDrawer();
   initLogsModal();
@@ -973,41 +1233,4 @@ document.addEventListener("DOMContentLoaded", () => {
 
   onClick("#btn-upload", () => safeShowDialog($("#uploadModal")));
   onClick("#btn-logout", () => logout());
-
-  (function () {
-    var box = document.getElementById('signupBox');
-    if (box && box.dataset.hadError === 'true') {
-      box.classList.remove('shake'); void box.offsetWidth; box.classList.add('shake');
-    }
-    var pw = document.getElementById('password');
-    var btn = document.getElementById('submitBtn');
-    var ruleLength = document.getElementById('ruleLength');
-    var ruleClasses = document.getElementById('ruleClasses');
-    if (!pw || !btn || !ruleLength || !ruleClasses) return;
-
-    function classify(p) {
-      var lower = /[a-z]/.test(p);
-      var upper = /[A-Z]/.test(p);
-      var digit = /[0-9]/.test(p);
-      var symbol = /[!@#$%^&*()_+\-=\[\]{};':",.<>\/?\\|]/.test(p);
-      var classes = (lower ? 1 : 0) + (upper ? 1 : 0) + (digit ? 1 : 0) + (symbol ? 1 : 0);
-      return { lengthOK: p.length >= 10, classesOK: classes >= 3 };
-    }
-    function update() {
-      var v = pw.value || '';
-      var res = classify(v);
-      ruleLength.classList.toggle('ok', res.lengthOK);
-      ruleClasses.classList.toggle('ok', res.classesOK);
-      btn.disabled = !(res.lengthOK && res.classesOK);
-    }
-    pw.addEventListener('input', update);
-    update();
-    var form = document.getElementById('signupForm');
-    if (form) form.addEventListener('submit', function (e) {
-      if (btn.disabled) {
-        e.preventDefault();
-        if (box) { box.classList.remove('shake'); void box.offsetWidth; box.classList.add('shake'); }
-      }
-    });
-  })();
 });

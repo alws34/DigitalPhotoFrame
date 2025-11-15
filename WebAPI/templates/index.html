@@ -5,6 +5,13 @@
     <title>Digital Photo Frame Manager</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="csrf-token" content="{{ csrf_token() }}" />
+
+    <!-- Material Symbols for theme toggle icons (NEW) -->
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined"
+    />
+
     <link
       rel="stylesheet"
       href="{{ url_for('static', filename='styles.css') }}"
@@ -20,6 +27,7 @@
     ></script>
     <script defer src="{{ url_for('static', filename='scripts.js') }}"></script>
   </head>
+
   <body>
     <!-- Top Bar -->
     <header id="top-bar" class="top-bar" role="banner">
@@ -29,6 +37,32 @@
         <span class="welcome-message">Hi, {{ username }}.</span>
       </div>
       <div class="top-right">
+        <!-- NEW: theme toggle -->
+        <div
+          class="theme-toggle"
+          role="radiogroup"
+          aria-label="Theme selection"
+        >
+          <button
+            type="button"
+            class="theme-chip"
+            data-theme="dark"
+            aria-pressed="true"
+          >
+            <span class="material-symbols-outlined">dark_mode</span>
+            <span class="theme-label">Dark</span>
+          </button>
+          <button
+            type="button"
+            class="theme-chip"
+            data-theme="light"
+            aria-pressed="false"
+          >
+            <span class="material-symbols-outlined">light_mode</span>
+            <span class="theme-label">Light</span>
+          </button>
+        </div>
+
         <button
           class="hamburger"
           id="hamburger"
