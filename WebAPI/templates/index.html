@@ -5,44 +5,91 @@
     <title>Digital Photo Frame Manager</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="csrf-token" content="{{ csrf_token() }}" />
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
-    <link rel="stylesheet" href="{{ url_for('static', filename='styles.mobile.css') }}" media="(max-width: 480px)" />
-    <script defer src="{{ url_for('static', filename='vendor/heic2any.min.js') }}"></script>
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='styles.css') }}"
+    />
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', filename='styles.mobile.css') }}"
+      media="(max-width: 480px)"
+    />
+    <script
+      defer
+      src="{{ url_for('static', filename='vendor/heic2any.min.js') }}"
+    ></script>
     <script defer src="{{ url_for('static', filename='scripts.js') }}"></script>
-
   </head>
   <body>
     <!-- Top Bar -->
     <header id="top-bar" class="top-bar" role="banner">
       <div class="top-left">
-        <span class="welcome-message">Welcome {{ username }}!</span>
+        <span class="app-title">Digital Photo Frame</span>
+        <span class="status-pill">Local</span>
+        <span class="welcome-message">Hi, {{ username }}.</span>
       </div>
       <div class="top-right">
-        <button class="hamburger" id="hamburger" aria-label="Open menu" aria-expanded="false" aria-controls="dropdown-menu">&#9776;</button>
+        <button
+          class="hamburger"
+          id="hamburger"
+          aria-label="Open menu"
+          aria-expanded="false"
+          aria-controls="dropdown-menu"
+        >
+          &#9776;
+        </button>
         <nav id="dropdown-menu" class="dropdown-menu" aria-label="Main" hidden>
-          <button id="btn-edit-images" class="menu-item" type="button">Edit Images</button>
-          <button id="btn-app-settings" class="menu-item" type="button">Settings</button>
-          <button id="btn-upload" class="menu-item" type="button">Upload</button>
-          <button id="btn-logs" class="menu-item" type="button">Show Logs</button>
-          <button id="btn-logout" class="menu-item" type="button">Logout</button>
+          <button id="btn-edit-images" class="menu-item" type="button">
+            Edit Images
+          </button>
+          <button id="btn-app-settings" class="menu-item" type="button">
+            Settings
+          </button>
+          <button id="btn-upload" class="menu-item" type="button">
+            Upload
+          </button>
+          <button id="btn-logs" class="menu-item" type="button">
+            Show Logs
+          </button>
+          <button id="btn-logout" class="menu-item" type="button">
+            Logout
+          </button>
         </nav>
       </div>
     </header>
 
     <main id="main-container" class="main" role="main">
       <section id="image-transition" class="frame">
-        <img id="liveImage" src="/stream?width=1280&height=960" alt="Live frame image" />
+        <img
+          id="liveImage"
+          src="/stream?width=1280&height=960"
+          alt="Live frame image"
+        />
       </section>
 
       <section id="image-info" class="meta">
-        <div id="caption">Caption: <span id="captionField">Loading...</span></div>
+        <div id="caption">
+          Caption: <span id="captionField">Loading...</span>
+        </div>
         <div>Uploader: <span id="uploaderField">Loading...</span></div>
-        <div>Date Added: <span id="dateField" data-format="datetime" data-formatted=""></span></div>
+        <div>
+          Date Added:
+          <span id="dateField" data-format="datetime" data-formatted=""></span>
+        </div>
       </section>
 
       <!-- App Settings Modal -->
-      <dialog id="appSettingsModal" class="modal" aria-labelledby="app-settings-title">
-        <form id="appSettingsForm" class="modal-content" method="post" action="/save_settings">
+      <dialog
+        id="appSettingsModal"
+        class="modal"
+        aria-labelledby="app-settings-title"
+      >
+        <form
+          id="appSettingsForm"
+          class="modal-content"
+          method="post"
+          action="/save_settings"
+        >
           <h2 id="app-settings-title">Application Settings</h2>
 
           <!-- CSRF -->
@@ -58,16 +105,18 @@
           </div>
         </form>
       </dialog>
-
-
     </main>
 
     <!-- Gallery / Settings Drawer (NOT a modal) -->
     <section id="bottom-scrollable" class="drawer" hidden>
       <div class="action-bar">
         <div class="left-actions">
-          <button id="btn-download-selected" type="button">Download Selected</button>
-          <button id="btn-delete-selected" type="button">Delete Selected</button>
+          <button id="btn-download-selected" type="button">
+            Download Selected
+          </button>
+          <button id="btn-delete-selected" type="button">
+            Delete Selected
+          </button>
         </div>
         <div class="right-actions">
           <label for="sortSelect">Sort:</label>
@@ -75,40 +124,56 @@
             <option value="new" selected>Newest first</option>
             <option value="old">Oldest first</option>
           </select>
-          <button id="btn-close-settings" class="close-btn" aria-label="Close panel" type="button">x</button>
+          <button
+            id="btn-close-settings"
+            class="close-btn"
+            aria-label="Close panel"
+            type="button"
+          >
+            x
+          </button>
         </div>
       </div>
 
       <div id="gallery" class="gallery">
-  {% for item in images_data %}
-  <article class="image-card" data-image="{{ item.name }}" data-date="{{ item.date_added }}">
-    <img
-      src="{{ url_for('thumb', filename=item.name) }}?w=320"
-      srcset="
-        {{ url_for('thumb', filename=item.name) }}?w=240 240w,
-        {{ url_for('thumb', filename=item.name) }}?w=320 320w,
-        {{ url_for('thumb', filename=item.name) }}?w=480 480w,
-        {{ url_for('thumb', filename=item.name) }}?w=640 640w"
-      sizes="(max-width: 480px) 45vw, (max-width: 1024px) 30vw, 240px"
-      alt="{{ item.name }}"
-      loading="lazy"
-      decoding="async"
-      fetchpriority="low"
-      width="240"
-      height="240"
-      data-full="{{ url_for('serve_image', filename=item.name) }}"
-    />
-    <label class="select-row">
-      <input type="checkbox" class="select-checkbox" value="{{ item.name }}" />
-      <span>Select</span>
-    </label>
-    <div class="row">
-      <button class="btn-edit" data-image="{{ item.name }}" type="button">Edit</button>
-    </div>
-  </article>
-  {% endfor %}
-</div>
-
+        {% for item in images_data %}
+        <article
+          class="image-card"
+          data-image="{{ item.name }}"
+          data-date="{{ item.date_added }}"
+        >
+          <img
+            src="{{ url_for('thumb', filename=item.name) }}?w=320"
+            srcset="
+              {{ url_for('thumb', filename=item.name) }}?w=240 240w,
+              {{ url_for('thumb', filename=item.name) }}?w=320 320w,
+              {{ url_for('thumb', filename=item.name) }}?w=480 480w,
+              {{ url_for('thumb', filename=item.name) }}?w=640 640w"
+            sizes="(max-width: 480px) 45vw, (max-width: 1024px) 30vw, 240px"
+            alt="{{ item.name }}"
+            loading="lazy"
+            decoding="async"
+            fetchpriority="low"
+            width="240"
+            height="240"
+            data-full="{{ url_for('serve_image', filename=item.name) }}"
+          />
+          <label class="select-row">
+            <input
+              type="checkbox"
+              class="select-checkbox"
+              value="{{ item.name }}"
+            />
+            <span>Select</span>
+          </label>
+          <div class="row">
+            <button class="btn-edit" data-image="{{ item.name }}" type="button">
+              Edit
+            </button>
+          </div>
+        </article>
+        {% endfor %}
+      </div>
     </section>
 
     <!-- Logs Modal -->
@@ -130,6 +195,26 @@
         <h2 id="edit-title">Edit Image Metadata</h2>
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
         <input type="hidden" id="editImageName" name="imageName" />
+
+        <!-- NEW: image preview inside the modal -->
+        <div class="form-group">
+          <label>Preview</label>
+          <div class="edit-image-preview-wrapper">
+            <!-- JS sets src/alt on this element -->
+            <img
+              id="editImagePreview"
+              alt="Selected image preview"
+              style="
+                max-width: 100%;
+                max-height: 320px;
+                object-fit: contain;
+                display: block;
+                margin-bottom: 0.75rem;
+              "
+            />
+          </div>
+        </div>
+
         <div class="form-group">
           <label for="editCaption">Caption</label>
           <input type="text" id="editCaption" name="caption" />
@@ -140,11 +225,23 @@
         </div>
         <div class="form-group">
           <label for="editDateAdded">Date Added</label>
-          <input type="text" id="editDateAdded" name="date_added" readonly />
+          <input
+            type="text"
+            id="editDateAdded"
+            name="date_added"
+            readonly
+            class="readonly-field"
+          />
         </div>
         <div class="form-group">
           <label for="editHash">Image Hash</label>
-          <input type="text" id="editHash" name="hash" readonly />
+          <input
+            type="text"
+            id="editHash"
+            name="hash"
+            readonly
+            class="readonly-field"
+          />
         </div>
         <div class="form-actions">
           <button type="submit" id="edit-save">Save</button>
@@ -155,30 +252,47 @@
 
     <!-- Upload Modal -->
     <dialog id="uploadModal" class="modal" aria-labelledby="upload-title">
-      <form id="uploadForm" method="dialog" class="modal-content" enctype="multipart/form-data">
+      <form
+        id="uploadForm"
+        method="dialog"
+        class="modal-content"
+        enctype="multipart/form-data"
+      >
         <h2 id="upload-title">Upload Images</h2>
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
-        <div id="dropZone" role="button" tabindex="0" aria-label="Drag and drop images or press Enter to browse">
+
+        <div
+          id="dropZone"
+          role="button"
+          tabindex="0"
+          aria-label="Drag and drop images or press Enter to browse"
+        >
           <p>Drag & Drop Images Here or Click to Browse</p>
 
           <!-- Library (no capture => shows chooser) -->
-          <input type="file"
-                id="fileFromLibrary"
-                name="file[]"
-                multiple
-                accept="image/*,.heic,.heif,.jpg,.jpeg,.png,.gif,.webp"
-                hidden />
+          <input
+            type="file"
+            id="fileFromLibrary"
+            name="file[]"
+            multiple
+            accept="image/*,.heic,.heif,.jpg,.jpeg,.png,.gif,.webp"
+            hidden
+          />
 
           <!-- Camera (explicit capture) -->
-          <input type="file"
-                id="fileFromCamera"
-                name="file[]"
-                accept="image/*"
-                capture="environment"
-                hidden />
+          <input
+            type="file"
+            id="fileFromCamera"
+            name="file[]"
+            accept="image/*"
+            capture="environment"
+            hidden
+          />
 
           <div class="btn-row">
-            <button type="button" id="btn-choose-library">Choose from Gallery</button>
+            <button type="button" id="btn-choose-library">
+              Choose from Gallery
+            </button>
             <button type="button" id="btn-take-photo">Take Photo</button>
           </div>
         </div>

@@ -7,6 +7,8 @@ import threading
 import logging
 import subprocess
 from typing import Any, Dict, Optional, List
+import sys
+import shutil
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
@@ -195,10 +197,73 @@ class PhotoFrameQtWidget(QtWidgets.QWidget, iFrame, metaclass=IFrameQtWidgetMeta
     # iFrame API
     # -----------------------------------------------------------------
     def set_frame(self, bgr: np.ndarray) -> None:
+        """
+        Called by the server thread. Accept only proper uint8 images and
+        guard against dtype=object or other weird inputs.
+        """
         if bgr is None:
+            logging.warning("PhotoFrameQtWidget.set_frame: got None frame")
             return
-        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-        h, w = bgr.shape[:2]
+
+        # Normalize to numpy array
+        arr = np.asarray(bgr)
+        logging.debug(
+            "PhotoFrameQtWidget.set_frame: type=%s, dtype=%s, shape=%s",
+            type(bgr),
+            getattr(arr, "dtype", None),
+            getattr(arr, "shape", None),
+        )
+
+        # Reject completely invalid stuff
+        if not isinstance(arr, np.ndarray):
+            logging.error("PhotoFrameQtWidget.set_frame: non-ndarray frame: %r", type(arr))
+            return
+
+        if arr.dtype == object:
+            logging.error(
+                "PhotoFrameQtWidget.set_frame: bad dtype=object, shape=%s, skipping frame",
+                arr.shape,
+            )
+            return
+
+        if arr.ndim not in (2, 3):
+            logging.error(
+                "PhotoFrameQtWidget.set_frame: unexpected ndim=%d, shape=%s",
+                arr.ndim,
+                arr.shape,
+            )
+            return
+
+        # Gray or BGRA -> BGR
+        try:
+            if arr.ndim == 2:
+                arr = cv2.cvtColor(arr, cv2.COLOR_GRAY2BGR)
+            elif arr.ndim == 3 and arr.shape[2] == 4:
+                arr = cv2.cvtColor(arr, cv2.COLOR_BGRA2BGR)
+        except cv2.error as e:
+            logging.exception("PhotoFrameQtWidget.set_frame: cvtColor (to BGR) failed: %s", e)
+            return
+
+        # Ensure uint8
+        if arr.dtype != np.uint8:
+            try:
+                arr = arr.astype(np.uint8)
+            except Exception as e:
+                logging.exception(
+                    "PhotoFrameQtWidget.set_frame: cannot cast dtype %s to uint8: %s",
+                    arr.dtype,
+                    e,
+                )
+                return
+
+        # Now convert to RGB for Qt
+        try:
+            rgb = cv2.cvtColor(arr, cv2.COLOR_BGR2RGB)
+        except cv2.error as e:
+            logging.exception("PhotoFrameQtWidget.set_frame: cvtColor BGR->RGB failed: %s", e)
+            return
+
+        h, w = rgb.shape[:2]
         qimg = QtGui.QImage(rgb.data, w, h, QtGui.QImage.Format_RGB888)
         self.frameChanged.emit(qimg.copy())
 
@@ -305,17 +370,42 @@ class PhotoFrameQtWidget(QtWidgets.QWidget, iFrame, metaclass=IFrameQtWidgetMeta
     # ---- Orientation ----
     def _on_apply_orientation(self, transform: str) -> bool:
         """
-        Calls wlr-randr with the default output. Shows errors to the user.
+        On Linux/Wayland, call wlr-randr to rotate the display.
+        On other platforms this is a no-op so the app runs everywhere.
         """
+        # Non-Linux platforms: ignore and pretend success.
+        # We do NOT want message boxes on macOS/Windows.
+        if sys.platform != "linux":
+            logging.info("Orientation change (%s) ignored on non-Linux platform.", transform)
+            return True
+
+        # Linux but no wlr-randr in PATH: also ignore quietly.
+        if shutil.which("wlr-randr") is None:
+            logging.warning("wlr-randr not found in PATH; skippƒ√ing orientation change.")
+            return True
+
         output = self._pick_default_output()
         if not output:
-            QtWidgets.QMessageBox.critical(self, "No display", "Could not detect a Wayland output via wlr-randr.")
-            return False
+            # No Wayland outputs reported. Log, but do not block the app.
+            logging.warning("No Wayland outputs reported by wlr-randr; skipping orientation change.")
+            return True
+
         try:
-            subprocess.run(["wlr-randr", "--output", output, "--transform", transform], check=True)
+            subprocess.run(
+                ["wlr-randr", "--output", output, "--transform", transform],
+                check=True,
+            )
+            logging.info("Orientation set to %s on output %s", transform, output)
             return True
         except subprocess.CalledProcessError as e:
-            QtWidgets.QMessageBox.critical(self, "Failed to set orientation", (e.stdout or str(e)))
+            logging.exception("Failed to set orientation via wlr-randr: %s", e)
+            # On Linux kiosk you might want the error dialog; keep it,
+            # but it will never be hit on macOS/Windows.
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Failed to set orientation",
+                (e.stdout or str(e))[:2000],
+            )
             return False
 
     # ---- Auto-update (pull now) ----

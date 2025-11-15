@@ -15,6 +15,9 @@ import cv2
 import numpy as np
 import json
 from datetime import datetime, timezone
+import pyheif
+from PIL import Image
+from pillow_heif import register_heif_opener
 
 from Settings import SettingsHandler
 from WebAPI.API import Backend
@@ -62,13 +65,16 @@ class PhotoFrameServer(iFrame):
         global SETTINGS_PATH
         SETTINGS_PATH = settings_path
         self._gui_frame = iframe
-        
+
+        # Instance logger (inherits global configuration)
+        self.logger = logging.getLogger(__name__)
+
         try:
             cv2.setUseOptimized(True)
             cv2.setNumThreads(max(1, (os.cpu_count() or 4) - 1))
         except Exception as e:
-            self.logger.exception(f"Failed to set OpenCV optimizations: {e}")
-        
+            self.logger.exception("Failed to set OpenCV optimizations: %s", e)
+
         self.settings_handler_path = os.path.abspath(settings_path)
         self.settings_handler = SettingsHandler(SETTINGS_PATH, logging)
 
@@ -82,7 +88,7 @@ class PhotoFrameServer(iFrame):
         self._target_fps = int(self.settings_handler.get("animation_fps", 30))
         self._transition_fps = int(self.settings_handler.get("transition_fps", 30))
         self._transition_frame_interval = 1.0 / max(1.0, float(self._transition_fps))
- 
+
         self.current_image_idx = 0
         self.current_effect_idx = 0
         self.current_image = None
@@ -90,12 +96,11 @@ class PhotoFrameServer(iFrame):
         self.frame_to_stream = None
         self.is_running = True
 
-        
         self.EffectHandler = EffectHandler()
         self.image_handler = Image_Utils(settings=self.settings_handler)
         self.effects = self.EffectHandler.get_effects()
-        self.update_images_list()    
-        
+        self.update_images_list()
+
         if self._gui_frame:
             # Keep a handle to the thread so we can join on shutdown
             self._date_time_thread = threading.Thread(
@@ -129,11 +134,16 @@ class PhotoFrameServer(iFrame):
             self.Observer.start_observer()
             self._observer_started = True
 
-    
+        # Register HEIF/HEIC plugin for Pillow once per server instance
+        try:
+            register_heif_opener()
+            logging.info("HEIF/HEIC plugin registered successfully")
+        except Exception as e:
+            logging.warning("Could not register HEIF/HEIC plugin: %s", e)
+
     def _blank_frame(self):
         # neutral gray, screen-sized
         return np.full((self.screen_height, self.screen_width, 3), 32, dtype=np.uint8)
-
 
     def _on_images_dir_changed(self):
         now = time.time()
@@ -148,8 +158,7 @@ class PhotoFrameServer(iFrame):
             logging.info("Images directory changed. Found %d images.", len(self.images))
         except Exception:
             logging.exception("Failed to update images list after directory change")
-        
-        
+
     def start_date_time_loop(self):
         # runs in a worker thread, not the GUI thread
         while self.is_running:
@@ -160,6 +169,7 @@ class PhotoFrameServer(iFrame):
 
     def _start_local_weather_loop(self) -> None:
         poll_sec = int(self.settings_handler.get("weather_poll_seconds", 900))  # default 15 min
+
         def _weather_loop():
             while not self._weather_stop.is_set():
                 try:
@@ -168,6 +178,7 @@ class PhotoFrameServer(iFrame):
                 except Exception:
                     logging.exception("weather loop error (server)")
                 self._weather_stop.wait(poll_sec)
+
         self._weather_thread = threading.Thread(target=_weather_loop, name="WeatherThread", daemon=True)
         self._weather_thread.start()
 
@@ -179,21 +190,57 @@ class PhotoFrameServer(iFrame):
 
     def _send_frame(self, frame_bgr: np.ndarray) -> None:
         if frame_bgr is None:
+            logging.warning("PhotoFrameServer._send_frame: got None frame")
             return
 
-        h, w = frame_bgr.shape[:2]
+        arr = np.asarray(frame_bgr)
+        if not isinstance(arr, np.ndarray):
+            logging.error("PhotoFrameServer._send_frame: non-ndarray frame: %r", type(frame_bgr))
+            return
+
+        if arr.dtype == object:
+            logging.error(
+                "PhotoFrameServer._send_frame: bad dtype=object from effect, shape=%s, dropping frame",
+                arr.shape,
+            )
+            return
+
+        if arr.ndim not in (2, 3):
+            logging.error(
+                "PhotoFrameServer._send_frame: unexpected ndim=%d, shape=%s",
+                arr.ndim,
+                arr.shape,
+            )
+            return
+
+        # Normalize gray / BGRA
+        if arr.ndim == 2:
+            arr = cv2.cvtColor(arr, cv2.COLOR_GRAY2BGR)
+        elif arr.ndim == 3 and arr.shape[2] == 4:
+            arr = cv2.cvtColor(arr, cv2.COLOR_BGRA2BGR)
+
+        if arr.dtype != np.uint8:
+            try:
+                arr = arr.astype(np.uint8)
+            except Exception as e:
+                logging.exception(
+                    "PhotoFrameServer._send_frame: cannot cast dtype %s to uint8: %s", arr.dtype, e
+                )
+                return
+
+        h, w = arr.shape[:2]
         if w != self.screen_width or h != self.screen_height:
-            frame_bgr = self.image_handler.resize_image_with_background(
-                frame_bgr, self.screen_width, self.screen_height
+            arr = self.image_handler.resize_image_with_background(
+                arr, self.screen_width, self.screen_height
             )
 
         # Make the current frame available to the backend streamer
-        self.frame_to_stream = frame_bgr
+        self.frame_to_stream = arr
 
         # Push to GUI
         if self._gui_frame and hasattr(self._gui_frame, "set_frame"):
             try:
-                self._gui_frame.set_frame(frame_bgr)
+                self._gui_frame.set_frame(arr)
             except Exception:
                 logging.exception("Failed to publish frame to GUI")
 
@@ -251,8 +298,6 @@ class PhotoFrameServer(iFrame):
             logging.exception(f"Error during frame update: {e}")
             return AnimationStatus.ANIMATION_ERROR
 
-
-
     # ------------- Utils -------------
     def compute_image_hash(self, image_path):
         hash_obj = hashlib.sha256()
@@ -266,7 +311,7 @@ class PhotoFrameServer(iFrame):
 
     def set_date_time(self):
         pass
-    
+
     def set_weather(self):
         pass
 
@@ -274,33 +319,36 @@ class PhotoFrameServer(iFrame):
         if isinstance(self.frame_to_stream, np.ndarray) and self.frame_to_stream.size:
             return self.frame_to_stream
         return self._blank_frame()
-    
+
     def update_frame_to_stream(self, frame_bgr: np.ndarray) -> None:
         pass
 
-    def send_log_message(self, msg, logger: logging):
+    def send_log_message(self, msg, logger=None):
+        """
+        Generic log hook so other components (e.g., Backend) can push messages.
+
+        logger can be:
+          - a callable (like logging.info or self.logger.info)
+          - an int log level (logging.INFO, logging.ERROR, etc.)
+          - None (default: info via self.logger or root logging).
+        """
         try:
-        # Prefer an instance logger if you set one in set_logger()
-            lg = getattr(self, "logger", None)
+            lg = getattr(self, "logger", None) or logging.getLogger(__name__)
             if callable(logger):
-                # A callable like logging.info / self.logger.info
                 logger(msg)
+            elif isinstance(logger, int):
+                lg.log(logger, msg)
             else:
-                # Assume a numeric level constant (int)
-                level = int(logger)
-                if lg is not None:
-                    lg.log(level, msg)
-                else:
-                    logging.log(level, msg)
+                lg.info(msg)
         except Exception:
-            # Ultimate fallback to keep logs flowing even if something is off
             try:
                 (lg or logging).info(msg)
             except Exception:
                 print(f"[PhotoFrame LOG] {msg}")
 
     def get_images_from_directory(self):
-        image_extensions = [".jpg", ".jpeg", ".png", ".gif"]
+        # Allow the same extensions as the backend (plus a few safe extras)
+        image_extensions = [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".heic", ".heif"]
         image_paths = []
         for root, dirs, files in os.walk(self.IMAGE_DIR):
             for file in files:
@@ -319,20 +367,32 @@ class PhotoFrameServer(iFrame):
         return self.shuffled_images[self.current_image_idx]
 
     def set_images_dir(self, images_dir=None):
-        if images_dir is not None:
-            self.IMAGE_DIR = images_dir
-            if not os.path.exists(self.IMAGE_DIR):
-                os.makedirs(self.IMAGE_DIR, exist_ok=True)
-                logging.warning(f"'{self.IMAGE_DIR}' directory not found. Created a new one.")
-            return True
+        """
+        Resolve the images directory relative to the project root (one level
+        above FrameServer), so both the server and the WebAPI backend use
+        the same Images/ folder.
+        """
+        # Project root: DigitalPhotoFrame/
+        base_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
-        images_dir = self.settings_handler.get("images_dir") or "Images"
-        self.IMAGE_DIR = os.path.abspath(
-            os.path.join(os.path.dirname(__file__), images_dir)
-        )
+        if images_dir is not None:
+            # Accept absolute path or relative path.
+            if os.path.isabs(images_dir):
+                self.IMAGE_DIR = images_dir
+            else:
+                self.IMAGE_DIR = os.path.join(base_root, images_dir)
+        else:
+            cfg = self.settings_handler.get("images_dir") or "Images"
+            if os.path.isabs(cfg):
+                self.IMAGE_DIR = cfg
+            else:
+                self.IMAGE_DIR = os.path.join(base_root, cfg)
+
         if not os.path.exists(self.IMAGE_DIR):
             os.makedirs(self.IMAGE_DIR, exist_ok=True)
-            logging.warning(f"'{self.IMAGE_DIR}' directory not found. Created a new one.")
+            logging.warning("'%s' directory not found. Created a new one.", self.IMAGE_DIR)
+
+        logging.info("Using IMAGE_DIR = %s", self.IMAGE_DIR)
         return True
 
     def update_images_list(self):
@@ -340,26 +400,123 @@ class PhotoFrameServer(iFrame):
         self.shuffled_images = self.image_handler.shuffle_images(self.images)
 
     # ------------- Transition driver -------------
+    def _load_image_safe(self, path: str):
+        if not path:
+            logging.warning("PhotoFrameServer._load_image_safe: empty image path")
+            return None
+        if not os.path.isfile(path):
+            logging.warning("PhotoFrameServer._load_image_safe: missing image file %r", path)
+            return None
+
+        ext = os.path.splitext(path)[1].lower()
+
+        # HEIC/HEIF path: decode via Pillow (with pillow-heif) or pyheif
+        if ext in (".heic", ".heif"):
+            try:
+                # First try Pillow. If pillow-heif is installed and registered,
+                # Image.open() will just work.
+                try:
+                    from PIL import Image, ImageOps
+                    pil_img = Image.open(path)
+                    # Honor EXIF orientation
+                    try:
+                        pil_img = ImageOps.exif_transpose(pil_img)
+                    except Exception:
+                        pass
+                    pil_img = pil_img.convert("RGB")
+                    arr = np.array(pil_img)
+                    # Convert RGB -> BGR for OpenCV-style pipeline
+                    arr = arr[:, :, ::-1].copy()
+                    return arr
+                except Exception as e:
+                    logging.warning(
+                        "PhotoFrameServer._load_image_safe: Pillow HEIC decode failed for %r: %s",
+                        path,
+                        e,
+                    )
+
+                # Fallback: pyheif if available
+                try:
+                    heif = pyheif.read(path)
+                    pil_img = Image.frombytes(
+                        heif.mode,
+                        heif.size,
+                        heif.data,
+                        "raw",
+                        heif.mode,
+                        heif.stride,
+                    )
+                    pil_img = pil_img.convert("RGB")
+                    arr = np.array(pil_img)
+                    arr = arr[:, :, ::-1].copy()
+                    return arr
+                except Exception as e:
+                    logging.warning(
+                        "PhotoFrameServer._load_image_safe: HEIC decode failed for %r via pyheif: %s",
+                        path,
+                        e,
+                    )
+                    return None
+            except Exception:
+                logging.exception(
+                    "PhotoFrameServer._load_image_safe: HEIC decode crashed for %r",
+                    path,
+                )
+                return None
+
+        # Normal path: let OpenCV load it
+        img = cv2.imread(path)
+        if img is None:
+            logging.warning("PhotoFrameServer._load_image_safe: cv2.imread failed for %r", path)
+            return None
+
+        return img
 
     def start_image_transition(self, image1_path=None, image2_path=None, duration=5):
+        # Initialize current_image if needed
         if self.current_image is None:
-            self.current_image = cv2.imread(self.get_random_image())
-            if self.current_image is None:
+            first_path = image1_path or self.get_random_image()
+            img1 = self._load_image_safe(first_path)
+
+            if img1 is None:
+                logging.error(
+                    "start_image_transition: no valid first image (%r). "
+                    "Using blank frame and skipping transition.", first_path
+                )
+                self.current_image = self._blank_frame()
+                # Still push something to GUI / backend
+                self._send_frame(self.current_image)
                 return AnimationStatus.ANIMATION_FINISHED
+
             self.current_image = self.image_handler.resize_image_with_background(
-                self.current_image, self.screen_width, self.screen_height
+                img1, self.screen_width, self.screen_height
             )
 
+        # Pick second image path
         if image2_path is None:
             image2_path = self.get_random_image()
 
-        self.update_image_metadata(image2_path)
+        img2 = self._load_image_safe(image2_path)
+        if img2 is None:
+            logging.error(
+                "start_image_transition: failed to load next image %r. "
+                "Skipping transition and keeping current image.", image2_path
+            )
+            # Just show the current image again
+            self._send_frame(self.current_image)
+            return AnimationStatus.ANIMATION_FINISHED
 
-        self.next_image = cv2.imread(image2_path)
+        # Only now update metadata and set next_image
+        try:
+            self.update_image_metadata(image2_path)
+        except Exception:
+            logging.exception("start_image_transition: update_image_metadata failed for %r", image2_path)
+
         self.next_image = self.image_handler.resize_image_with_background(
-            self.next_image, self.screen_width, self.screen_height
+            img2, self.screen_width, self.screen_height
         )
 
+        # Run random effect
         effect_function = self.effects[self.EffectHandler.get_random_effect()]
         gen = effect_function(self.current_image, self.next_image, duration, fps=self._target_fps)
         self.status = self.update_frame(gen)
@@ -372,7 +529,8 @@ class PhotoFrameServer(iFrame):
 
         if self.status == AnimationStatus.ANIMATION_FINISHED:
             self.current_image = self.next_image
-            return AnimationStatus.ANIMATION_FINISHED
+
+        return self.status
 
     def set_frame(self, frame):
         # No-op in server. Client implements publish to GUI.
@@ -405,10 +563,9 @@ class PhotoFrameServer(iFrame):
             else:
                 time.sleep(0.1)
 
-
     def main(self):
         threading.Thread(target=self.run_photoframe, daemon=True).start()
-        #threading.Thread(target=self._start_api, daemon=True).start()
+        # threading.Thread(target=self._start_api, daemon=True).start()
 
         my_pid = os.getpid()
         # self.start_monitor_thread(my_pid, interval=1.0)
@@ -477,7 +634,6 @@ class PhotoFrameServer(iFrame):
 
         logging.info("PhotoFrameServer.stop_services: done.")
 
-    
     def _start_api(self):
         try:
             self.m_api = Backend(
@@ -489,7 +645,6 @@ class PhotoFrameServer(iFrame):
             self.m_api.start()
         except Exception:
             logging.exception("Failed to start Backend API")
-
 
     # ------------- Metadata (server-owned) -------------
 
@@ -519,7 +674,6 @@ class PhotoFrameServer(iFrame):
             os.replace(tmp, p)
         except Exception:
             logging.exception("Failed to save metadata.json")
-
 
     def _utcnow_iso(self) -> str:
         return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -655,6 +809,7 @@ class PhotoFrameServer(iFrame):
 
         except Exception:
             logging.exception("update_image_metadata failed")
+
 
 if __name__ == "__main__":
     frame = PhotoFrameServer()

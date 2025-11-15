@@ -6,6 +6,7 @@
 // - Robust SSE with exponential backoff
 // - Drag-and-drop previews with object URLs (revoked to avoid leaks)
 // - Drawer stays for image editing (not a modal); grid guarantees >=2 cols on desktop
+// - Edit modal now shows the image being edited in #editImagePreview
 // ==========================================================
 
 // ---------- CSRF helpers ----------
@@ -47,10 +48,12 @@ function trapEscape(closeFn) {
   return (e) => { if (e.key === "Escape") closeFn(); };
 }
 function safeShowDialog(d) {
+  if (!d) return;
   try { d.showModal(); }
   catch (_) { d.removeAttribute("hidden"); d.style.display = "block"; }
 }
 function safeCloseDialog(d) {
+  if (!d) return;
   try { d.close(); }
   catch (_) { d.setAttribute("hidden", ""); d.style.display = "none"; }
 }
@@ -116,15 +119,11 @@ function initMenu() {
 }
 
 // ---------- Drawer (Edit Images panel - NOT a modal) ----------
-// ---------- Drawer (Edit Images panel - NOT a modal) ----------
 function showDrawer(panel) {
-  // remove [hidden] and any stale inline display:none
   panel.removeAttribute("hidden");
   panel.style.display = "";
-  // optional: focus the first actionable control
   const first = panel.querySelector("button, input, [tabindex]");
   if (first) first.focus({ preventScroll: true });
-  // if the dropdown menu is open, close it so the drawer is visible
   const menu = document.getElementById("dropdown-menu");
   const hamburger = document.getElementById("hamburger");
   if (menu && hamburger && hamburger.getAttribute("aria-expanded") === "true") {
@@ -134,7 +133,6 @@ function showDrawer(panel) {
 }
 function hideDrawer(panel) {
   panel.setAttribute("hidden", "");
-  // also clear any stale inline styles
   panel.style.display = "";
 }
 function toggleSettingsDrawer() {
@@ -147,7 +145,6 @@ function initDrawer() {
   onClick("#btn-edit-images", () => toggleSettingsDrawer());
   onClick("#btn-close-settings", () => toggleSettingsDrawer());
 }
-
 
 // ---------- Logs modal (<dialog>) ----------
 function initLogsModal() {
@@ -191,11 +188,9 @@ function fetchLogs() {
     .catch((err) => { if (t) t.value = `Error: ${err.message}`; });
 }
 
-
 // ---------- App settings modal (<dialog>) ----------
 // ---------- Settings dynamic form renderer ----------
 function toName(pathParts) {
-  // ["backend_configs","server_port"] -> backend_configs[server_port]
   if (!pathParts.length) return "";
   const [head, ...rest] = pathParts;
   return head + rest.map(p => `[${p}]`).join("");
@@ -226,7 +221,6 @@ function createInputForPrimitive(path, key, value) {
   const t = coerceType(value);
 
   if (t === "boolean") {
-    // Hidden false + checkbox true pattern so unchecked posts "false"
     const hidden = document.createElement("input");
     hidden.type = "hidden";
     hidden.name = fullName;
@@ -292,12 +286,10 @@ function createArrayEditor(path, key, arr) {
     del.textContent = "Remove";
     del.addEventListener("click", () => {
       row.remove();
-      // Reindex remaining rows so server receives 0..N-1
       Array.from(list.children).forEach((r, i) => {
         const inp = r.querySelector("input");
         if (inp) {
           const parts = nameToParts(inp.name);
-          // replace last part with new index
           parts[parts.length - 1] = String(i);
           inp.name = toName(parts);
         }
@@ -322,7 +314,6 @@ function createArrayEditor(path, key, arr) {
   return fieldset;
 }
 function nameToParts(name) {
-  // backend_configs[foo][bar] -> ["backend_configs","foo","bar"]
   const parts = [];
   let i = 0;
   while (i < name.length) {
@@ -339,7 +330,6 @@ function nameToParts(name) {
   return parts.filter(Boolean);
 }
 function renderSettingsObject(container, obj, path = []) {
-  // For top-level, create fieldsets for objects. For primitives, just inputs.
   Object.keys(obj).forEach((key) => {
     const val = obj[key];
     const kind = coerceType(val);
@@ -363,17 +353,14 @@ async function populateSettingsForm() {
   const form = document.getElementById("appSettingsForm");
   if (!container || !form) return;
 
-  // Clear previous contents
   container.innerHTML = "";
 
-  // Load current settings
   let data = {};
   try {
     const res = await fetch("/settings", { headers: { "X-Requested-With": "XMLHttpRequest" } });
     data = await res.json();
     if (!res.ok || !data || typeof data !== "object") throw new Error("Failed to load settings");
   } catch (e) {
-    // Fallback to a minimal shape so user can recover
     data = {
       image_dir: "Images",
       image_quality_encoding: 80,
@@ -402,7 +389,6 @@ function initAppSettingsModal() {
   document.addEventListener("keydown", trapEscape(close));
 
   if (form) {
-    // Disable Save during submit; allow server redirect to flash index
     form.addEventListener("submit", function () {
       const saveBtn = $("#app-settings-save");
       if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = "Saving..."; }
@@ -410,44 +396,156 @@ function initAppSettingsModal() {
   }
 }
 
-
 // ---------- Edit metadata modal (<dialog>) ----------
 function initEditModal() {
   const dlg = $("#editModal");
   const editForm = $("#editForm");
-  if (!dlg || !editForm) return;
+  const preview = $("#editImagePreview");
+  if (!dlg || !editForm || !preview) return;
 
-  function openWith(imageName) {
+  let previewObjUrl = null;
+
+  function showPreviewPlaceholder(imageName) {
+    const wrapper = preview.parentElement || dlg;
+
+    // Hide the <img> element
+    preview.style.display = "none";
+    preview.removeAttribute("src");
+
+    // Reuse or create a simple placeholder div
+    let placeholder = wrapper.querySelector(".edit-preview-fallback");
+    if (!placeholder) {
+      placeholder = document.createElement("div");
+      placeholder.className = "edit-preview-fallback";
+      placeholder.style.width = "100%";
+      placeholder.style.minHeight = "160px";
+      placeholder.style.border = "1px dashed #666";
+      placeholder.style.display = "grid";
+      placeholder.style.placeItems = "center";
+      placeholder.style.textAlign = "center";
+      placeholder.style.fontSize = "14px";
+      placeholder.style.color = "#aaa";
+      placeholder.style.marginTop = "4px";
+      wrapper.appendChild(placeholder);
+    }
+
+    placeholder.innerHTML =
+      `<div><strong>${imageName || "Selected image"}</strong><br>` +
+      `Preview not available (HEIC not supported by browser / decoder).</div>`;
+  }
+
+  function showPreviewImage(url, alt) {
+    const wrapper = preview.parentElement || dlg;
+    const placeholder = wrapper.querySelector(".edit-preview-fallback");
+    if (placeholder) {
+      placeholder.remove();
+    }
+
+    preview.style.display = "block";
+    preview.src = url;
+    preview.alt = alt || "";
+
+    // If the browser cannot display the resulting image, fall back to placeholder
+    preview.onerror = function () {
+      showPreviewPlaceholder(alt);
+    };
+  }
+
+  async function openWith(imageName, fullUrl) {
+    // Clean up any previous blob URL
+    if (previewObjUrl) {
+      try {
+        URL.revokeObjectURL(previewObjUrl);
+      } catch (_) {}
+      previewObjUrl = null;
+    }
+
+    let finalUrl = fullUrl || "";
+    finalUrl = await createPreviewUrlForExistingImage(imageName, finalUrl);
+
+    if (finalUrl) {
+      if (finalUrl.startsWith("blob:")) {
+        previewObjUrl = finalUrl;
+      }
+      showPreviewImage(finalUrl, imageName);
+    } else {
+      showPreviewPlaceholder(imageName);
+    }
+
+    // Load metadata from the server as before
     fetch(`/image_metadata?filename=${encodeURIComponent(imageName)}`)
       .then((res) => res.json())
       .then((data) => {
-        if (!data || data.error) { alert("Failed to load metadata"); return; }
+        if (!data || data.error) {
+          alert("Failed to load metadata");
+          return;
+        }
+
         $("#editImageName").value = imageName;
         $("#editCaption").value = data.caption || "";
         $("#editUploader").value = data.uploader || "";
-        $("#editDateAdded").value = formatDate(data.date_added);
+        $("#editDateAdded").value = data.date_added ? formatDate(data.date_added) : "";
         $("#editHash").value = data.hash || "";
+
         safeShowDialog(dlg);
       })
-      .catch((err) => { alert("Could not open edit modal"); console.error(err); });
+      .catch((err) => {
+        alert("Could not open edit modal");
+        console.error(err);
+      });
   }
 
   onClick(".image-card .btn-edit", (btn) => {
-    const name = btn.dataset.image || btn.closest(".image-card")?.dataset.image;
-    if (name) openWith(name);
+    const card = btn.closest(".image-card");
+    const name = btn.dataset.image || card?.dataset.image;
+    if (!name) return;
+
+    let fullUrl = "";
+
+    if (card) {
+      const imgEl = card.querySelector("img[data-full]") || card.querySelector("img");
+      if (imgEl) {
+        fullUrl = imgEl.dataset.full || imgEl.src || "";
+      }
+    }
+
+    if (!fullUrl) {
+      fullUrl = `/images/${encodeURIComponent(name)}`;
+    }
+
+    // Fire-and-forget; async handles preview + metadata
+    openWith(name, fullUrl);
   });
 
+  function closeDialog() {
+    if (previewObjUrl) {
+      try {
+        URL.revokeObjectURL(previewObjUrl);
+      } catch (_) {}
+      previewObjUrl = null;
+    }
+    const wrapper = preview.parentElement || dlg;
+    const placeholder = wrapper.querySelector(".edit-preview-fallback");
+    if (placeholder) {
+      placeholder.remove();
+    }
+    preview.style.display = "block";
+    preview.removeAttribute("src");
+    safeCloseDialog(dlg);
+  }
 
-  onClick("#edit-cancel", () => safeCloseDialog(dlg));
-  document.addEventListener("keydown", trapEscape(() => safeCloseDialog(dlg)));
+  onClick("#edit-cancel", () => closeDialog());
+  document.addEventListener("keydown", trapEscape(closeDialog));
 
   editForm.addEventListener("submit", function (event) {
     event.preventDefault();
+
     const payload = {
       hash: $("#editHash").value,
       caption: $("#editCaption").value,
-      uploader: $("#editUploader").value
+      uploader: $("#editUploader").value,
     };
+
     csrfFetch("/update_metadata", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -456,11 +554,40 @@ function initEditModal() {
       .then((res) => res.json())
       .then((data) => {
         alert(data.message || "Metadata updated.");
-        safeCloseDialog(dlg);
+        closeDialog();
       })
       .catch(() => alert("Failed to update metadata"));
   });
 }
+
+async function createPreviewUrlForExistingImage(fileName, fullUrl) {
+  const lower = (fileName || fullUrl || "").toLowerCase();
+
+  if (!/\.heic$|\.heif$/.test(lower)) {
+    return fullUrl;
+  }
+
+  const tryUrls = [];
+  tryUrls.push(fullUrl.replace(/(\.heic|\.heif)(\b|$)/i, ".png"));
+  tryUrls.push(fullUrl.replace(/(\.heic|\.heif)(\b|$)/i, ".jpg"));
+
+  for (const u of tryUrls) {
+    if (!u || u === fullUrl) continue;
+    try {
+      const res = await fetch(u, { method: "HEAD" });
+      if (res.ok) {
+        return u;
+      }
+    } catch (_) {
+      // ignore
+    }
+  }
+
+  console.warn("HEIC preview: no PNG/JPEG sibling found, using original URL; browser may not show it.");
+  return fullUrl;
+}
+
+
 
 // ---------- Upload modal (<dialog>) ----------
 function initUploadModal() {
@@ -470,7 +597,6 @@ function initUploadModal() {
   const fileFromLibrary = $("#fileFromLibrary");
   const fileFromCamera = $("#fileFromCamera");
 
-  // Defensive: make sure the library input has no capture attr
   if (fileFromLibrary) fileFromLibrary.removeAttribute("capture");
 
   function heicStatusBadge() {
@@ -486,7 +612,6 @@ function initUploadModal() {
     return el;
   }
   function open() {
-    // Insert/update the status line at the top of the upload form
     const formEl = $("#uploadForm");
     if (formEl) {
       const existing = $("#heicStatus");
@@ -517,9 +642,7 @@ function initUploadModal() {
   onClick("#upload-close", close);
   document.addEventListener("keydown", trapEscape(close));
 
-  // Buttons → specific inputs
   onClick("#btn-choose-library", () => {
-    // normalize accept just in case
     if (fileFromLibrary) {
       fileFromLibrary.setAttribute(
         "accept",
@@ -538,25 +661,24 @@ function initUploadModal() {
     }
   });
 
-  // Preview handler (same function you already have)
   if (fileFromLibrary) fileFromLibrary.addEventListener("change", previewFiles);
   if (fileFromCamera) fileFromCamera.addEventListener("change", previewFiles);
 
-  // Also allow clicking the drop zone to open the *chooser*
   const dropZone = $("#dropZone");
   if (dropZone) {
     dropZone.addEventListener("dragover", (e) => e.preventDefault(), { passive: false });
     dropZone.addEventListener("drop", (e) => {
       e.preventDefault();
-      // Feed dropped files into the library input path
       if (fileFromLibrary && e.dataTransfer?.files?.length) {
-        // NOTE: assigning FileList is not supported everywhere; we just call preview on DataTransfer
         previewFiles(e.dataTransfer.files);
       }
     });
     dropZone.addEventListener("click", () => fileFromLibrary && fileFromLibrary.click());
     dropZone.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileFromLibrary && fileFromLibrary.click(); }
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        fileFromLibrary && fileFromLibrary.click();
+      }
     });
   }
 
@@ -570,7 +692,6 @@ function initUploadModal() {
       const fd = new FormData();
       fd.append("csrf_token", getCsrf());
 
-      // keep indices aligned with preview blocks
       for (let i = 0; i < blocks.length; i++) {
         const f = stagedFiles[i];
         if (!f) continue;
@@ -588,7 +709,6 @@ function initUploadModal() {
         })
         .then((data) => {
           alert(data.message || "Upload successful!");
-          // reset and close
           stagedFiles = [];
           $all("#previewContainer .image-preview img[data-objurl]").forEach((img) => {
             try { URL.revokeObjectURL(img.getAttribute("data-objurl")); } catch (_) { }
@@ -625,19 +745,14 @@ function initGallerySort() {
       const bd = parseDate(b);
       return select.value === "new" ? bd - ad : ad - bd;
     });
-    // re-append in sorted order
     cards.forEach((c) => container.appendChild(c));
   }
 
   select.addEventListener("change", applySort);
-
-  // Run once on open (drawer toggle) and once on load
   applySort();
 
-  // If you want it to auto-apply whenever the drawer opens:
   document.addEventListener("click", (e) => {
     if (e.target.closest("#btn-edit-images")) {
-      // slight delay lets the drawer render before sorting
       setTimeout(applySort, 0);
     }
   });
@@ -655,31 +770,26 @@ function canDisplayInImg(mime, name) {
   const ext = (name || "").toLowerCase();
   return /\.(jpe?g|png|gif|webp|bmp)$/.test(ext);
 }
+
 async function convertHeicToJpeg(file, quality = 0.85) {
-  // Try client-side lib first
+  // Try client-side HEIC -> JPEG if heic2any is available
   if (typeof window.heic2any === "function") {
     try {
       const out = await window.heic2any({ blob: file, toType: "image/jpeg", quality });
       const blob = Array.isArray(out) ? out[0] : out;
       const newName = file.name.replace(/\.(heic|heif)$/i, "") + ".jpg";
-      return new File([blob], newName, { type: "image/jpeg", lastModified: Date.now() });
+      return new File([blob], newName, {
+        type: "image/jpeg",
+        lastModified: Date.now(),
+      });
     } catch (e) {
-      console.warn("Client HEIC convert failed, will try server:", e);
+      console.warn("Client HEIC preview conversion failed; uploading original file instead", e);
+      // Just fall through to "no preview" path
     }
   }
-  // Server fallback (works with strict CSP)
-  const fd = new FormData();
-  fd.append("file", file, file.name);
-  const res = await fetch("/heic_preview", {
-    method: "POST",
-    body: fd,
-    headers: { "X-Requested-With": "XMLHttpRequest" },
-  });
-  if (!res.ok) throw new Error(`Server HEIC preview failed (${res.status})`);
-  const blob = await res.blob();
-  const newName = file.name.replace(/\.(heic|heif)$/i, "") + ".jpg";
-  return new File([blob], newName, { type: "image/jpeg", lastModified: Date.now() });
+  throw new Error("HEIC preview not supported in this browser");
 }
+
 
 let stagedFiles = [];
 
@@ -689,7 +799,6 @@ async function previewFiles(filesOverride) {
   const camInput = $("#fileFromCamera");
   if (!container) return;
 
-  // revoke old URLs
   $all("#previewContainer .image-preview img[data-objurl]").forEach((img) => {
     try { URL.revokeObjectURL(img.getAttribute("data-objurl")); } catch (_) { }
   });
@@ -697,7 +806,6 @@ async function previewFiles(filesOverride) {
   container.innerHTML = "";
   stagedFiles = [];
 
-  // Build a clean array of Files
   let files = [];
   if (filesOverride && filesOverride.length) {
     files = Array.from(filesOverride);
@@ -706,15 +814,11 @@ async function previewFiles(filesOverride) {
   } else if (camInput?.files?.length) {
     files = Array.from(camInput.files);
   }
-
-  // Nothing selected
   if (!files.length) return;
 
-  // Process each file sequentially (keeps index alignment simple)
   for (let i = 0; i < files.length; i++) {
     const f = files[i];
 
-    // placeholder card while converting
     const wrap = document.createElement("div");
     wrap.className = "image-preview";
     wrap.innerHTML = `
@@ -734,7 +838,6 @@ async function previewFiles(filesOverride) {
     let upFile = f;
     let note = "";
 
-    // Convert HEIC/HEIF → JPEG on the client when possible
     if (isHeicLike(f)) {
       try {
         upFile = await convertHeicToJpeg(f, 0.85);
@@ -745,10 +848,8 @@ async function previewFiles(filesOverride) {
       }
     }
 
-    // stage the file we’ll POST
     stagedFiles.push(upFile);
 
-    // Render preview (real <img> if browser can display it)
     if (canDisplayInImg(upFile.type, upFile.name)) {
       const url = URL.createObjectURL(upFile);
       wrap.innerHTML = `
@@ -777,8 +878,6 @@ async function previewFiles(filesOverride) {
     }
   }
 }
-
-
 
 // ---------- Bulk actions ----------
 function getSelectedFiles() {
@@ -875,7 +974,6 @@ document.addEventListener("DOMContentLoaded", () => {
   onClick("#btn-upload", () => safeShowDialog($("#uploadModal")));
   onClick("#btn-logout", () => logout());
 
-  // Signup shake + password policy (unchanged behavior, moved here)
   (function () {
     var box = document.getElementById('signupBox');
     if (box && box.dataset.hadError === 'true') {

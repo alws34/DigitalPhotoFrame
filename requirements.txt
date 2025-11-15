@@ -11,3 +11,4 @@ psutil
 qrcode[pil]
 PySide6
 pyheif
+tqdm
