@@ -9,7 +9,7 @@ import subprocess
 from typing import Any, Dict, Optional, List
 import sys
 import shutil
-
+import time
 from PySide6 import QtCore, QtGui, QtWidgets
 
 # Optional SVG
@@ -103,6 +103,7 @@ class PhotoFrameQtWidget(QtWidgets.QWidget, iFrame, metaclass=IFrameQtWidgetMeta
             min_restart_interval_sec=900,
             auto_restart_on_update=True,
         )
+
         self.autoupdater.start()
 
         # Signals
@@ -121,6 +122,57 @@ class PhotoFrameQtWidget(QtWidgets.QWidget, iFrame, metaclass=IFrameQtWidgetMeta
 
         # Apply orientation after startup
         QtCore.QTimer.singleShot(800, self._apply_startup_orientation)
+
+    def _backup_settings_files(self) -> Optional[str]:
+        """
+        Back up all JSON settings files before running an update.
+
+        - Uses self.settings_path if available.
+        - If not, falls back to the default SettingsModel location.
+        - Copies all *.json files in that directory into a 'config_backups'
+          subdirectory with a timestamped suffix.
+        """
+        try:
+            # Determine main settings file path
+            cfg_path = getattr(self, "settings_path", None)
+            if not cfg_path:
+                # Fallback to what SettingsModel.save() would use by default
+                base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+                cfg_path = os.path.join(base_dir, "photoframe_settings.json")
+
+            cfg_path = os.path.abspath(cfg_path)
+            cfg_dir = os.path.dirname(cfg_path)
+
+            if not os.path.isdir(cfg_dir):
+                logging.warning("Config directory does not exist for backup: %s", cfg_dir)
+                return None
+
+            # Where to store backups
+            backup_dir = os.path.join(cfg_dir, "config_backups")
+            os.makedirs(backup_dir, exist_ok=True)
+
+            ts = time.strftime("%Y%m%d-%H%M%S")
+            logging.info("Backing up config JSONs from %s to %s (ts=%s)", cfg_dir, backup_dir, ts)
+
+            # Backup *all* JSON files in the same directory (to preserve custom configs)
+            for name in os.listdir(cfg_dir):
+                if not name.lower().endswith(".json"):
+                    continue
+                src = os.path.join(cfg_dir, name)
+                if not os.path.isfile(src):
+                    continue
+                dst = os.path.join(backup_dir, f"{name}.{ts}.bak")
+                try:
+                    shutil.copy2(src, dst)
+                    logging.info("Backed up config file %s -> %s", src, dst)
+                except Exception as e:
+                    logging.exception("Failed to backup %s -> %s: %s", src, dst, e)
+
+            return backup_dir
+
+        except Exception:
+            logging.exception("Config backup failed before update.")
+            return None
 
     # -----------------------------------------------------------------
     # Public lifecycle
@@ -381,7 +433,7 @@ class PhotoFrameQtWidget(QtWidgets.QWidget, iFrame, metaclass=IFrameQtWidgetMeta
 
         # Linux but no wlr-randr in PATH: also ignore quietly.
         if shutil.which("wlr-randr") is None:
-            logging.warning("wlr-randr not found in PATH; skippƒ√ing orientation change.")
+            logging.warning("wlr-randr not found in PATH; skipping orientation change.")
             return True
 
         output = self._pick_default_output()
@@ -411,6 +463,17 @@ class PhotoFrameQtWidget(QtWidgets.QWidget, iFrame, metaclass=IFrameQtWidgetMeta
     # ---- Auto-update (pull now) ----
     def _on_autoupdate_pull(self) -> None:
         def worker():
+            # 1) BACKUP CONFIGS BEFORE DOING ANYTHING
+            try:
+                backup_dir = self._backup_settings_files()
+                if backup_dir:
+                    logging.info("Config backup completed to: %s", backup_dir)
+                else:
+                    logging.info("Config backup skipped or no configs found.")
+            except Exception as e:
+                logging.exception("Config backup crashed before update: %s", e)
+
+            # 2) Run the actual updater
             ok, msg = False, "Unknown"
             try:
                 if not hasattr(self, "autoupdater") or self.autoupdater is None:
@@ -419,6 +482,7 @@ class PhotoFrameQtWidget(QtWidgets.QWidget, iFrame, metaclass=IFrameQtWidgetMeta
             except Exception as e:
                 ok, msg = False, f"pull_now() crashed: {e}"
 
+            # 3) Notifications + UI message
             try:
                 if hasattr(self, "notifications") and self.notifications:
                     self.notifications.add(
