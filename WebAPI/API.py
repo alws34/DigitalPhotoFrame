@@ -42,34 +42,29 @@ from WebAPI.WebUtils.auth_security import UserStore, ensure_csrf, validate_csrf,
 # ---------------------------------------------------------------------
 # HEIC support
 # ---------------------------------------------------------------------
-
 has_pillow_heif = False
 has_pyheif = False
 
+# Try to register pillow-heif on ALL platforms (Windows/Linux/Mac)
+try:
+    from pillow_heif import register_heif_opener
+    register_heif_opener()
+    has_pillow_heif = True
+    print("[Backend] HEIF/HEIC plugin registered successfully (pillow-heif).")
+except ImportError:
+    print("[Backend] pillow-heif not installed. HEIC conversion will be unavailable.")
+    has_pillow_heif = False
+except Exception as e:
+    print(f"[Backend] Could not register HEIF/HEIC plugin: {e}")
+    has_pillow_heif = False
+
+# Keep pyheif check for Linux legacy support if needed
 if platform.system() in ("Linux", "Darwin"):
-    # pillow-heif >= 0.13: use register_heif_opener()
     try:
-        from pillow_heif import register_heif_opener  # type: ignore
-
-        register_heif_opener()
-        has_pillow_heif = True
-        print("[Backend] HEIF/HEIC plugin registered successfully (pillow-heif).")
-    except Exception as e:
-        print(f"[Backend] Could not register HEIF/HEIC plugin: {e}")
-        has_pillow_heif = False
-
-    # pyheif is optional, used only where you explicitly call it
-    try:
-        import pyheif  # type: ignore
-
+        import pyheif
         has_pyheif = True
     except ImportError:
         has_pyheif = False
-else:
-    # Windows or others: disable HEIF support here
-    has_pillow_heif = False
-    has_pyheif = False
-
 
 
 # ---------------------------------------------------------------------

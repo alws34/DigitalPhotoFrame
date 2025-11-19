@@ -746,56 +746,27 @@ async function createPreviewUrlForExistingImage(fileName, fullUrl) {
   return fullUrl;
 }
 
-// ---------- Upload modal (<dialog>) ----------
+// ---------- Upload modal (Server-side conversion version) ----------
 
 let stagedFiles = [];
 
 function initUploadModal() {
   const dlg = $("#uploadModal");
   const previews = $("#previewContainer");
-
   const fileFromLibrary = $("#fileFromLibrary");
   const fileFromCamera = $("#fileFromCamera");
 
   if (fileFromLibrary) fileFromLibrary.removeAttribute("capture");
 
-  function heicStatusBadge() {
-    const el = document.createElement("div");
-    el.id = "heicStatus";
-    el.style.fontSize = "12px";
-    el.style.opacity = "0.8";
-    el.style.margin = "8px 0";
-    const ok = typeof window.heic2any === "function";
-    el.textContent = ok
-      ? "HEIC conversion: available (will preview & upload as JPEG)"
-      : "HEIC conversion: unavailable (no preview; original HEIC will upload)";
-    return el;
-  }
   function open() {
-    const formEl = $("#uploadForm");
-    if (formEl) {
-      const existing = $("#heicStatus");
-      if (existing) {
-        existing.textContent =
-          typeof window.heic2any === "function"
-            ? "HEIC conversion: available (will preview & upload as JPEG)"
-            : "HEIC conversion: unavailable (no preview; original HEIC will upload)";
-      } else {
-        formEl.prepend(heicStatusBadge());
-      }
-    }
     safeShowDialog(dlg);
   }
 
   function close() {
-    $all("#previewContainer .image-preview img[data-objurl]").forEach((img) => {
-      try {
-        URL.revokeObjectURL(img.getAttribute("data-objurl"));
-      } catch (_) {}
-    });
     if (previews) previews.innerHTML = "";
     if (fileFromLibrary) fileFromLibrary.value = "";
     if (fileFromCamera) fileFromCamera.value = "";
+    stagedFiles = [];
     safeCloseDialog(dlg);
   }
 
@@ -806,10 +777,8 @@ function initUploadModal() {
 
   onClick("#btn-choose-library", () => {
     if (fileFromLibrary) {
-      fileFromLibrary.setAttribute(
-        "accept",
-        "image/*,.heic,.heif,.jpg,.jpeg,.png,.gif,.webp"
-      );
+      // Accept all images; server handles the rest
+      fileFromLibrary.setAttribute("accept", "image/*,.heic,.heif"); 
       fileFromLibrary.removeAttribute("capture");
       fileFromLibrary.click();
     }
@@ -824,32 +793,9 @@ function initUploadModal() {
   });
 
   if (fileFromLibrary)
-    fileFromLibrary.addEventListener("change", previewFiles);
-  if (fileFromCamera) fileFromCamera.addEventListener("change", previewFiles);
-
-  const dropZone = $("#dropZone");
-  if (dropZone) {
-    dropZone.addEventListener(
-      "dragover",
-      (e) => e.preventDefault(),
-      { passive: false }
-    );
-    dropZone.addEventListener("drop", (e) => {
-      e.preventDefault();
-      if (fileFromLibrary && e.dataTransfer?.files?.length) {
-        previewFiles(e.dataTransfer.files);
-      }
-    });
-    dropZone.addEventListener("click", () => {
-      fileFromLibrary && fileFromLibrary.click();
-    });
-    dropZone.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        fileFromLibrary && fileFromLibrary.click();
-      }
-    });
-  }
+    fileFromLibrary.addEventListener("change", (e) => previewFiles(null));
+  if (fileFromCamera)
+    fileFromCamera.addEventListener("change", (e) => previewFiles(null));
 
   const form = $("#uploadForm");
   if (form) {
@@ -857,58 +803,108 @@ function initUploadModal() {
       e.preventDefault();
       if (!stagedFiles.length) return alert("No files selected.");
 
-      const blocks = $all("#previewContainer .image-preview");
+      // Visual feedback
+      const submitBtn = form.querySelector("button[type='submit']");
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = "Uploading (Server Processing)...";
+      }
+
       const fd = new FormData();
       fd.append("csrf_token", getCsrf());
 
-      for (let i = 0; i < blocks.length; i++) {
-        const f = stagedFiles[i];
-        if (!f) continue;
-        const block = blocks[i];
+      // Loop through staged files and grab the corresponding inputs from the DOM
+      stagedFiles.forEach((f, i) => {
         fd.append("file[]", f, f.name);
-        fd.append(
-          `uploader_${i}`,
-          (block.querySelector(`input[name="uploader_${i}"]`)?.value || "").trim()
-        );
-        fd.append(
-          `caption_${i}`,
-          (block.querySelector(`input[name="caption_${i}"]`)?.value || "").trim()
-        );
-      }
+        
+        // Grab inputs by ID or Name using the index
+        const uploaderVal = document.querySelector(`input[name="uploader_${i}"]`)?.value || "";
+        const captionVal = document.querySelector(`input[name="caption_${i}"]`)?.value || "";
+        
+        fd.append(`uploader_${i}`, uploaderVal.trim());
+        fd.append(`caption_${i}`, captionVal.trim());
+      });
 
       csrfFetch("/upload_with_metadata", { method: "POST", body: fd })
         .then(async (res) => {
           const data = await res.json().catch(() => ({}));
-          if (!res.ok)
-            throw new Error(
-              data.error || data.message || `Upload failed (${res.status})`
-            );
+          if (!res.ok) throw new Error(data.error || data.message || `Upload failed`);
           return data;
         })
         .then((data) => {
           alert(data.message || "Upload successful!");
-          stagedFiles = [];
-          $all("#previewContainer .image-preview img[data-objurl]").forEach(
-            (img) => {
-              try {
-                URL.revokeObjectURL(img.getAttribute("data-objurl"));
-              } catch (_) {}
-            }
-          );
-          $("#previewContainer").innerHTML = "";
-          $("#fileFromLibrary") && ($("#fileFromLibrary").value = "");
-          $("#fileFromCamera") && ($("#fileFromCamera").value = "");
-          safeCloseDialog(dlg);
+          close();
           location.reload();
         })
         .catch((err) => {
           alert(err.message || "Upload failed.");
           console.error(err);
+          if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.textContent = "Upload";
+          }
         });
     });
   }
 }
 
+function previewFiles(filesOverride) {
+  const container = $("#previewContainer");
+  const libInput = $("#fileFromLibrary");
+  const camInput = $("#fileFromCamera");
+  if (!container) return;
+
+  container.innerHTML = "";
+  stagedFiles = [];
+
+  let files = [];
+  if (filesOverride && filesOverride.length) {
+    files = Array.from(filesOverride);
+  } else if (libInput?.files?.length) {
+    files = Array.from(libInput.files);
+  } else if (camInput?.files?.length) {
+    files = Array.from(camInput.files);
+  }
+
+  if (!files.length) return;
+
+  stagedFiles = files; // Instant assignment
+
+  // 1. Show Count Header
+  const header = document.createElement("div");
+  header.style.padding = "10px";
+  header.style.fontWeight = "bold";
+  header.style.borderBottom = "1px solid #ccc";
+  header.style.marginBottom = "10px";
+  header.textContent = `${files.length} file(s) selected ready to upload`;
+  container.appendChild(header);
+
+  // 2. Create a simple list (No images, just text inputs)
+  files.forEach((f, i) => {
+    const row = document.createElement("div");
+    row.className = "file-row";
+    row.style.display = "flex";
+    row.style.flexDirection = "column";
+    row.style.gap = "5px";
+    row.style.marginBottom = "15px";
+    row.style.padding = "10px";
+    row.style.backgroundColor = "rgba(128,128,128,0.1)";
+    row.style.borderRadius = "4px";
+
+    row.innerHTML = `
+      <div style="font-weight:bold; word-break:break-all;">${f.name}</div>
+      <div style="font-size: 0.85em; opacity: 0.7;">${(f.size / 1024 / 1024).toFixed(2)} MB</div>
+      <div style="display:grid; grid-template-columns: auto 1fr; gap: 8px; align-items:center; margin-top:5px;">
+        <label style="font-size:0.9em;">Uploader:</label>
+        <input type="text" name="uploader_${i}" placeholder="Optional" style="width:100%; padding:4px;">
+        
+        <label style="font-size:0.9em;">Caption:</label>
+        <input type="text" name="caption_${i}" placeholder="Optional" style="width:100%; padding:4px;">
+      </div>
+    `;
+    container.appendChild(row);
+  });
+}
 function isHeicLike(file) {
   const name = (file.name || "").toLowerCase();
   const t = (file.type || "").toLowerCase();
