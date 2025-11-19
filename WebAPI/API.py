@@ -273,15 +273,8 @@ class Backend:
         self.host = str(backend_cfg.get("host", "0.0.0.0"))
 
         self.ALLOWED_EXTENSIONS = {
-            ".png",
-            ".jpg",
-            ".jpeg",
-            ".gif",
-            ".bmp",
-            ".tiff",
-            ".webp",
-            ".heic",
-            ".heif",
+            ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".webp",
+            ".heic", ".heif", ".mov", ".mp4"
         }
         self.SELECTED_COLOR = "#ffcccc"
 
@@ -675,6 +668,60 @@ class Backend:
             os.makedirs(os.path.dirname(dst_path), exist_ok=True)
             im.save(dst_path, "WEBP", quality=75, method=6)
 
+    def _make_thumb(self, src_path: str, dst_path: str, w: int) -> None:
+        """
+        Generates a thumbnail. Handles both Images (PIL) and Videos (OpenCV).
+        """
+        ext = os.path.splitext(src_path)[1].lower()
+        
+        # 1. Handle Videos
+        if ext in (".mov", ".mp4"):
+            self._make_video_thumb(src_path, dst_path, w)
+            return
+
+        # 2. Handle Images (Existing Logic)
+        try:
+            with Image.open(src_path) as im:
+                im = ImageOps.exif_transpose(im)
+                ratio = w / float(im.width)
+                h = max(1, int(im.height * ratio))
+                im = im.resize((w, h), Image.Resampling.LANCZOS)
+                
+                os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+                im.save(dst_path, "WEBP", quality=75, method=6)
+        except Exception as e:
+            print(f"[Backend] Image thumb generation failed for {src_path}: {e}")
+
+    def _make_video_thumb(self, src_path: str, dst_path: str, w: int) -> None:
+        """
+        Extracts the first frame of a video to create a thumbnail.
+        """
+        try:
+            cap = cv2.VideoCapture(src_path)
+            if not cap.isOpened():
+                return
+            
+            ret, frame = cap.read()
+            cap.release()
+            
+            if ret and frame is not None:
+                # Calculate height maintaining aspect ratio
+                h_orig, w_orig = frame.shape[:2]
+                ratio = w / float(w_orig)
+                h = max(1, int(h_orig * ratio))
+                
+                # Resize
+                frame = cv2.resize(frame, (w, h), interpolation=cv2.INTER_AREA)
+                
+                # Ensure dir exists
+                os.makedirs(os.path.dirname(dst_path), exist_ok=True)
+                
+                # Encode to WEBP directly via OpenCV
+                # quality 75
+                cv2.imwrite(dst_path, frame, [cv2.IMWRITE_WEBP_QUALITY, 75])
+        except Exception as e:
+            print(f"[Backend] Video thumb generation failed for {src_path}: {e}")
+            
     def _make_heartbeat_jpeg(self, w, h):
         """
         Return a small 'no frame' JPEG so the client keeps the stream open.

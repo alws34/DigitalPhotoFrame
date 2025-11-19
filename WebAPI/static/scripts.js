@@ -777,8 +777,8 @@ function initUploadModal() {
 
   onClick("#btn-choose-library", () => {
     if (fileFromLibrary) {
-      // Accept all images; server handles the rest
-      fileFromLibrary.setAttribute("accept", "image/*,.heic,.heif"); 
+      // UPDATED: Added video/*, .mov, .mp4
+      fileFromLibrary.setAttribute("accept", "image/*,video/*,.heic,.heif,.mov,.mp4"); 
       fileFromLibrary.removeAttribute("capture");
       fileFromLibrary.click();
     }
@@ -803,24 +803,19 @@ function initUploadModal() {
       e.preventDefault();
       if (!stagedFiles.length) return alert("No files selected.");
 
-      // Visual feedback
       const submitBtn = form.querySelector("button[type='submit']");
       if (submitBtn) {
         submitBtn.disabled = true;
-        submitBtn.textContent = "Uploading (Server Processing)...";
+        submitBtn.textContent = "Uploading...";
       }
 
       const fd = new FormData();
       fd.append("csrf_token", getCsrf());
 
-      // Loop through staged files and grab the corresponding inputs from the DOM
       stagedFiles.forEach((f, i) => {
         fd.append("file[]", f, f.name);
-        
-        // Grab inputs by ID or Name using the index
         const uploaderVal = document.querySelector(`input[name="uploader_${i}"]`)?.value || "";
         const captionVal = document.querySelector(`input[name="caption_${i}"]`)?.value || "";
-        
         fd.append(`uploader_${i}`, uploaderVal.trim());
         fd.append(`caption_${i}`, captionVal.trim());
       });
@@ -847,7 +842,6 @@ function initUploadModal() {
     });
   }
 }
-
 function previewFiles(filesOverride) {
   const container = $("#previewContainer");
   const libInput = $("#fileFromLibrary");
