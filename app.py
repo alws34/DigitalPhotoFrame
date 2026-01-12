@@ -6,6 +6,9 @@ Digital Photo Frame - Qt main (fullscreen frame; Settings at 800x600).
 """
 
 from __future__ import annotations
+from WebAPI.API import Backend
+from Utilities.autoupdate_utils import AutoUpdater
+from Utilities.MQTT.mqtt_bridge import MqttBridge
 import os
 import sys
 import json
@@ -19,10 +22,10 @@ from PySide6 import QtCore, QtGui, QtWidgets
 QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_DontUseNativeDialogs, True)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-from WebAPI.API import Backend         
-from Utilities.MQTT.mqtt_bridge import MqttBridge   
+# --- ADDED: Import AutoUpdater ---
 
 # ------------------------------ utilities ------------------------------
+
 
 def _abs_path(p: str) -> str:
     return p if os.path.isabs(p) else os.path.abspath(os.path.join(BASE_DIR, p))
@@ -35,7 +38,8 @@ def _load_settings(path: str) -> Dict[str, Any]:
     except FileNotFoundError:
         return {}
     except Exception as e:
-        print(f"[PhotoFrame] Failed to load settings '{path}': {e}", file=sys.stderr)
+        print(
+            f"[PhotoFrame] Failed to load settings '{path}': {e}", file=sys.stderr)
         return {}
 
 
@@ -81,7 +85,7 @@ class _SettingsSizer(QtCore.QObject):
     def eventFilter(self, obj: QtCore.QObject, ev: QtCore.QEvent) -> bool:
         if ev.type() == QtCore.QEvent.Show:
             if self._cls and isinstance(obj, self._cls):
-                dlg: QtWidgets.QDialog = obj 
+                dlg: QtWidgets.QDialog = obj
                 dlg.setMinimumSize(800, 600)
                 dlg.setMaximumSize(800, 600)
                 dlg.resize(800, 600)
@@ -98,6 +102,14 @@ class _SettingsSizer(QtCore.QObject):
 
 # ------------------------------ runners ------------------------------
 
+
+def _restart_program():
+    """Restarts the current program. Note: Executable must be executable."""
+    print("[PhotoFrame] Restarting...")
+    python = sys.executable
+    os.execl(python, python, *sys.argv)
+
+
 def _run_headless(settings: Dict[str, Any], settings_path: str,
                   width: Optional[int], height: Optional[int]) -> None:
     from FrameServer.PhotoFrameServer import PhotoFrameServer
@@ -105,18 +117,35 @@ def _run_headless(settings: Dict[str, Any], settings_path: str,
     backend_cfg = settings.get("backend_configs", {}) or {}
     w = width or int(backend_cfg.get("stream_width", 1920))
     h = height or int(backend_cfg.get("stream_height", 1080))
-    
-    # --- Extract image_dir from system/root ---
-    sys_cfg = settings.get("system", {})
-    images_dir = sys_cfg.get("image_dir") or settings.get("image_dir") or settings.get("images_dir") or None
 
-    print(f"[PhotoFrame] Headless mode. Resolution {w}x{h}. Settings: {settings_path}")
+    sys_cfg = settings.get("system", {})
+    images_dir = sys_cfg.get("image_dir") or settings.get(
+        "image_dir") or settings.get("images_dir") or None
+
+    print(
+        f"[PhotoFrame] Headless mode. Resolution {w}x{h}. Settings: {settings_path}")
+
+    # --- AutoUpdater Setup ---
+    stop_event = threading.Event()
+    au_cfg = settings.get("autoupdate", {})
+    updater = AutoUpdater(
+        stop_event=stop_event,
+        interval_sec=3600,  # Check hourly in headless
+        restart_service_async=_restart_program,
+        auto_restart_on_update=au_cfg.get("enabled", True)
+    )
+    updater.start()
+    # -------------------------
 
     srv = PhotoFrameServer(width=w, height=h, iframe=None,
                            images_dir=images_dir, settings_path=settings_path)
 
     backend = Backend(frame=srv, settings=settings,
                       image_dir=images_dir, settings_path=settings_path)
+
+    # Inject updater into backend if needed
+    backend.updater = updater
+
     threading.Thread(target=backend.start, daemon=True).start()
     srv.m_api = backend
 
@@ -129,8 +158,11 @@ def _run_headless(settings: Dict[str, Any], settings_path: str,
     except KeyboardInterrupt:
         pass
     finally:
-        try: srv.stop_services()
-        except Exception: pass
+        stop_event.set()  # Stop updater
+        try:
+            srv.stop_services()
+        except Exception:
+            pass
 
 
 def _run_gui(settings: Dict[str, Any], settings_path: str) -> None:
@@ -145,7 +177,8 @@ def _run_gui(settings: Dict[str, Any], settings_path: str) -> None:
 
     screen = app.primaryScreen()
     if not screen:
-        print("[PhotoFrame] No display detected. Falling back to headless mode.", file=sys.stderr)
+        print(
+            "[PhotoFrame] No display detected. Falling back to headless mode.", file=sys.stderr)
         _run_headless(settings, settings_path, None, None)
         return
 
@@ -155,9 +188,9 @@ def _run_gui(settings: Dict[str, Any], settings_path: str) -> None:
     view = PhotoFrameQtWidget(settings=settings, settings_path=settings_path)
     view.showFullScreen()
 
-    # --- Extract image_dir from system/root ---
     sys_cfg = settings.get("system", {})
-    images_dir = sys_cfg.get("image_dir") or settings.get("image_dir") or settings.get("images_dir") or None
+    images_dir = sys_cfg.get("image_dir") or settings.get(
+        "image_dir") or settings.get("images_dir") or None
 
     srv = PhotoFrameServer(width=sw, height=sh, iframe=view,
                            images_dir=images_dir, settings_path=settings_path)
@@ -167,17 +200,36 @@ def _run_gui(settings: Dict[str, Any], settings_path: str) -> None:
     threading.Thread(target=backend.start, daemon=True).start()
     srv.m_api = backend
 
+    # --- AutoUpdater Setup ---
+    stop_event = threading.Event()
+    au_cfg = settings.get("autoupdate", {})
+    updater = AutoUpdater(
+        stop_event=stop_event,
+        interval_sec=1800,  # Check every 30 mins
+        restart_service_async=_restart_program,
+        auto_restart_on_update=au_cfg.get("enabled", True)
+    )
+    updater.start()
+    # -------------------------
+
     mqtt = MqttBridge(view=view, settings=settings)
     mqtt.start()
 
+    # Pass dependencies to View (so Settings Dialog can use them)
     view.backend = backend
     view.mqtt = mqtt
+    view.updater = updater  # <--- Critical for the "Pull Updates" button
 
     def _on_quit():
-        try: mqtt.stop()
-        except Exception: pass
-        try: srv.stop_services()
-        except Exception: pass
+        stop_event.set()  # Stop updater thread
+        try:
+            mqtt.stop()
+        except Exception:
+            pass
+        try:
+            srv.stop_services()
+        except Exception:
+            pass
     app.aboutToQuit.connect(_on_quit)
 
     t = threading.Thread(target=srv.run_photoframe, daemon=True)
