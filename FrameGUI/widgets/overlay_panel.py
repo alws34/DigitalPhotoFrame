@@ -28,7 +28,6 @@ class OverlayPanel(QtWidgets.QWidget):
         self.ml = int(margins.get("left", 80))
         self.mr = int(margins.get("right", 50))
         self.mb = int(margins.get("bottom", 30))
-        # JSON doesn't specify top, default to match bottom for symmetry
         self.mt = int(margins.get("top", self.mb))
 
         # Shadows (ui -> text_shadow -> blur/offset/alpha)
@@ -42,7 +41,6 @@ class OverlayPanel(QtWidgets.QWidget):
         # Spacing
         self.spacing_val = int(ui_cfg.get("spacing_between", 50))
 
-        # Device Pixel Ratio for scaling shadows/margins on high DPI
         dpr = getattr(self, "devicePixelRatioF", lambda: 1.0)()
 
         # -- Time & Date --
@@ -56,7 +54,6 @@ class OverlayPanel(QtWidgets.QWidget):
         UIFactory.apply_font(
             self._time_label, self.font_name, self.time_px, bold=True)
 
-        # Monospace fix for time
         f = self._time_label.font()
         f.setKerning(False)
         f.setStyleHint(QtGui.QFont.Monospace, QtGui.QFont.PreferDefault)
@@ -73,8 +70,7 @@ class OverlayPanel(QtWidgets.QWidget):
         UIFactory.apply_font(
             self._date_label, self.font_name, self.date_px, bold=False)
 
-        # Apply Shadows using values from JSON
-        # Scale shadow radius and offset by DPI
+        # Shadows
         s_radius = int(self.shadow_blur * dpr)
         s_dx = int(self.shadow_x * dpr)
         s_dy = int(self.shadow_y * dpr)
@@ -84,15 +80,10 @@ class OverlayPanel(QtWidgets.QWidget):
         UIFactory.apply_shadow(self._date_label, s_radius,
                                s_dx, s_dy, self.shadow_color)
 
-        # Add padding so shadows aren't clipped
-        pad_time = s_radius // 3
-        pad_date = s_radius // 3
-        self._time_label.setContentsMargins(
-            pad_time, pad_time, pad_time, pad_time)
-        self._date_label.setContentsMargins(
-            pad_date, pad_date, pad_date, pad_date)
+        pad = max(4, s_radius // 2)
+        self._time_label.setContentsMargins(pad, pad, pad, pad)
+        self._date_label.setContentsMargins(pad, pad, pad, pad)
 
-        # Container for Left (Time/Date)
         self._left_container = UIFactory.create_widget(
             QtWidgets.QWidget, self, style_sheet="background: transparent;")
         self._left_container.setAttribute(QtCore.Qt.WA_TranslucentBackground)
@@ -103,7 +94,6 @@ class OverlayPanel(QtWidgets.QWidget):
         left_layout.addWidget(self._date_label, 0, QtCore.Qt.AlignHCenter)
 
         # -- Weather --
-        # Reusing font sizes for weather consistency
         self.weather_num_px = self.time_px
         self.weather_desc_px = self.date_px
 
@@ -139,7 +129,6 @@ class OverlayPanel(QtWidgets.QWidget):
         UIFactory.apply_font(self._weather_desc, self.font_name,
                              self.weather_desc_px, bold=False)
 
-        # Weather Container
         self._weather_widget = UIFactory.create_widget(
             QtWidgets.QWidget, self,
             style_sheet="background: transparent;",
@@ -161,13 +150,11 @@ class OverlayPanel(QtWidgets.QWidget):
         weather_col.addWidget(self._weather_num, 0, QtCore.Qt.AlignHCenter)
         weather_col.addWidget(cond_row_widget, 0, QtCore.Qt.AlignHCenter)
 
-        # Weather Shadows (Consistent with Time/Date)
-        pad = max(4, s_radius // 4)
         self._weather_widget.setContentsMargins(pad, pad, pad, pad)
         UIFactory.apply_shadow(self._weather_widget,
                                s_radius, s_dx, s_dy, self.shadow_color)
 
-        # Main Layout using JSON margins
+        # Main Layout using margins from settings
         main = UIFactory.layout(QtWidgets.QGridLayout, self, margins=(
             self.ml, self.mt, self.mr, self.mb))
         main.addWidget(self._left_container, 1, 0,
@@ -181,59 +168,42 @@ class OverlayPanel(QtWidgets.QWidget):
 
     def update_time_and_date(self, time_text: str) -> None:
         self._time_label.setText(time_text)
-
-        # Read format strictly from ui -> date_format
         ui_cfg = self.settings.get("ui", {})
         date_fmt = ui_cfg.get("date_format", "dddd, MMM d, yyyy")
-
         self._date_label.setText(QtCore.QDate.currentDate().toString(date_fmt))
 
-        # Maintain centered text width logic for time
-        fm_time = QtGui.QFontMetrics(self._time_label.font())
-        max_time_text = "88:88:88"
-        fixed_w = fm_time.horizontalAdvance(max_time_text)
-        if self._time_label.width() != fixed_w:
-            self._time_label.setFixedWidth(fixed_w)
+        # Fix width jitter
+        fm = QtGui.QFontMetrics(self._time_label.font())
+        w = fm.horizontalAdvance("88:88:88")
+        if self._time_label.width() < w:
+            self._time_label.setFixedWidth(w)
 
     def update_weather(self, data: dict) -> None:
         data = data or {}
-
         temp = data.get("temp", "")
         unit = data.get("unit", "")
-        if isinstance(temp, (int, float)):
-            temp_str = f"{int(round(temp))} °{unit}".strip()
-        else:
-            temp_str = f"{str(temp)} °{unit}".strip()
-        self._weather_num.setText(temp_str)
+        self._weather_num.setText(
+            f"{round(temp) if isinstance(temp, (int, float)) else temp} °{unit}")
+        self._weather_desc.setText(str(data.get("description", "") or ""))
 
-        desc = str(data.get("description", "") or "")
-        self._weather_desc.setText(desc)
-
-        symbol = ""
-        icon_obj = data.get("icon")
-        if isinstance(icon_obj, int):
-            symbol = self._accuweather_symbol(icon_obj)
-
+        icon_id = data.get("icon")
+        symbol = self._accuweather_symbol(
+            icon_id) if isinstance(icon_id, int) else ""
         self._weather_emoji.setText(symbol)
         self._weather_emoji.setVisible(bool(symbol))
 
     def _accuweather_symbol(self, icon_id: int) -> str:
-        # Simple ASCII mapping for weather icons
-        day = icon_id < 30
+        # Simple ASCII mapping
         if icon_id in (1, 2, 33, 34):
-            return "o" if day else "c"
-        if icon_id in (3, 4, 35, 36):
             return "o"
-        if icon_id in (6, 7):
+        if icon_id in (3, 4, 35, 36, 6, 7):
             return "o"
         if icon_id in (11, 20):
             return "~"
-        if icon_id in (12, 13, 14, 39, 40):
+        if icon_id in (12, 13, 14, 18, 26, 39, 40):
             return "r"
         if icon_id in (15, 41, 42):
             return "t"
-        if icon_id in (18, 26):
-            return "r"
         if icon_id in (22, 29):
             return "*"
         return ""
