@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import sys
 import json
+import signal
 import argparse
 import threading
 from typing import Any, Dict, Optional
@@ -87,8 +88,8 @@ class _SettingsSizer(QtCore.QObject):
             self._cls = None
 
     def eventFilter(self, obj: QtCore.QObject, ev: QtCore.QEvent) -> bool:
-        if self._cls and isinstance(obj, self._cls):
-            if ev.type() == QtCore.QEvent.Show:
+        if ev.type() == QtCore.QEvent.Show:
+            if self._cls and isinstance(obj, self._cls):
                 dlg: QtWidgets.QDialog = obj  # type: ignore
                 # Force fixed 800x600 and center on the active screen
                 dlg.setMinimumSize(800, 600)
@@ -103,8 +104,9 @@ class _SettingsSizer(QtCore.QObject):
                         dlg.move(max(geo.x(), x), max(geo.y(), y))
                 except Exception:
                     pass
-        return super().eventFilter(obj, ev)
-
+                    
+        # Standard practice: Return False to say "I didn't block this event"
+        return False
 
 # ------------------------------ runners ------------------------------
 
@@ -205,6 +207,7 @@ def _run_gui(settings: Dict[str, Any], settings_path: str) -> None:
 
     qpa = os.environ.get("QT_QPA_PLATFORM", "(unset)")
     print(f"[PhotoFrame] GUI fullscreen {sw}x{sh}, QPA={qpa}")
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
     sys.exit(app.exec())
 
 
