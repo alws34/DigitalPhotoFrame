@@ -16,8 +16,6 @@ from typing import Any, Dict, Optional
 import time
 from PySide6 import QtCore, QtGui, QtWidgets
 
-# QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, True)
-# QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, True)
 QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_DontUseNativeDialogs, True)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -42,7 +40,6 @@ def _load_settings(path: str) -> Dict[str, Any]:
 
 
 def _apply_safe_theme(app: QtWidgets.QApplication) -> None:
-    # Robust readable style regardless of system theme
     try:
         app.setStyle("Fusion")
     except Exception:
@@ -60,7 +57,6 @@ def _apply_safe_theme(app: QtWidgets.QApplication) -> None:
     pal.setColor(QtGui.QPalette.HighlightedText,  QtCore.Qt.white)
     app.setPalette(pal)
 
-    # Minimal stylesheet to prevent black-on-black
     app.setStyleSheet(
         "QWidget { background: #f5f5f5; color: #000; }"
         "QLineEdit, QComboBox, QTableWidget, QTableView { background: #fff; }"
@@ -73,16 +69,11 @@ def _apply_safe_theme(app: QtWidgets.QApplication) -> None:
 # ----------------------- Settings dialog sizing hook -----------------------
 
 class _SettingsSizer(QtCore.QObject):
-    """
-    Event filter that forces SettingsDialog windows to 800x600 and centers them.
-    This overrides any size the dialog tries to set in its own __init__.
-    """
     def __init__(self, app: QtWidgets.QApplication):
         super().__init__(app)
         self._cls = None
         try:
-            # Import lazily so missing modules don't crash headless
-            from FrameGUI.SettingsFrom.dialog import SettingsDialog  # type: ignore
+            from FrameGUI.SettingsFrom.dialog import SettingsDialog
             self._cls = SettingsDialog
         except Exception:
             self._cls = None
@@ -90,8 +81,7 @@ class _SettingsSizer(QtCore.QObject):
     def eventFilter(self, obj: QtCore.QObject, ev: QtCore.QEvent) -> bool:
         if ev.type() == QtCore.QEvent.Show:
             if self._cls and isinstance(obj, self._cls):
-                dlg: QtWidgets.QDialog = obj  # type: ignore
-                # Force fixed 800x600 and center on the active screen
+                dlg: QtWidgets.QDialog = obj 
                 dlg.setMinimumSize(800, 600)
                 dlg.setMaximumSize(800, 600)
                 dlg.resize(800, 600)
@@ -104,8 +94,6 @@ class _SettingsSizer(QtCore.QObject):
                         dlg.move(max(geo.x(), x), max(geo.y(), y))
                 except Exception:
                     pass
-                    
-        # Standard practice: Return False to say "I didn't block this event"
         return False
 
 # ------------------------------ runners ------------------------------
@@ -117,26 +105,23 @@ def _run_headless(settings: Dict[str, Any], settings_path: str,
     backend_cfg = settings.get("backend_configs", {}) or {}
     w = width or int(backend_cfg.get("stream_width", 1920))
     h = height or int(backend_cfg.get("stream_height", 1080))
-    images_dir = settings.get("image_dir") or settings.get("images_dir") or None
+    
+    # --- Extract image_dir from system/root ---
+    sys_cfg = settings.get("system", {})
+    images_dir = sys_cfg.get("image_dir") or settings.get("image_dir") or settings.get("images_dir") or None
 
     print(f"[PhotoFrame] Headless mode. Resolution {w}x{h}. Settings: {settings_path}")
 
     srv = PhotoFrameServer(width=w, height=h, iframe=None,
                            images_dir=images_dir, settings_path=settings_path)
 
-    # Start HTTP backend ONCE and tie it to the producer
     backend = Backend(frame=srv, settings=settings,
                       image_dir=images_dir, settings_path=settings_path)
     threading.Thread(target=backend.start, daemon=True).start()
     srv.m_api = backend
 
-    # compositor loop
     t = threading.Thread(target=srv.run_photoframe, daemon=True)
     t.start()
-
-    # optional: MQTT if you need it headless
-    # mqtt = MqttBridge(view=srv, settings=settings)
-    # mqtt.start()
 
     try:
         while True:
@@ -146,8 +131,6 @@ def _run_headless(settings: Dict[str, Any], settings_path: str,
     finally:
         try: srv.stop_services()
         except Exception: pass
-        # try: mqtt.stop()
-        # except Exception: pass
 
 
 def _run_gui(settings: Dict[str, Any], settings_path: str) -> None:
@@ -169,31 +152,27 @@ def _run_gui(settings: Dict[str, Any], settings_path: str) -> None:
     avail = screen.availableGeometry()
     sw, sh = max(1, avail.width()), max(1, avail.height())
 
-    # main UI
     view = PhotoFrameQtWidget(settings=settings, settings_path=settings_path)
     view.showFullScreen()
 
-    images_dir = settings.get("image_dir") or settings.get("images_dir") or None
+    # --- Extract image_dir from system/root ---
+    sys_cfg = settings.get("system", {})
+    images_dir = sys_cfg.get("image_dir") or settings.get("image_dir") or settings.get("images_dir") or None
 
-    # Producer owns frames; view is just the GUI sink
     srv = PhotoFrameServer(width=sw, height=sh, iframe=view,
                            images_dir=images_dir, settings_path=settings_path)
 
-    # Start HTTP backend ONCE and tie it to the producer
     backend = Backend(frame=srv, settings=settings,
                       image_dir=images_dir, settings_path=settings_path)
     threading.Thread(target=backend.start, daemon=True).start()
     srv.m_api = backend
 
-    # optional MQTT
     mqtt = MqttBridge(view=view, settings=settings)
     mqtt.start()
 
-    # keep refs
     view.backend = backend
     view.mqtt = mqtt
 
-    # graceful shutdown
     def _on_quit():
         try: mqtt.stop()
         except Exception: pass
@@ -201,7 +180,6 @@ def _run_gui(settings: Dict[str, Any], settings_path: str) -> None:
         except Exception: pass
     app.aboutToQuit.connect(_on_quit)
 
-    # compositor loop
     t = threading.Thread(target=srv.run_photoframe, daemon=True)
     t.start()
 

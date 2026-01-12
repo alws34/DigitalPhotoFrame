@@ -87,8 +87,10 @@ class PhotoFrameServer(iFrame):
         self.screen_width = width
         self.screen_height = height
 
-        self._target_fps = int(self.settings_handler.get("animation_fps", 30))
-        self._transition_fps = int(self.settings_handler.get("transition_fps", 30))
+        # --- FPS from 'playback' or root ---
+        playback = self.settings_handler.get("playback", {})
+        self._target_fps = int(playback.get("animation_fps") or self.settings_handler.get("animation_fps") or 30)
+        self._transition_fps = int(playback.get("transition_fps") or self.settings_handler.get("transition_fps") or 30)
         self._transition_frame_interval = 1.0 / max(1.0, float(self._transition_fps))
 
         self.current_image_idx = 0
@@ -365,7 +367,10 @@ class PhotoFrameServer(iFrame):
             else:
                 self.IMAGE_DIR = os.path.join(base_root, images_dir)
         else:
-            cfg = self.settings_handler.get("images_dir") or "Images"
+            # --- Search 'system' -> 'image_dir', else root ---
+            sys_cfg = self.settings_handler.get("system", {})
+            cfg = sys_cfg.get("image_dir") or self.settings_handler.get("images_dir") or "Images"
+            
             if os.path.isabs(cfg):
                 self.IMAGE_DIR = cfg
             else:
@@ -446,9 +451,6 @@ class PhotoFrameServer(iFrame):
         
         logging.info(f"Playing {os.path.basename(video_path)} ({video_duration:.1f}s). Loops: {loop_count}. Sync FPS: {fps}")
 
-        # Pre-calculation for aspect ratio to avoid re-calc every frame if possible
-        # (This simple check relies on the image_handler logic, keeping it standard for now)
-
         frame_interval = 1.0 / fps
 
         for i in range(int(loop_count)):
@@ -470,8 +472,6 @@ class PhotoFrameServer(iFrame):
                 if target_frame_index > current_frame_index:
                     frames_to_skip = target_frame_index - current_frame_index
                     if frames_to_skip > 0:
-                        # If we are way behind (e.g. > 5 frames), grab() without decoding to catch up fast
-                        # logging.debug(f"Lag detected. Skipping {frames_to_skip} frames.")
                         for _ in range(frames_to_skip):
                             cap.grab() 
 
@@ -486,8 +486,6 @@ class PhotoFrameServer(iFrame):
                 yield resized_frame
 
                 # 5. Precise Sleep
-                # processing time = time.perf_counter() - now
-                # We only sleep if we are actually AHEAD of schedule (rare if resizing is slow)
                 after_process = time.perf_counter()
                 next_frame_time = loop_start_time + ((target_frame_index + 1) * frame_interval)
                 sleep_time = next_frame_time - after_process
@@ -497,13 +495,11 @@ class PhotoFrameServer(iFrame):
 
             # --- Pause between loops ---
             if i < (loop_count - 1):
-                # Show the last frame static for 1.5 seconds
-                # We assume 'resized_frame' is holding the last valid frame
                 if 'resized_frame' in locals():
                     pause_start = time.perf_counter()
                     while (time.perf_counter() - pause_start) < 1.5:
                         yield resized_frame
-                        time.sleep(0.05) # Sleep briefly to not hammer CPU during pause
+                        time.sleep(0.05) 
 
         cap.release()
         
@@ -643,9 +639,14 @@ class PhotoFrameServer(iFrame):
         self._send_frame(self.current_image)
 
         while self.is_running:
-            if self.settings_handler["animation_duration"] > 0:
-                self.start_image_transition(duration=self.settings_handler["animation_duration"])
-                time.sleep(self.settings_handler["delay_between_images"])
+            # --- UPDATED: Duration/Delay from 'playback' or root ---
+            playback = self.settings_handler.get("playback", {})
+            anim_duration = playback.get("animation_duration") or self.settings_handler.get("animation_duration") or 10
+            delay = playback.get("delay_between_images") or self.settings_handler.get("delay_between_images") or 30
+
+            if anim_duration > 0:
+                self.start_image_transition(duration=anim_duration)
+                time.sleep(delay)
             else:
                 time.sleep(0.1)
 

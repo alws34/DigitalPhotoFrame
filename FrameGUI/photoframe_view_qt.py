@@ -97,7 +97,10 @@ class PhotoFrameQtWidget(QtWidgets.QWidget, iFrame, metaclass=IFrameQtWidgetMeta
         self._last_clicks: List[int] = []
         self._settings_vm = None
         self.backend_port = int(self.settings.get("backend_configs", {}).get("server_port", 5001))
-        self.service_name = self.settings.get("service_name", "photoframe")
+        
+        # --- Service Name lookup (system -> root -> default) ---
+        sys_cfg = self.settings.get("system", {})
+        self.service_name = sys_cfg.get("service_name") or self.settings.get("service_name") or "photoframe"
 
         self.screen_ctrl = None
 
@@ -342,7 +345,7 @@ class PhotoFrameQtWidget(QtWidgets.QWidget, iFrame, metaclass=IFrameQtWidgetMeta
 
     def _on_restart_service_async(self) -> None:
         def worker():
-            unit = "PhotoFrame_Desktop_App.service"
+            unit = self.service_name + ".service"
             cmd = ["/usr/bin/systemctl", "restart", unit]
             try:
                 r = subprocess.run(cmd, capture_output=True, text=True, timeout=20)

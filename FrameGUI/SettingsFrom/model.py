@@ -7,6 +7,8 @@ class SettingsModel:
     def __init__(self, settings: Dict[str, Any], settings_path: str | None = None):
         self._settings = settings
         self._path = settings_path
+        # Ensure the new structure exists immediately on load
+        self.ensure_defaults()
 
     # ---- basic access ----
     @property
@@ -22,7 +24,37 @@ class SettingsModel:
             json.dump(self._settings, f, indent=2)
         self._path = out
 
-    # ---- screen helpers ----
+    # ---- structural helpers ----
+    def ensure_defaults(self) -> None:
+        """Guarantees the new nested structure exists."""
+        # 1. System
+        sys = self._settings.setdefault("system", {})
+        sys.setdefault("service_name", "PhotoFrame_Desktop_App")
+        sys.setdefault("image_dir", "Images")
+
+        # 2. Playback
+        pb = self._settings.setdefault("playback", {})
+        pb.setdefault("animation_duration", 10)
+        pb.setdefault("delay_between_images", 30)
+        pb.setdefault("animation_fps", 30)
+
+        # 3. Effects
+        eff = self._settings.setdefault("effects", {})
+        eff.setdefault("allow_translucent_background", True)
+        eff.setdefault("background_opacity", 0.4)
+        eff.setdefault("shadow_opacity", 0.85)
+
+        # 4. UI
+        ui = self._settings.setdefault("ui", {})
+        ui.setdefault("font_name", "arial.ttf")
+        ui.setdefault("date_format", "dddd, MMM d, yyyy")
+        # Sub-objects in UI
+        ui.setdefault("margins", {"left": 50, "right": 50, "top": 50, "bottom": 50})
+        ui.setdefault("text_shadow", {"alpha": 200, "blur": 10, "offset_x": 2, "offset_y": 2})
+
+        # 5. Screen (complex struct)
+        self.ensure_screen_struct()
+
     def ensure_screen_struct(self) -> Dict[str, Any]:
         scr = self._settings.setdefault("screen", {})
         scr.setdefault("orientation", "normal")

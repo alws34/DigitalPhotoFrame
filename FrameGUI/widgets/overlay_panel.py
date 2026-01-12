@@ -12,16 +12,21 @@ class OverlayPanel(QtWidgets.QWidget):
         self.setAttribute(QtCore.Qt.WA_NoSystemBackground, True)
         self.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
 
-        # Load settings
-        self.font_name = UIFactory.load_font(self.settings.get("font_name", "Arial"))
-        self.time_px = int(self.settings.get("time_font_size", 120))
-        self.date_px = int(self.settings.get("date_font_size", 80))
-        self.ml = int(self.settings.get("margin_left", 50))
-        self.mr = int(self.settings.get("margin_right", 50))
-        self.mb = int(self.settings.get("margin_bottom", 50))
-        self.mt = int(self.settings.get("margin_top", self.mb))
+        # --- Load settings with nested 'ui' fallback ---
+        self.font_name = UIFactory.load_font(self._get_val("font_name", "Arial"))
         
-        self.shadow_alpha = int(self.settings.get("shadow_alpha", 200))
+        # Font Sizes
+        self.time_px = int(self._get_val("time_font_size", 120))
+        self.date_px = int(self._get_val("date_font_size", 80))
+        
+        # Margins (try ui.margins.left -> margin_left -> default)
+        self.ml = int(self._get_ui_sub_val("margins", "left", "margin_left", 50))
+        self.mr = int(self._get_ui_sub_val("margins", "right", "margin_right", 50))
+        self.mb = int(self._get_ui_sub_val("margins", "bottom", "margin_bottom", 50))
+        self.mt = int(self._get_ui_sub_val("margins", "top", "margin_top", self.mb))
+        
+        # Shadows (try ui.text_shadow.alpha -> shadow_alpha -> default)
+        self.shadow_alpha = int(self._get_ui_sub_val("text_shadow", "alpha", "shadow_alpha", 200))
         self.shadow_color = QtGui.QColor(0, 0, 0, self.shadow_alpha)
         
         dpr = getattr(self, "devicePixelRatioF", lambda: 1.0)()
@@ -49,14 +54,33 @@ class OverlayPanel(QtWidgets.QWidget):
         )
         UIFactory.apply_font(self._date_label, self.font_name, self.date_px, bold=False)
 
-        # Shadows & Margins for Time/Date
-        self._time_shadow_r = int(max(12, self.time_px * 0.18) * dpr)
-        self._time_shadow_dx = int(max(2, self.time_px * 0.04) * dpr)
-        self._date_shadow_r = int(max(10, self.date_px * 0.16) * dpr)
-        self._date_shadow_dx = int(max(2, self.date_px * 0.035) * dpr)
+        # Shadows
+        # Try to get specific offsets from ui.text_shadow, else calculate dynamic defaults
+        ts_blur = self._get_ui_sub_val("text_shadow", "blur", None, None)
+        ts_x = self._get_ui_sub_val("text_shadow", "offset_x", None, None)
+        ts_y = self._get_ui_sub_val("text_shadow", "offset_y", None, None)
 
-        UIFactory.apply_shadow(self._time_label, self._time_shadow_r, self._time_shadow_dx, self._time_shadow_dx, self.shadow_color)
-        UIFactory.apply_shadow(self._date_label, self._date_shadow_r, self._date_shadow_dx, self._date_shadow_dx, self.shadow_color)
+        if ts_blur is not None:
+            # Use explicit settings if available
+            self._time_shadow_r = int(int(ts_blur) * dpr)
+            self._time_shadow_dx = int(int(ts_x or 2) * dpr)
+            self._time_shadow_dy = int(int(ts_y or 2) * dpr)
+            
+            self._date_shadow_r = self._time_shadow_r
+            self._date_shadow_dx = self._time_shadow_dx
+            self._date_shadow_dy = self._time_shadow_dy
+        else:
+            # Dynamic calculation fallback
+            self._time_shadow_r = int(max(12, self.time_px * 0.18) * dpr)
+            self._time_shadow_dx = int(max(2, self.time_px * 0.04) * dpr)
+            self._time_shadow_dy = self._time_shadow_dx
+            
+            self._date_shadow_r = int(max(10, self.date_px * 0.16) * dpr)
+            self._date_shadow_dx = int(max(2, self.date_px * 0.035) * dpr)
+            self._date_shadow_dy = self._date_shadow_dx
+
+        UIFactory.apply_shadow(self._time_label, self._time_shadow_r, self._time_shadow_dx, self._time_shadow_dy, self.shadow_color)
+        UIFactory.apply_shadow(self._date_label, self._date_shadow_r, self._date_shadow_dx, self._date_shadow_dy, self.shadow_color)
 
         pad_time = self._time_shadow_r // 3
         pad_date = self._date_shadow_r // 3
@@ -67,7 +91,8 @@ class OverlayPanel(QtWidgets.QWidget):
         self._left_container = UIFactory.create_widget(QtWidgets.QWidget, self, style_sheet="background: transparent;")
         self._left_container.setAttribute(QtCore.Qt.WA_TranslucentBackground)
         
-        left_layout = UIFactory.layout(QtWidgets.QVBoxLayout, self._left_container, spacing=max(8, self.date_px // 6))
+        spacing_val = int(self._get_val("spacing_between", max(8, self.date_px // 6)))
+        left_layout = UIFactory.layout(QtWidgets.QVBoxLayout, self._left_container, spacing=spacing_val)
         left_layout.addWidget(self._time_label, 0, QtCore.Qt.AlignHCenter)
         left_layout.addWidget(self._date_label, 0, QtCore.Qt.AlignHCenter)
 
@@ -118,7 +143,7 @@ class OverlayPanel(QtWidgets.QWidget):
         weather_col.addWidget(self._weather_num, 0, QtCore.Qt.AlignHCenter)
         weather_col.addWidget(cond_row_widget, 0, QtCore.Qt.AlignHCenter)
 
-        # Weather Shadows
+        # Weather Shadows (same logic)
         self._weather_shadow_r = int(max(10, self.weather_num_px * 0.16) * dpr)
         self._weather_shadow_dx = int(max(2, self.weather_num_px * 0.035) * dpr)
         
@@ -136,9 +161,34 @@ class OverlayPanel(QtWidgets.QWidget):
         main.setColumnStretch(0, 1)
         main.setColumnStretch(1, 0)
 
+    # --- Helpers for Nested Settings ---
+    def _get_val(self, key: str, default: Any) -> Any:
+        """Get from 'ui' object first, then root, then default."""
+        ui_cfg = self.settings.get("ui", {})
+        if key in ui_cfg:
+            return ui_cfg[key]
+        return self.settings.get(key, default)
+
+    def _get_ui_sub_val(self, group: str, subkey: str, legacy_key: str, default: Any) -> Any:
+        """
+        Get from ui[group][subkey], e.g. ui['margins']['left'].
+        Fallback to root legacy_key (e.g. 'margin_left').
+        """
+        ui_cfg = self.settings.get("ui", {})
+        if group in ui_cfg and isinstance(ui_cfg[group], dict):
+            if subkey in ui_cfg[group]:
+                return ui_cfg[group][subkey]
+        
+        if legacy_key and legacy_key in self.settings:
+            return self.settings[legacy_key]
+            
+        return default
+
     def update_time_and_date(self, time_text: str) -> None:
         self._time_label.setText(time_text)
-        date_fmt = self.settings.get("date_format", "dddd, MMM d, yyyy")
+        
+        # Read format from ui -> date_format
+        date_fmt = self._get_val("date_format", "dddd, MMM d, yyyy")
         self._date_label.setText(QtCore.QDate.currentDate().toString(date_fmt))
         
         # Maintain centered text width logic for time
@@ -171,7 +221,7 @@ class OverlayPanel(QtWidgets.QWidget):
         self._weather_emoji.setVisible(bool(symbol))
 
     def _accuweather_symbol(self, icon_id: int) -> str:
-        # Simple ASCII mapping (copied from original)
+        # Simple ASCII mapping
         day = icon_id < 30
         if icon_id in (1, 2, 33, 34):
             return "o" if day else "c"

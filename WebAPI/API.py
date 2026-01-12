@@ -45,7 +45,6 @@ from WebAPI.WebUtils.auth_security import UserStore, ensure_csrf, validate_csrf,
 has_pillow_heif = False
 has_pyheif = False
 
-# Try to register pillow-heif on ALL platforms (Windows/Linux/Mac)
 try:
     from pillow_heif import register_heif_opener
     register_heif_opener()
@@ -58,7 +57,6 @@ except Exception as e:
     print(f"[Backend] Could not register HEIF/HEIC plugin: {e}")
     has_pillow_heif = False
 
-# Keep pyheif check for Linux legacy support if needed
 if platform.system() in ("Linux", "Darwin"):
     try:
         import pyheif
@@ -77,18 +75,15 @@ def _parse_value(s: str):
     if not isinstance(s, str):
         return s
     v = s.strip()
-    # checkbox pattern: "true"/"false", "on"/"off"
     if v.lower() in ("true", "on"):
         return True
     if v.lower() in ("false", "off"):
         return False
-    # int
     try:
         if v.isdigit() or (v.startswith("-") and v[1:].isdigit()):
             return int(v)
     except Exception:
         pass
-    # float
     try:
         return float(v)
     except Exception:
@@ -96,7 +91,6 @@ def _parse_value(s: str):
 
 
 def _split_bracketed(key: str):
-    # "a[b][c]" -> ["a","b","c"], "arr[0]" -> ["arr","0"]
     parts = []
     i = 0
     while i < len(key):
@@ -112,14 +106,9 @@ def _split_bracketed(key: str):
 
 
 def _assign_path(root, parts, value):
-    """
-    Assign value into root following parts (list). Numeric parts become list indices.
-    Auto-creates dicts or lists as needed. Supports deep nesting.
-    """
     cur = root
     for idx, part in enumerate(parts):
         is_last = idx == len(parts) - 1
-        # list index?
         is_int = False
         try:
             i_part = int(part)
@@ -130,24 +119,18 @@ def _assign_path(root, parts, value):
         if is_last:
             if is_int:
                 if not isinstance(cur, list):
-                    # Caller should ensure containers are created correctly earlier.
-                    # We do not try to repair arbitrary shape here.
                     return
-                # ensure size
                 while len(cur) <= i_part:
                     cur.append(None)
                 cur[i_part] = value
             else:
                 if isinstance(cur, list):
-                    # Ambiguous, but treat as dict-like by appending a new dict with single key
                     cur.append({part: value})
                 else:
                     cur[part] = value
             return
 
-        # Not last: descend and create container if missing
         if is_int:
-            # we need a list here
             if part == "" and isinstance(cur, list):
                 nxt = {}
                 cur.append(nxt)
@@ -161,11 +144,9 @@ def _assign_path(root, parts, value):
                 cur[i_part] = {}
             cur = cur[i_part]
         else:
-            # dict branch
             if not isinstance(cur, dict):
                 return
             if part not in cur or not isinstance(cur[part], (dict, list)):
-                # Heuristic: if next token is int -> list; else dict
                 nxt_is_int = False
                 if idx + 1 < len(parts):
                     try:
@@ -194,12 +175,11 @@ class Backend:
         env_secret = os.getenv("PHOTOFRAME_SECRET_KEY")
         self.app.config.update(
             SESSION_COOKIE_HTTPONLY=True,
-            SESSION_COOKIE_SECURE=False,  # set True when served over HTTPS or behind TLS terminator
+            SESSION_COOKIE_SECURE=False, 
             SESSION_COOKIE_SAMESITE="Lax",
-            PERMANENT_SESSION_LIFETIME=3600,  # seconds
+            PERMANENT_SESSION_LIFETIME=3600,
         )
 
-        # Resolve paths early (do not depend on settings yet)
         self.USER_DATA_FILE = self.set_absolute_paths("users.json")
         self.METADATA_FILE = self.set_absolute_paths("metadata.json")
         self.LOG_FILE_PATH = self.set_absolute_paths("PhotoFrame.log")
@@ -207,27 +187,26 @@ class Backend:
 
         self._users = UserStore(self.USER_DATA_FILE)
 
-        self._rl_login = RateLimiter(limit=10, window_sec=60)   # 10 attempts/min/IP
-        self._rl_signup = RateLimiter(limit=5, window_sec=300)  # 5 attempts/5min/IP
+        self._rl_login = RateLimiter(limit=10, window_sec=60)
+        self._rl_signup = RateLimiter(limit=5, window_sec=300)
 
-        # Keep frame early for capture loop
         self.Frame = frame
 
-        # Decide where to read/write settings.json
         if settings_path:
             self.SETTINGS_FILE = self.set_absolute_paths(settings_path)
         else:
             self.SETTINGS_FILE = self.set_absolute_paths("photoframe_settings.json")
 
-        # Load settings: prefer the object passed from the server
         if settings:
             self.settings = settings
         else:
             self.settings = self.load_settings()
 
-        # Compute IMAGE_DIR only after self.settings exists
+        # --- Resolve IMAGE_DIR using 'system' or root ---
+        sys_cfg = (self.settings.get("system", {}) if isinstance(self.settings, dict) else {})
         img_cfg = (
             image_dir
+            or sys_cfg.get("image_dir")
             or (self.settings.get("image_dir") if isinstance(self.settings, dict) else None)
             or (self.settings.get("images_dir") if isinstance(self.settings, dict) else None)
             or "Images"
@@ -238,19 +217,16 @@ class Backend:
         self.THUMB_DIR = os.path.join(os.path.dirname(self.IMAGE_DIR), "_thumbs")
         os.makedirs(self.THUMB_DIR, exist_ok=True)
 
-        # Optional override for log file path from settings
+        # --- Resolve log_file_path using 'system' or root ---
         try:
-            cfg_log_path = None
-            if isinstance(self.settings, dict):
-                cfg_log_path = self.settings.get("log_file_path")
+            cfg_log_path = sys_cfg.get("log_file_path") or (self.settings.get("log_file_path") if isinstance(self.settings, dict) else None)
+            
             if cfg_log_path:
-                # accept absolute path as-is; resolve relative via set_absolute_paths
                 self.LOG_FILE_PATH = (
                     cfg_log_path
                     if os.path.isabs(cfg_log_path)
                     else self.set_absolute_paths(cfg_log_path)
                 )
-                # Ensure the file exists so /logs does not 404 if the directory is valid
                 log_dir = os.path.dirname(self.LOG_FILE_PATH)
                 if log_dir and not os.path.exists(log_dir):
                     os.makedirs(log_dir, exist_ok=True)
@@ -260,7 +236,6 @@ class Backend:
         except Exception as e:
             print(f"[Backend] Could not apply log_file_path override: {e}")
 
-        # Now pull required keys with safe defaults
         backend_cfg = (
             self.settings.get("backend_configs")
             if isinstance(self.settings, dict)
@@ -283,9 +258,10 @@ class Backend:
         self._ensure_storage_files()
         self._normalize_existing_heic_images()
 
-        # Encoding quality default
+        # --- Encoding quality from 'system' or root ---
         self.encoding_quality = int(
-            (self.settings.get("image_quality_encoding") if isinstance(self.settings, dict) else 80)
+            sys_cfg.get("image_quality_encoding")
+            or (self.settings.get("image_quality_encoding") if isinstance(self.settings, dict) else 80)
             or 80
         )
 
@@ -331,7 +307,6 @@ class Backend:
         return frame
 
     def _client_ip(self) -> str:
-        # honor reverse proxy if you have one (ensure you trust it)
         return (
             request.headers.get("X-Forwarded-For", request.remote_addr or "unknown")
             .split(",")[0]
@@ -339,7 +314,6 @@ class Backend:
         )
 
     def _rotate_session(self, username: str, uid: str, role: str) -> None:
-        # Clear, set new identity, and new CSRF
         session.clear()
         session["uid"] = uid
         session["user"] = username
@@ -349,7 +323,6 @@ class Backend:
     def _require_csrf(self) -> None:
         token = request.form.get("csrf_token") or request.headers.get("X-CSRF-Token")
         if not validate_csrf(session, token):
-            # Keep message generic
             raise PermissionError("Invalid request")
 
     # -----------------------------------------------------------------
@@ -359,14 +332,14 @@ class Backend:
     def _resolve_dir(self, p: str) -> str:
         pth = Path(p).expanduser()
         if not pth.is_absolute():
-            app_root = Path(__file__).resolve().parents[1]  # project root (two levels up)
+            app_root = Path(__file__).resolve().parents[1]
             pth = app_root / pth
         return str(pth)
 
     def set_absolute_paths(self, path: str) -> str:
         if os.path.isabs(path):
             return os.path.abspath(path)
-        base = os.path.dirname(os.path.dirname(__file__))  # DesktopApp root
+        base = os.path.dirname(os.path.dirname(__file__))
         return os.path.abspath(os.path.join(base, path))
 
     def _ensure_storage_files(self) -> None:
@@ -421,14 +394,6 @@ class Backend:
             if got_new:
                 self._new_frame_ev.clear()
                 frame = self.Frame.get_live_frame()
-                # try:
-                #     print(
-                #         f"[Backend] got frame: type={type(frame)}, "
-                #         f"dtype={getattr(frame, 'dtype', None)}, "
-                #         f"shape={getattr(frame, 'shape', None)}"
-                #     )
-                # except Exception:
-                #     pass
 
                 if self._is_valid_frame(frame):
                     if frame.ndim == 2:
@@ -454,7 +419,6 @@ class Backend:
 
             now = time.perf_counter()
             if now >= next_deadline:
-                # Always have something to send
                 if last_jpeg is None:
                     last_jpeg = self._make_heartbeat_jpeg(self.stream_w, self.stream_h)
 
@@ -554,7 +518,6 @@ class Backend:
                     return {}
                 return json.load(f)
         except FileNotFoundError:
-            # Create file and return empty
             self._ensure_storage_files()
             return {}
         except json.JSONDecodeError:
@@ -591,11 +554,6 @@ class Backend:
     # -----------------------------------------------------------------
 
     def update_image_metadata(self, image_path):
-        """
-        Updates the metadata database for an image.
-        If the image hash already exists, it reads the existing entry without overwriting
-        user-updated fields. If the image hash is not present, it creates a new entry.
-        """
         metadata_file = self.METADATA_FILE
         image_hash = self.compute_image_hash(image_path)
         new_entry = {
@@ -607,14 +565,12 @@ class Backend:
         }
 
         try:
-            # Load existing metadata from the JSON file
             if os.path.exists(metadata_file) and os.path.getsize(metadata_file) > 0:
                 with open(metadata_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
             else:
                 data = {}
 
-            # Only write a new entry if the image hash does not exist
             if image_hash in data:
                 entry = data[image_hash]
             else:
@@ -629,10 +585,6 @@ class Backend:
         self.update_current_metadata(entry)
 
     def store_image_metadata(self, image_path):
-        """
-        Backwards-compatible wrapper for older code paths that used
-        store_image_metadata(). Delegates to update_image_metadata().
-        """
         self.update_image_metadata(image_path)
 
     # -----------------------------------------------------------------
@@ -642,7 +594,7 @@ class Backend:
     def mjpeg_stream(self, screen_w, screen_h):
         boundary_line = b"--frame\r\n"
         while self.Frame.get_is_running():
-            data = self._jpeg_queue.get()  # block; producer ticks at idle_fps
+            data = self._jpeg_queue.get() 
             yield (
                 boundary_line
                 + b"Content-Type: image/jpeg\r\n"
@@ -657,18 +609,6 @@ class Backend:
         return os.path.join(self.THUMB_DIR, f"{safe}_w{w}.webp")
 
     def _make_thumb(self, src_path: str, dst_path: str, w: int) -> None:
-        with Image.open(src_path) as im:
-            # honor EXIF orientation
-            im = ImageOps.exif_transpose(im)
-            # resize preserving aspect ratio
-            ratio = w / float(im.width)
-            h = max(1, int(im.height * ratio))
-            im = im.resize((w, h), Image.Resampling.LANCZOS)
-            # write as WEBP for small thumbs
-            os.makedirs(os.path.dirname(dst_path), exist_ok=True)
-            im.save(dst_path, "WEBP", quality=75, method=6)
-
-    def _make_thumb(self, src_path: str, dst_path: str, w: int) -> None:
         """
         Generates a thumbnail. Handles both Images (PIL) and Videos (OpenCV).
         """
@@ -679,7 +619,7 @@ class Backend:
             self._make_video_thumb(src_path, dst_path, w)
             return
 
-        # 2. Handle Images (Existing Logic)
+        # 2. Handle Images
         try:
             with Image.open(src_path) as im:
                 im = ImageOps.exif_transpose(im)
@@ -693,9 +633,6 @@ class Backend:
             print(f"[Backend] Image thumb generation failed for {src_path}: {e}")
 
     def _make_video_thumb(self, src_path: str, dst_path: str, w: int) -> None:
-        """
-        Extracts the first frame of a video to create a thumbnail.
-        """
         try:
             cap = cv2.VideoCapture(src_path)
             if not cap.isOpened():
@@ -705,33 +642,22 @@ class Backend:
             cap.release()
             
             if ret and frame is not None:
-                # Calculate height maintaining aspect ratio
                 h_orig, w_orig = frame.shape[:2]
                 ratio = w / float(w_orig)
                 h = max(1, int(h_orig * ratio))
                 
-                # Resize
                 frame = cv2.resize(frame, (w, h), interpolation=cv2.INTER_AREA)
-                
-                # Ensure dir exists
                 os.makedirs(os.path.dirname(dst_path), exist_ok=True)
-                
-                # Encode to WEBP directly via OpenCV
-                # quality 75
                 cv2.imwrite(dst_path, frame, [cv2.IMWRITE_WEBP_QUALITY, 75])
         except Exception as e:
             print(f"[Backend] Video thumb generation failed for {src_path}: {e}")
             
     def _make_heartbeat_jpeg(self, w, h):
-        """
-        Return a small 'no frame' JPEG so the client keeps the stream open.
-        """
         try:
             img = np.zeros(
                 (max(120, min(h, 360)), max(160, min(w, 640)), 3),
                 dtype="uint8",
             )
-            # Gray background with text
             img[:] = (32, 32, 32)
             cv2.putText(
                 img,
@@ -748,7 +674,6 @@ class Backend:
                 return jpg.tobytes()
         except Exception as e:
             print(f"[Backend] heartbeat build failed: {e}")
-        # Fallback tiny JPEG header if something goes wrong
         return (
             b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
             b"\xff\xdb\x00C\x00"
@@ -772,7 +697,6 @@ class Backend:
         @self.app.before_request
         def _csrf_for_all_posts():
             if request.method in ("POST", "PUT", "PATCH", "DELETE"):
-                # allow this one POST endpoint without CSRF
                 if request.path == "/heic_preview":
                     return None
                 try:
@@ -884,8 +808,6 @@ class Backend:
             if not data:
                 return jsonify({"error": "empty file"}), 400
 
-            # Try Pillow with pillow-heif only.
-            # We explicitly DO NOT fallback to pyheif (it is broken in this env).
             try:
                 if "has_pillow_heif" in globals() and has_pillow_heif:
                     img = Image.open(io.BytesIO(data))
@@ -894,10 +816,8 @@ class Backend:
                     buf.seek(0)
                     return send_file(buf, mimetype="image/jpeg")
             except Exception as e:
-                # Pillow + pillow-heif failed
                 return jsonify({"error": f"server HEIC decode unavailable: {e}"}), 501
 
-            # No pillow-heif installed / registered
             return jsonify({"error": "server HEIC decode unavailable"}), 501
 
 
@@ -996,7 +916,6 @@ class Backend:
                 except Exception as live_error:
                     print("ERROR - Weather fetch failed:", live_error)
 
-                    # Fallback to cache
                     if os.path.exists(self.WEATHER_CACHE):
                         with open(self.WEATHER_CACHE, "r") as f:
                             cached = json.load(f)
@@ -1093,7 +1012,6 @@ class Backend:
 
                 final_path = temp_path
                 if ext in (".heic", ".heif"):
-                    # Always normalize HEIC/HEIF to PNG on disk
                     png_path = os.path.splitext(final_path)[0] + ".png"
                     final_path = self.convert_heic_to_png(final_path, png_path)
                     original_filename = os.path.basename(final_path)
@@ -1337,7 +1255,6 @@ class Backend:
                     file_extension = Path(file.filename).suffix.lower()
                     file.save(file_path)
                     if file_extension in {".heic", ".heif"}:
-                        # Normalize HEIC/HEIF to PNG and delete the HEIC
                         png_path = os.path.splitext(file_path)[0] + ".png"
                         file_path = self.convert_heic_to_png(file_path, png_path)
                     self.store_image_metadata(file_path)
@@ -1479,12 +1396,10 @@ class Backend:
 
             metadata_db = self.load_metadata_db()
 
-            # Try to find metadata by filename
             for meta in metadata_db.values():
                 if meta.get("filename") == filename:
                     return jsonify(meta)
 
-            # If metadata does not exist, add it and then return it
             self.store_image_metadata(filepath)
             metadata_db = self.load_metadata_db()
             file_hash = self.compute_image_hash(filepath)
@@ -1528,10 +1443,6 @@ class Backend:
     def _normalize_existing_heic_images(self) -> None:
         """
         Scan IMAGE_DIR for any .heic/.heif files and convert them to PNG.
-        New PNG keeps the same basename, original HEIC is removed on success.
-        Also ensures metadata is stored for the converted image.
-
-        This runs once at backend startup and prints a tqdm progress bar.
         """
         try:
             img_dir = Path(self.IMAGE_DIR)
@@ -1539,7 +1450,6 @@ class Backend:
                 print(f"[Backend] IMAGE_DIR does not exist or is not a directory: {img_dir}")
                 return
 
-            # Collect all HEIC/HEIF files recursively
             heic_files = [
                 p for p in img_dir.rglob("*")
                 if p.is_file() and p.suffix.lower() in (".heic", ".heif")
@@ -1558,14 +1468,8 @@ class Backend:
                 heic_path = str(entry)
                 png_path = os.path.splitext(heic_path)[0] + ".png"
 
-                # This uses your convert_heic_to_png(), which already:
-                #  - uses pillow-heif if available
-                #  - does NOT fallback to pyheif
-                #  - deletes the HEIC on success
                 out_path = self.convert_heic_to_png(heic_path, png_path)
 
-                # If conversion succeeded (path changed and file exists),
-                # ensure metadata exists for the new PNG.
                 if out_path != heic_path and os.path.exists(out_path):
                     try:
                         self.store_image_metadata(out_path)
@@ -1579,16 +1483,10 @@ class Backend:
 
 
     def convert_heic_to_png(self, heic_path: str, output_path: str | None = None) -> str:
-        """
-        Convert HEIC/HEIF to PNG using pillow-heif (if available).
-        On success, removes the original HEIC file and returns the PNG path.
-        On failure, keeps the original HEIC file and returns the original path.
-        """
         if output_path is None:
             base, _ = os.path.splitext(heic_path)
             output_path = base + ".png"
 
-        # 1) Try Pillow with pillow-heif registration
         try:
             if "has_pillow_heif" in globals() and has_pillow_heif:
                 img = Image.open(heic_path)
@@ -1604,7 +1502,6 @@ class Backend:
         except Exception as e:
             print(f"[Backend] HEIC->PNG via Pillow failed: {e}")
 
-        # Do NOT fall back to pyheif – your environment is broken there.
         print("[Backend] HEIC conversion unavailable; keeping original file.")
         return heic_path
 
@@ -1613,11 +1510,6 @@ class Backend:
     # -----------------------------------------------------------------
 
     def update_current_metadata(self, metadata):
-        """
-        Update the latest metadata stored in the backend.
-        This method can be called by other parts of your application
-        (like PhotoFrameServer.py) to update metadata.
-        """
         with self._metadata_lock:
             self.latest_metadata = metadata
 
@@ -1636,8 +1528,7 @@ class Backend:
 
 
 if __name__ == "__main__":
-    # For direct debugging; in production app.py will construct Backend(frame=...)
-    backend = Backend(frame=None, settings={})  # frame/settings will be overridden in real usage
+    backend = Backend(frame=None, settings={}) 
     backend.start()
     while True:
         time.sleep(10)

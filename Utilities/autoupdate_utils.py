@@ -1,6 +1,15 @@
-import os, time, shutil, logging, subprocess, threading, random, re
+import os
+import time
+import shutil
+import logging
+import subprocess
+import threading
+import random
+import re
+import json
 from datetime import datetime
 from typing import Optional, Tuple, Dict, Callable, List
+import copy
 
 
 class AutoUpdater:
@@ -9,8 +18,9 @@ class AutoUpdater:
 
     Behavior:
       - Only updates when a newer *remote* semver tag exists (e.g., v1.2.3 or V1.2.3).
-      - Backs up all config-related JSON files before switching tags and restores
-        them after update to preserve user settings, including custom configs.
+      - Backs up all config-related JSON files before switching tags.
+      - Restores user settings after update, MIGRATING them from the old flat format
+        to the new nested format if necessary.
       - Keeps the old 'git pull' path as a fallback if no tags are found.
       - Optionally restarts your service after a successful update.
 
@@ -53,8 +63,6 @@ class AutoUpdater:
     def pull_now(self) -> Tuple[bool, str]:
         """
         Manual update trigger used by the Settings dialog button.
-        Only updates when a newer remote tag exists. If no tag information
-        is available, falls back to branch fast-forward pull.
         """
         repo = self._find_repo_root()
         if not repo:
@@ -62,15 +70,18 @@ class AutoUpdater:
             self._record(False, msg)
             return False, msg
 
-        ok, changed, out = self._update_to_newer_tag(repo_path=repo, timeout=180)
+        ok, changed, out = self._update_to_newer_tag(
+            repo_path=repo, timeout=180)
+
+        # Fallback if no tags found
         if not ok and "no tags" in out.lower():
-            # Optional fallback to branch pull if tags are not used
             ok, out = self._git_pull(repo_path=repo)
 
-        # Optional restart if code actually changed
+        # Restart if needed
         if ok and changed and self._auto_restart_on_update and self._restart_service_async:
             try:
-                threading.Thread(target=self._restart_service_async, daemon=True).start()
+                threading.Thread(
+                    target=self._restart_service_async, daemon=True).start()
             except Exception:
                 logging.exception("[AutoUpdate] restart hook failed (manual)")
 
@@ -80,7 +91,6 @@ class AutoUpdater:
     # Worker loop
     # ------------------------------------------------------------------
     def _worker(self) -> None:
-        # random initial delay to de-synchronize many devices
         if self._stop.wait(timeout=random.uniform(5.0, 60.0)):
             return
 
@@ -90,15 +100,15 @@ class AutoUpdater:
                 if repo and shutil.which("git"):
                     env = self._git_env()
 
-                    # Preferred path: tag-based update
-                    ok, changed, out = self._update_to_newer_tag(repo_path=repo, timeout=180)
+                    ok, changed, out = self._update_to_newer_tag(
+                        repo_path=repo, timeout=180)
                     if self._on_updated and out:
                         try:
                             self._on_updated(out)
                         except Exception:
                             pass
 
-                    # If tags are not present at all, use branch fast-forward fallback
+                    # Fallback Logic
                     if not ok and "no tags" in out.lower():
                         upstream = self._upstream_ref(repo, env, 10)
                         if upstream:
@@ -116,36 +126,32 @@ class AutoUpdater:
                                 pass
                         changed = ok2 and self._pull_changed(out2)
 
-                    # Restart if code actually changed
+                    # Restart Logic
                     if changed and self._auto_restart_on_update and self._restart_service_async:
                         now = time.time()
                         if now - self._last_restart_ts >= self._min_restart_interval:
                             self._last_restart_ts = now
                             try:
-                                threading.Thread(target=self._restart_service_async, daemon=True).start()
+                                threading.Thread(
+                                    target=self._restart_service_async, daemon=True).start()
                             except Exception:
-                                logging.exception("[AutoUpdate] restart hook failed")
+                                logging.exception(
+                                    "[AutoUpdate] restart hook failed")
                 else:
                     self._record(False, "git not found or repo not detected")
             except Exception:
-                logging.exception("[AutoUpdate] unexpected error during scheduled pull")
+                logging.exception(
+                    "[AutoUpdate] unexpected error during scheduled pull")
 
-            # sleep in 1s chunks so we can stop promptly
             for _ in range(self._interval):
                 if self._stop.is_set():
                     return
                 time.sleep(1)
 
     # ------------------------------------------------------------------
-    # Tag-based update (now with multi-config backup/restore)
+    # Tag-based update
     # ------------------------------------------------------------------
     def _update_to_newer_tag(self, repo_path: str, timeout: int = 180) -> Tuple[bool, bool, str]:
-        """
-        Returns (ok, changed, message).
-        ok      -> the operation executed without internal error (even if no update was needed)
-        changed -> code actually changed (we switched to a newer tag)
-        message -> details (includes backup path when applicable)
-        """
         env = self._git_env()
         if not shutil.which("git"):
             msg = "git not found"
@@ -157,36 +163,35 @@ class AutoUpdater:
             self._record(False, msg)
             return False, False, msg
 
-        # Determine remote and fetch tags
         upstream = self._upstream_ref(repo_path, env, timeout)
         remote = upstream[0] if upstream else "origin"
         self._fetch(repo_path, remote, env, timeout)
-        # Make sure we have all tags
-        self._run_git(["git", "-C", repo_path, "fetch", "--tags", "--prune", remote], env, timeout)
+        self._run_git(["git", "-C", repo_path, "fetch",
+                      "--tags", "--prune", remote], env, timeout)
 
         remote_tags = self._list_remote_semver_tags(remote, env, timeout)
 
         if not remote_tags:
             msg = "No tags found on remote; skipping tag-based update"
             self._record(True, msg)
-            # ok=False triggers branch-pull fallback in callers
             return False, False, msg
 
         latest_remote_tag = self._max_tag(remote_tags)
         current_tag = self._current_semver_tag(repo_path, env, timeout)
-        # If HEAD is not at a tag, assume version 0.0.0 so we jump forward once
-        current_ver = self._parse_semver(current_tag) if current_tag else (0, 0, 0)
+        current_ver = self._parse_semver(
+            current_tag) if current_tag else (0, 0, 0)
 
         if self._parse_semver(latest_remote_tag) <= current_ver:
             msg = f"Already at latest tag ({current_tag or 'unknown'}); no update needed"
             self._record(True, msg)
             return True, False, msg
 
-        # Newer tag exists -> backup all configs, checkout, restore configs
+        # Update available
         backup_root = self._backup_settings(repo_path)
-        changed, msg_checkout = self._checkout_tag(repo_path, latest_remote_tag, env, timeout)
+        changed, msg_checkout = self._checkout_tag(
+            repo_path, latest_remote_tag, env, timeout)
 
-        # Restore all configs (best-effort)
+        # Restore and migrate config
         self._restore_settings(repo_path, backup_root)
 
         msg = f"Updated to tag {latest_remote_tag}.\n{msg_checkout}"
@@ -197,21 +202,17 @@ class AutoUpdater:
         return True, changed, msg
 
     def _checkout_tag(self, repo_path: str, tag: str, env, timeout: int) -> Tuple[bool, str]:
-        """
-        Switch to the provided tag by creating/updating a local 'autoupdate' branch.
-        This avoids detached HEAD and makes future updates simpler.
-        """
-        # Resolve tag ref to a commit
         ok_res, out_res = self._run_git(
-            ["git", "-C", repo_path, "rev-list", "-n", "1", f"refs/tags/{tag}"],
+            ["git", "-C", repo_path, "rev-list",
+                "-n", "1", f"refs/tags/{tag}"],
             env,
             timeout,
         )
         if not ok_res or not out_res:
             return False, f"Failed to resolve tag {tag}: {out_res}"
 
-        # Create or reset 'autoupdate' branch to the tag
-        cmd = ["git", "-C", repo_path, "checkout", "-B", "autoupdate", f"refs/tags/{tag}"]
+        cmd = ["git", "-C", repo_path, "checkout",
+               "-B", "autoupdate", f"refs/tags/{tag}"]
         ok_co, out_co = self._run_git(cmd, env, timeout)
         if not ok_co:
             return False, f"Checkout failed: {out_co}"
@@ -219,7 +220,8 @@ class AutoUpdater:
         return True, "Checkout succeeded"
 
     def _list_remote_semver_tags(self, remote: str, env, timeout: int) -> List[str]:
-        ok, out = self._run_git(["git", "ls-remote", "--tags", remote], env, timeout)
+        ok, out = self._run_git(
+            ["git", "ls-remote", "--tags", remote], env, timeout)
         if not ok or not out:
             return []
         tags: List[str] = []
@@ -228,35 +230,39 @@ class AutoUpdater:
                 ref = line.split("\t", 1)[1]
             except Exception:
                 continue
+            # Dereferenced tags end in ^{}. We strip that to get the tag name.
             if ref.endswith("^{}"):
                 ref = ref[:-3]
             name = ref.rsplit("/", 1)[-1]
             if self._is_semver_tag(name):
                 tags.append(name)
-        return tags
+        # Fix: Deduplicate tags to avoid assertion errors (ls-remote returns both tag and commit)
+        return sorted(list(set(tags)))
 
     def _list_local_semver_tags(self, repo_path: str, env, timeout: int) -> List[str]:
-        ok, out = self._run_git(["git", "-C", repo_path, "tag", "--list"], env, timeout)
+        # RESTORED: This method was present in old code
+        ok, out = self._run_git(
+            ["git", "-C", repo_path, "tag", "--list"], env, timeout)
         if not ok or not out:
             return []
         return [t.strip() for t in out.splitlines() if self._is_semver_tag(t.strip())]
 
     def _current_semver_tag(self, repo_path: str, env, timeout: int) -> Optional[str]:
-        # Prefer exact tag(s) pointing at HEAD
-        ok, out = self._run_git(["git", "-C", repo_path, "tag", "--points-at", "HEAD"], env, timeout)
+        ok, out = self._run_git(
+            ["git", "-C", repo_path, "tag", "--points-at", "HEAD"], env, timeout)
         if ok and out:
-            tags = [t.strip() for t in out.splitlines() if self._is_semver_tag(t.strip())]
+            tags = [t.strip() for t in out.splitlines()
+                    if self._is_semver_tag(t.strip())]
             if tags:
                 return self._max_tag(tags)
-        # Fallback to describe
-        ok, out = self._run_git(["git", "-C", repo_path, "describe", "--tags", "--abbrev=0"], env, timeout)
+        ok, out = self._run_git(
+            ["git", "-C", repo_path, "describe", "--tags", "--abbrev=0"], env, timeout)
         if ok and out and self._is_semver_tag(out.strip()):
             return out.strip()
         return None
 
     @staticmethod
     def _is_semver_tag(tag: str) -> bool:
-        # Accept v1.2.3, V1.2.3, 1.2.3
         return re.fullmatch(r"[Vv]?\d+\.\d+\.\d+", tag) is not None
 
     @staticmethod
@@ -270,49 +276,28 @@ class AutoUpdater:
         return max(tags, key=lambda t: self._parse_semver(t))
 
     # ------------------------------------------------------------------
-    # Settings backup / restore
+    # Settings backup / restore / MIGRATION
     # ------------------------------------------------------------------
     def _settings_candidates(self, repo_path: str) -> List[str]:
-        """
-        Legacy helper: known main settings filenames in repo root.
-        Kept for compatibility; main backup now uses _list_config_files().
-        """
+        # RESTORED: Legacy helper for single-file config finding
         names = ["photoframe_settings.json", "settings.json", "Settings.json"]
         return [os.path.join(repo_path, n) for n in names]
 
     def _find_settings_file(self, repo_path: str) -> Optional[str]:
+        # RESTORED: Logic to find the active settings file
         for p in self._settings_candidates(repo_path):
             if os.path.isfile(p):
                 return p
         return None
 
     def _list_config_files(self, repo_path: str) -> List[str]:
-        """
-        Discover all config JSON files that must be preserved.
-
-        Rules:
-          - Only *.json files.
-          - Filename (without path) must contain 'settings' or 'config' (case-insensitive).
-          - Skip .git, virtualenvs, caches, and the .autoupdate_backups folder.
-        """
         results: List[str] = []
         skip_dirs = {
-            ".git",
-            ".autoupdate_backups",
-            "__pycache__",
-            "env",
-            ".env",
-            ".venv",
-            "venv",
-            ".mypy_cache",
-            ".pytest_cache",
-            "node_modules",
+            ".git", ".autoupdate_backups", "__pycache__", "env", ".env", ".venv", "venv",
+            ".mypy_cache", ".pytest_cache", "node_modules"
         }
-
         for root, dirs, files in os.walk(repo_path):
-            # prune dirs in-place to avoid descending into them
             dirs[:] = [d for d in dirs if d not in skip_dirs]
-
             for fn in files:
                 if not fn.lower().endswith(".json"):
                     continue
@@ -321,18 +306,11 @@ class AutoUpdater:
                     continue
                 full = os.path.join(root, fn)
                 results.append(os.path.abspath(full))
-
-        # Ensure deterministic order, but do not rely on it for correctness
         return sorted(set(results))
 
     def _backup_settings(self, repo_path: str) -> Optional[str]:
-        """
-        Backup all config-related JSON files into .autoupdate_backups/<ts>/.
-        Returns the backup root directory (or None if nothing to back up).
-        """
         cfg_files = self._list_config_files(repo_path)
         if not cfg_files:
-            logging.info("[AutoUpdate] No config JSON files found to backup.")
             return None
 
         ts = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
@@ -344,7 +322,8 @@ class AutoUpdater:
                 dst = os.path.join(backup_root, rel)
                 os.makedirs(os.path.dirname(dst), exist_ok=True)
                 shutil.copy2(src, dst)
-            logging.info("[AutoUpdate] Backed up %d config file(s) under %s", len(cfg_files), backup_root)
+            logging.info(
+                "[AutoUpdate] Backed up config files to %s", backup_root)
             return backup_root
         except Exception:
             logging.exception("[AutoUpdate] Failed to backup settings")
@@ -352,49 +331,157 @@ class AutoUpdater:
 
     def _restore_settings(self, repo_path: str, backup_path: Optional[str]) -> None:
         """
-        Restore config files after update.
-
-        If backup_path is a directory, treat it as .autoupdate_backups/<ts>/.
-        If backup_path is a file, fall back to the old single-file flow.
+        Restore config files. If 'migration' is needed (old flat JSON -> new nested JSON),
+        it maps the old user values into the new structure, preserving user data.
         """
         if not backup_path:
             return
 
         try:
-            # New multi-file backup format: directory
+            # Gather files to restore
+            files_to_restore = []
             if os.path.isdir(backup_path):
+                # New multi-file backup
                 for root, _, files in os.walk(backup_path):
                     for fn in files:
                         src = os.path.join(root, fn)
                         rel = os.path.relpath(src, backup_path)
                         dst = os.path.join(repo_path, rel)
-                        os.makedirs(os.path.dirname(dst), exist_ok=True)
-                        shutil.copy2(src, dst)
-                logging.info("[AutoUpdate] Restored settings from %s", backup_path)
+                        files_to_restore.append((src, dst))
+            elif os.path.isfile(backup_path):
+                # Legacy single-file backup support
+                dest_file = self._find_settings_file(repo_path)
+                if not dest_file:
+                    dest_file = os.path.join(
+                        repo_path, os.path.basename(backup_path).split(".bak-")[0])
+                files_to_restore.append((backup_path, dest_file))
+
+            for src, dst in files_to_restore:
+                self._restore_and_migrate_single_file(src, dst)
+
+            logging.info(
+                "[AutoUpdate] Settings restored and migrated from %s", backup_path)
+
+        except Exception:
+            logging.exception(
+                "[AutoUpdate] Failed to restore settings from %s", backup_path)
+
+    def _restore_and_migrate_single_file(self, backup_src: str, repo_dst: str) -> None:
+        """
+        Reads backup (src) and target (dst).
+        If both are valid JSON, merges src into dst with structure migration.
+        Otherwise falls back to simple file copy.
+        """
+        try:
+            # Ensure destination directory exists
+            os.makedirs(os.path.dirname(repo_dst), exist_ok=True)
+
+            # If destination doesn't exist, just copy the backup back.
+            if not os.path.exists(repo_dst):
+                shutil.copy2(backup_src, repo_dst)
                 return
 
-            # Legacy single-file backup: treat backup_path as a single JSON
-            if os.path.isfile(backup_path):
-                dest = (
-                    self._find_settings_file(repo_path)
-                    or os.path.join(repo_path, os.path.basename(backup_path).split(".bak-")[0])
-                )
-                os.makedirs(os.path.dirname(dest), exist_ok=True)
-                shutil.copy2(backup_path, dest)
-                logging.info("[AutoUpdate] Settings restored from %s", backup_path)
+            # Read both
+            with open(backup_src, 'r', encoding='utf-8') as f:
+                user_data = json.load(f)
+
+            with open(repo_dst, 'r', encoding='utf-8') as f:
+                default_data = json.load(f)
+
+            # Perform Migration / Merge
+            merged_data = self._migrate_config_structure(
+                user_data, default_data)
+
+            # Write result back to repo_dst
+            with open(repo_dst, 'w', encoding='utf-8') as f:
+                json.dump(merged_data, f, indent=2)
+
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            # If not valid JSON, fallback to raw copy
+            logging.warning(
+                f"[AutoUpdate] Non-JSON config detected, performing raw copy: {backup_src}")
+            shutil.copy2(backup_src, repo_dst)
         except Exception:
-            logging.exception("[AutoUpdate] Failed to restore settings from %s", backup_path)
+            logging.exception(
+                f"[AutoUpdate] Error migrating {backup_src}, falling back to raw copy.")
+            shutil.copy2(backup_src, repo_dst)
+
+    def _migrate_config_structure(self, user_data: Dict, template_data: Dict) -> Dict:
+        """
+        Merges user_data into template_data.
+        Detects if user_data uses the old flat schema and maps it to the new nested schema.
+        """
+        merged = copy.deepcopy(template_data)
+
+        # Helper to set nested dict keys
+        def set_nested(d, path_list, value):
+            curr = d
+            for key in path_list[:-1]:
+                curr = curr.setdefault(key, {})
+            curr[path_list[-1]] = value
+
+        # 1. Schema Mapping (Old -> New Path)
+        mapping = {
+            "font_name": ["ui", "font_name"],
+            "service_name": ["system", "service_name"],
+            "time_font_size": ["ui", "time_font_size"],
+            "date_font_size": ["ui", "date_font_size"],
+            "margin_left": ["ui", "margins", "left"],
+            "margin_bottom": ["ui", "margins", "bottom"],
+            "margin_right": ["ui", "margins", "right"],
+            "spacing_between": ["ui", "spacing_between"],
+            "shadow_blur": ["ui", "text_shadow", "blur"],
+            "shadow_offset_x": ["ui", "text_shadow", "offset_x"],
+            "shadow_offset_y": ["ui", "text_shadow", "offset_y"],
+            "shadow_alpha": ["ui", "text_shadow", "alpha"],
+            "image_quality_encoding": ["system", "image_quality_encoding"],
+            "animation_duration": ["playback", "animation_duration"],
+            "delay_between_images": ["playback", "delay_between_images"],
+            "animation_fps": ["playback", "animation_fps"],
+            "allow_translucent_background": ["effects", "allow_translucent_background"],
+            "image_dir": ["system", "image_dir"],
+            "date_format": ["ui", "date_format"],
+            "log_file_path": ["system", "log_file_path"],
+        }
+
+        # 2. Apply Mapping
+        for old_key, new_path in mapping.items():
+            if old_key in user_data:
+                set_nested(merged, new_path, user_data[old_key])
+
+        # 3. Direct copy of complex top-level keys that existed in old and new
+        direct_sections = [
+            "open_meteo", "backend_configs", "stats", "about", "screen", "mqtt", "autoupdate"
+        ]
+        for sec in direct_sections:
+            if sec in user_data:
+                merged[sec] = user_data[sec]
+
+        # 4. Recursive Merge for already-new structures
+        for top_key in ["system", "playback", "ui", "effects"]:
+            if top_key in user_data and isinstance(user_data[top_key], dict):
+                self._recursive_dict_update(
+                    merged.setdefault(top_key, {}), user_data[top_key])
+
+        return merged
+
+    def _recursive_dict_update(self, target: Dict, source: Dict) -> None:
+        for k, v in source.items():
+            if isinstance(v, dict) and k in target and isinstance(target[k], dict):
+                self._recursive_dict_update(target[k], v)
+            else:
+                target[k] = v
 
     # ------------------------------------------------------------------
-    # Repo detection
+    # Repo detection / Git plumbing
     # ------------------------------------------------------------------
     def _find_repo_root(self) -> Optional[str]:
         here = os.path.abspath(os.path.dirname(__file__))
         env = self._git_env()
-        ok, out = self._run_git(["git", "-C", here, "rev-parse", "--show-toplevel"], env, 10)
+        ok, out = self._run_git(
+            ["git", "-C", here, "rev-parse", "--show-toplevel"], env, 10)
         if ok and out:
             return out.strip()
-        # fallback: walk up looking for .git
         cur = here
         while True:
             if os.path.isdir(os.path.join(cur, ".git")):
@@ -405,20 +492,13 @@ class AutoUpdater:
             cur = parent
         return None
 
-    # ------------------------------------------------------------------
-    # Git plumbing
-    # ------------------------------------------------------------------
     def _git_pull(self, repo_path: Optional[str], timeout: int = 180) -> Tuple[bool, str]:
         with self._pull_lock:
             try:
                 if not shutil.which("git"):
-                    msg = "git not found"
-                    self._record(False, msg)
-                    return False, msg
+                    return False, "git not found"
                 if not repo_path or not os.path.isdir(os.path.join(repo_path, ".git")):
-                    msg = f"Not a git repository: {repo_path}"
-                    self._record(False, msg)
-                    return False, msg
+                    return False, f"Not a git repository: {repo_path}"
 
                 env = self._git_env()
                 branch = self._current_branch(repo_path, env, timeout)
@@ -429,10 +509,8 @@ class AutoUpdater:
                     remote = "origin"
                     upstream_branch = branch
 
-                # Always fetch first
                 self._fetch(repo_path, remote, env, timeout)
 
-                # ff-only pull
                 cmd = ["git", "-C", repo_path, "pull", "--ff-only"]
                 if remote and upstream_branch:
                     cmd += [remote, upstream_branch]
@@ -445,13 +523,10 @@ class AutoUpdater:
                 if not ok and self._looks_like_non_ff(out):
                     out += "\nHint: Non fast-forward. Manual rebase/reset may be required."
 
-                logging.info("[AutoUpdate] git pull %s.\n%s", "succeeded" if ok else "failed", out)
+                logging.info("[AutoUpdate] git pull %s.\n%s",
+                             "succeeded" if ok else "failed", out)
                 self._record(ok, out)
                 return ok, out
-            except subprocess.TimeoutExpired:
-                msg = "git pull timed out"
-                self._record(False, msg)
-                return False, msg
             except Exception as e:
                 msg = f"git pull error: {e}"
                 logging.exception("[AutoUpdate] %s", msg)
@@ -469,22 +544,13 @@ class AutoUpdater:
 
     def _run_git(self, cmd, env, timeout) -> Tuple[bool, str]:
         res = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=timeout,
-            env=env,
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=timeout, env=env,
         )
-        out = (res.stdout or "") + (res.stderr or "")
-        return res.returncode == 0, out.strip()
+        return res.returncode == 0, (res.stdout or "") + (res.stderr or "")
 
     def _current_branch(self, repo_path: str, env, timeout: int) -> Optional[str]:
         ok, out = self._run_git(
-            ["git", "-C", repo_path, "rev-parse", "--abbrev-ref", "HEAD"],
-            env,
-            timeout,
-        )
+            ["git", "-C", repo_path, "rev-parse", "--abbrev-ref", "HEAD"], env, timeout)
         if ok:
             br = out.strip()
             return None if br == "HEAD" else br
@@ -492,9 +558,8 @@ class AutoUpdater:
 
     def _upstream_ref(self, repo_path: str, env, timeout: int) -> Optional[Tuple[str, str]]:
         ok, out = self._run_git(
-            ["git", "-C", repo_path, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
-            env,
-            timeout,
+            ["git", "-C", repo_path, "rev-parse", "--abbrev-ref",
+                "--symbolic-full-name", "@{u}"], env, timeout,
         )
         if ok and out and "/" in out:
             r, b = out.split("/", 1)
@@ -509,11 +574,8 @@ class AutoUpdater:
         self._run_git(cmd, env, timeout)
 
     def _mark_repo_safe(self, repo_path: str, env, timeout: int) -> None:
-        self._run_git(
-            ["git", "config", "--global", "--add", "safe.directory", repo_path],
-            env,
-            timeout,
-        )
+        self._run_git(["git", "config", "--global", "--add",
+                      "safe.directory", repo_path], env, timeout)
 
     @staticmethod
     def _looks_like_dubious_ownership(out: str) -> bool:
@@ -530,14 +592,13 @@ class AutoUpdater:
 
     def _behind_counts(self, repo_path: str, env, timeout: int) -> Tuple[int, int]:
         ok, out = self._run_git(
-            ["git", "-C", repo_path, "rev-list", "--left-right", "--count", "HEAD...@{u}"],
-            env,
-            timeout,
+            ["git", "-C", repo_path, "rev-list", "--left-right",
+                "--count", "HEAD...@{u}"], env, timeout,
         )
         if ok and out:
             try:
-                ahead_str, behind_str = out.split()
-                return int(ahead_str), int(behind_str)
+                a, b = out.split()
+                return int(a), int(b)
             except Exception:
                 pass
         return (0, 0)

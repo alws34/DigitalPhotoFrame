@@ -1,24 +1,40 @@
 {
-  "font_name": "arial.ttf",
-  "service_name": "PhotoFrame_Desktop_App",
-  "time_font_size": 120,
-  "date_font_size": 80,
-  "margin_left": 80,
-  "margin_bottom": 30,
-  "margin_right": 50,
-  "spacing_between": 50,
-  "shadow_blur": 16,
-  "shadow_offset_x": 2,
-  "shadow_offset_y": 2,
-  "shadow_alpha": 230,
-  "image_quality_encoding": 100,
-  "animation_duration": 10,
-  "delay_between_images": 30,
-  "animation_fps": 30,
-  "allow_translucent_background": true,
-  "image_dir": "Images",
-  "date_format": "dddd, MMM d, yyyy",
-  "log_file_path": "./FrameServer/PhotoFrame.log",
+  "system": {
+    "service_name": "PhotoFrame_Desktop_App",
+    "image_dir": "Images",
+    "log_file_path": "./FrameServer/PhotoFrame.log",
+    "image_quality_encoding": 100
+  },
+  "playback": {
+    "animation_duration": 10,
+    "delay_between_images": 30,
+    "animation_fps": 30
+  },
+  "ui": {
+    "font_name": "arial.ttf",
+    "date_format": "dddd, MMM d, yyyy",
+    "time_font_size": 120,
+    "date_font_size": 80,
+    "spacing_between": 50,
+    "margins": {
+      "left": 80,
+      "bottom": 30,
+      "right": 50
+    },
+    "text_shadow": {
+      "blur": 16,
+      "offset_x": 2,
+      "offset_y": 2,
+      "alpha": 230
+    }
+  },
+  "effects": {
+    "allow_translucent_background": true,
+    "background_opacity": 0.4,
+    "background_blur_radius": 61,
+    "shadow_opacity": 0.85,
+    "shadow_blur_radius": 71
+  },
   "open_meteo": {
     "latitude": "32.0853",
     "longitude": "34.7818",
@@ -45,21 +61,21 @@
     "font_color": "yellow"
   },
   "about": {
-    "text": "Digital Photo Frame by alws34. This app streams images over HTTP (MJPEG), overlays time/date/weather, and runs on Raspberry Pi or desktop. Use the Settings dialog to connect Wi-Fi, tweak screen options, and manage the service.",
+    "text": "Digital Photo Frame by alws34...",
     "image_path": "",
     "version": "1.0.2"
   },
   "screen": {
     "orientation": 270,
     "brightness": 100,
-    "schedule_enabled": true,
+    "schedule_enabled": false,
     "off_hour": 0,
     "on_hour": 8,
     "schedules": [
       {
         "enabled": false,
         "off_hour": 0,
-        "on_hour": 7,
+        "on_hour": 10,
         "days": [
           0,
           1,

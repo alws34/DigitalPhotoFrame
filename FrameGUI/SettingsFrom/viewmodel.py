@@ -205,23 +205,26 @@ class SettingsViewModel(QtCore.QObject):
         airport = "/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport"
         if not os.path.exists(airport):
             return []
-        out = subprocess.check_output([airport, "-s"], text=True, stderr=subprocess.DEVNULL, timeout=8)
-        rows = []
-        for line in out.splitlines()[1:]:
-            parts = re.split(r"\s{2,}", line.rstrip())
-            if not parts: 
-                continue
-            ssid = parts[0]
-            try:
-                rssi = int(parts[2]) if len(parts) > 2 else -999
-            except Exception:
-                rssi = -999
-            rows.append((ssid, rssi))
-        best = {}
-        for ssid, rssi in rows:
-            if ssid and (ssid not in best or rssi > best[ssid]):
-                best[ssid] = rssi
-        return [k for k,_ in sorted(best.items(), key=lambda kv: -kv[1])]
+        try:
+            out = subprocess.check_output([airport, "-s"], text=True, stderr=subprocess.DEVNULL, timeout=8)
+            rows = []
+            for line in out.splitlines()[1:]:
+                parts = re.split(r"\s{2,}", line.rstrip())
+                if not parts: 
+                    continue
+                ssid = parts[0]
+                try:
+                    rssi = int(parts[2]) if len(parts) > 2 else -999
+                except Exception:
+                    rssi = -999
+                rows.append((ssid, rssi))
+            best = {}
+            for ssid, rssi in rows:
+                if ssid and (ssid not in best or rssi > best[ssid]):
+                    best[ssid] = rssi
+            return [k for k,_ in sorted(best.items(), key=lambda kv: -kv[1])]
+        except Exception:
+            return []
 
     def _connect_wifi_mac(self, ssid: str, password: str) -> tuple[bool,str]:
         ns = "/usr/sbin/networksetup"
@@ -455,11 +458,23 @@ class SettingsViewModel(QtCore.QObject):
     @staticmethod
     def _get_current_ssid() -> str:
         try:
-            out = subprocess.check_output(
-                ["nmcli", "-t", "-f", "NAME", "connection", "show", "--active"],
-                stderr=subprocess.DEVNULL, universal_newlines=True
-            )
-            lines = [l for l in out.splitlines() if l]
-            return lines[0] if lines else "N/A"
+            # Linux / nmcli
+            if _which("nmcli"):
+                out = subprocess.check_output(
+                    ["nmcli", "-t", "-f", "NAME", "connection", "show", "--active"],
+                    stderr=subprocess.DEVNULL, universal_newlines=True
+                )
+                lines = [l for l in out.splitlines() if l]
+                if lines: return lines[0]
+            
+            # Mac / airport
+            if sys.platform == "darwin":
+                 airport = "/System/Library/PrivateFrameworks/Apple80211.framework/Versions/Current/Resources/airport"
+                 if os.path.exists(airport):
+                     out = subprocess.check_output([airport, "-I"], text=True)
+                     for line in out.splitlines():
+                         if " SSID:" in line:
+                             return line.split(":")[1].strip()
         except Exception:
-            return "N/A"
+            pass
+        return "N/A"
