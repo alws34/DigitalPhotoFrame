@@ -87,7 +87,7 @@ class Image_Utils():
         
         return shadowed_bg
 
-    def resize_image_with_background(self, image, target_width, target_height):
+    def resize_image_with_background(self, image, target_width, target_height, skip_background=False):
         if image is None:
             return np.zeros((target_height, target_width, 3), dtype=np.uint8)
         
@@ -104,21 +104,76 @@ class Image_Utils():
 
         resized_image = cv2.resize(image, (new_width, new_height))
 
-        # Check enabled setting
-        allow_translucent = self._get_effect_val('allow_translucent_background', True)
-
-        # 2. Create Background
-        if allow_translucent:
-            background = self.create_translucent_background(image, target_width, target_height)
-        else:
+        # 2. Create Background (OPTIMIZED)
+        # If skip_background is True, use pure black to save CPU
+        if skip_background:
             background = np.zeros((target_height, target_width, 3), dtype=np.uint8)
+        else:
+            allow_translucent = self._get_effect_val('allow_translucent_background', True)
+            if allow_translucent:
+                background = self.create_translucent_background(image, target_width, target_height)
+            else:
+                background = np.zeros((target_height, target_width, 3), dtype=np.uint8)
 
         # 3. Calculate Centering
         y_offset = (target_height - new_height) // 2
         x_offset = (target_width - new_width) // 2
 
-        # 4. Apply Shadow (BEFORE pasting the image)
-        if allow_translucent:
+        # 4. Apply Shadow (Only if background is not skipped)
+        if not skip_background and 'allow_translucent' in locals() and allow_translucent:
+            background = self._apply_shadow(background, x_offset, y_offset, new_width, new_height)
+
+        # 5. Paste Main Image
+        y1, y2 = y_offset, y_offset + new_height
+        x1, x2 = x_offset, x_offset + new_width
+        
+        # Safety Clipping
+        y1, x1 = max(0, y1), max(0, x1)
+        y2, x2 = min(target_height, y2), min(target_width, x2)
+        
+        img_h = y2 - y1
+        img_w = x2 - x1
+        
+        if img_h > 0 and img_w > 0:
+            if img_h != resized_image.shape[0] or img_w != resized_image.shape[1]:
+                 resized_image = cv2.resize(image, (img_w, img_h))
+            background[y1:y2, x1:x2] = resized_image
+
+        return background
+        if image is None:
+            return np.zeros((target_height, target_width, 3), dtype=np.uint8)
+        
+        original_height, original_width = image.shape[:2]
+        aspect_ratio = original_width / original_height
+
+        # 1. Resize Main Image
+        if target_width / target_height > aspect_ratio:
+            new_height = target_height
+            new_width = int(new_height * aspect_ratio)
+        else:
+            new_width = target_width
+            new_height = int(new_width / aspect_ratio)
+
+        resized_image = cv2.resize(image, (new_width, new_height))
+
+        # 2. Create Background
+        # OPTIMIZATION: If skip_background is True (for videos), just make it black.
+        # This avoids the expensive blur/shadow operations.
+        if skip_background:
+            background = np.zeros((target_height, target_width, 3), dtype=np.uint8)
+        else:
+            allow_translucent = self._get_effect_val('allow_translucent_background', True)
+            if allow_translucent:
+                background = self.create_translucent_background(image, target_width, target_height)
+            else:
+                background = np.zeros((target_height, target_width, 3), dtype=np.uint8)
+
+        # 3. Calculate Centering
+        y_offset = (target_height - new_height) // 2
+        x_offset = (target_width - new_width) // 2
+
+        # 4. Apply Shadow (Only if we didn't skip background generation)
+        if not skip_background and 'allow_translucent' in locals() and allow_translucent:
             background = self._apply_shadow(background, x_offset, y_offset, new_width, new_height)
 
         # 5. Paste Main Image

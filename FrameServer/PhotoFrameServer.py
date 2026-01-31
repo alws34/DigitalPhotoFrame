@@ -408,12 +408,11 @@ class PhotoFrameServer(iFrame):
             logging.error(f"Failed to extract first frame from video {path}: {e}")
             return None
 
-    def _video_generator(self, video_path, configured_transition_time):
+    def _video_generator(self, video_path, total_duration):
         """
-        Yields frames from the video with Frame Skipping to prevent lag.
-        - If processing is slow, it drops video frames to keep sync.
-        - Deletes videos > 30s.
-        - Dynamic looping + 1.5s pause.
+        Yields frames from the video.
+        - skip_background=True is used to reduce CPU load.
+        - Loops based on total_duration (animation_duration + delay_between_images).
         """
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
@@ -426,7 +425,7 @@ class PhotoFrameServer(iFrame):
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         video_duration = total_frames / fps
 
-        # --- Rule: Delete if > 30 seconds ---
+        # --- Rule: Delete if > 30 seconds (unchanged) ---
         if video_duration > 30.0:
             cap.release()
             logging.warning(f"Video {os.path.basename(video_path)} is too long ({video_duration:.2f}s). Deleting.")
@@ -437,55 +436,46 @@ class PhotoFrameServer(iFrame):
                 logging.error(f"Failed to delete long video: {e}")
             return
 
-        # --- Calculate Loops ---
-        if video_duration >= configured_transition_time:
+        # --- Calculate Loops for TOTAL duration ---
+        # We ensure the video plays for at least the total time required
+        if video_duration >= total_duration:
             loop_count = 1
-            remainder = video_duration % configured_transition_time
-            if remainder > 0 and remainder < 5:
-                loop_count = 2
         else:
-            loop_count = math.ceil(configured_transition_time / video_duration)
-            loop_count = max(loop_count, 3) 
+            loop_count = math.ceil(total_duration / video_duration)
+            loop_count = max(loop_count, 1)
 
-        total_play_duration = (video_duration * loop_count) + (1.5 * (loop_count - 1))
-        
-        logging.info(f"Playing {os.path.basename(video_path)} ({video_duration:.1f}s). Loops: {loop_count}. Sync FPS: {fps}")
+        logging.info(f"Playing Video: {os.path.basename(video_path)} | VidLen: {video_duration:.1f}s | Target: {total_duration}s | Loops: {loop_count}")
 
         frame_interval = 1.0 / fps
 
         for i in range(int(loop_count)):
             cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
             
-            # Reset timing for this loop iteration
             loop_start_time = time.perf_counter()
             
             while True:
-                # 1. Sync Check: How much time has passed in this loop?
                 now = time.perf_counter()
                 elapsed_since_start = now - loop_start_time
                 
-                # 2. Which frame *should* we be on?
                 target_frame_index = int(elapsed_since_start * fps)
                 current_frame_index = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
                 
-                # 3. Frame Skipping Logic
                 if target_frame_index > current_frame_index:
                     frames_to_skip = target_frame_index - current_frame_index
                     if frames_to_skip > 0:
                         for _ in range(frames_to_skip):
                             cap.grab() 
 
-                # 4. Read and Process
                 ret, frame = cap.read()
                 if not ret:
-                    break # End of video file
+                    break 
                 
+                # OPTIMIZATION: Pass skip_background=True here
                 resized_frame = self.image_handler.resize_image_with_background(
-                    frame, self.screen_width, self.screen_height
+                    frame, self.screen_width, self.screen_height, skip_background=True
                 )
                 yield resized_frame
 
-                # 5. Precise Sleep
                 after_process = time.perf_counter()
                 next_frame_time = loop_start_time + ((target_frame_index + 1) * frame_interval)
                 sleep_time = next_frame_time - after_process
@@ -493,7 +483,7 @@ class PhotoFrameServer(iFrame):
                 if sleep_time > 0:
                     time.sleep(sleep_time)
 
-            # --- Pause between loops ---
+            # Optional: 1.5s Pause between loops (matches your previous style)
             if i < (loop_count - 1):
                 if 'resized_frame' in locals():
                     pause_start = time.perf_counter()
@@ -502,7 +492,6 @@ class PhotoFrameServer(iFrame):
                         time.sleep(0.05) 
 
         cap.release()
-        
     def _load_image_safe(self, path: str):
         if self._is_video(path):
             return self._get_first_video_frame(path)
@@ -556,17 +545,14 @@ class PhotoFrameServer(iFrame):
 
     # ------------- Main Transition Logic -------------
 
-    def start_image_transition(self, image1_path=None, image2_path=None, duration=5):
-        # Initialize current_image if needed
+    def start_image_transition(self, image1_path=None, image2_path=None, duration=5, hold_time=0):
         if self.current_image is None:
             first_path = image1_path or self.get_random_image()
             img1 = self._load_image_safe(first_path)
-
             if img1 is None:
-                logging.error("start_image_transition: no valid first image. Using blank.")
                 self.current_image = self._blank_frame()
                 self._send_frame(self.current_image)
-                return AnimationStatus.ANIMATION_FINISHED
+                return False # Not a video
 
             self.current_image = self.image_handler.resize_image_with_background(
                 img1, self.screen_width, self.screen_height
@@ -585,71 +571,73 @@ class PhotoFrameServer(iFrame):
         if img2 is None:
             logging.error("start_image_transition: failed to load next media. Skipping.")
             self._send_frame(self.current_image)
-            return AnimationStatus.ANIMATION_FINISHED
+            return False
 
         try:
             self.update_image_metadata(image2_path)
         except Exception:
-            logging.exception("start_image_transition: update_image_metadata failed")
+            pass
 
         self.next_image = self.image_handler.resize_image_with_background(
             img2, self.screen_width, self.screen_height
         )
 
-        # Standard transition effect
         effect_function = self.effects[self.EffectHandler.get_random_effect()]
         transition_gen = effect_function(self.current_image, self.next_image, duration, fps=self._target_fps)
 
         final_generator = transition_gen
 
         if is_video_transition:
-            # Chain: Transition -> Video Playback (with frame skipping)
-            video_gen = self._video_generator(image2_path, duration)
+            # Pass (duration + hold_time) so the video loops for the full experience
+            # This covers the transition AND the delay
+            video_gen = self._video_generator(image2_path, duration + hold_time)
             final_generator = itertools.chain(transition_gen, video_gen)
 
         self.status = self.update_frame(final_generator)
 
-        # Update state for next cycle
         if self.status == AnimationStatus.ANIMATION_FINISHED:
             if self.frame_to_stream is not None:
                 self.current_image = self.frame_to_stream
             else:
                 self.current_image = self.next_image
 
-        return self.status
+        return is_video_transition
+    
     def set_frame(self, frame):
         pass
 
     # ------------- Main loops -------------
     def run_photoframe(self):
         self.shuffled_images = self.image_handler.shuffle_images(self.images)
-
         img_path = self.get_random_image()
         if img_path:
-            img = self._load_image_safe(img_path)
-            if img is not None:
-                self.current_image = self.image_handler.resize_image_with_background(
-                    img, self.screen_width, self.screen_height
-                )
-            else:
-                self.current_image = self._blank_frame()
+             img = self._load_image_safe(img_path)
+             if img is not None:
+                 self.current_image = self.image_handler.resize_image_with_background(
+                     img, self.screen_width, self.screen_height
+                 )
+             else:
+                 self.current_image = self._blank_frame()
         else:
-            self.current_image = self._blank_frame()
-
+             self.current_image = self._blank_frame()
         self._send_frame(self.current_image)
 
         while self.is_running:
-            # --- UPDATED: Duration/Delay from 'playback' or root ---
             playback = self.settings_handler.get("playback", {})
             anim_duration = playback.get("animation_duration") or self.settings_handler.get("animation_duration") or 10
             delay = playback.get("delay_between_images") or self.settings_handler.get("delay_between_images") or 30
 
             if anim_duration > 0:
-                self.start_image_transition(duration=anim_duration)
-                time.sleep(delay)
+                # Pass delay as hold_time
+                is_video = self.start_image_transition(duration=anim_duration, hold_time=delay)
+                
+                # Logic Fix:
+                # If is_video is True: The video generator ran for (10s + 30s) = 40s. We do NOT sleep.
+                # If is_video is False: The transition ran for 10s. We MUST sleep for 30s.
+                if not is_video:
+                    time.sleep(delay)
             else:
                 time.sleep(0.1)
-
     def main(self):
         threading.Thread(target=self.run_photoframe, daemon=True).start()
         # threading.Thread(target=self._start_api, daemon=True).start()
