@@ -98,6 +98,12 @@ class MqttBridge:
         self.stop_event = threading.Event()
         self.thread: Optional[threading.Thread] = None
         self._start_ts = time.time()
+        
+        # Watchdog
+        self.last_connect_time = 0
+        self.last_disconnect_time = 0
+        self.WATCHDOG_TIMEOUT = 60  # seconds
+
 
     def start(self):
         if not self.enabled:
@@ -156,6 +162,7 @@ class MqttBridge:
     # ---------- callbacks ----------
     def _on_connect(self, _c, _u, _f, rc):
         self.connected = (rc == 0)
+        self.last_connect_time = time.time()
         if not self.connected:
             self._log(f"MQTT connect rc={rc}", logging.ERROR)
             return
@@ -178,6 +185,7 @@ class MqttBridge:
 
     def _on_disconnect(self, _c, _u, rc):
         self.connected = False
+        self.last_disconnect_time = time.time()
         if rc != 0:
             self._log(f"Unexpected disconnect rc={rc}", logging.WARNING)
 
@@ -216,12 +224,39 @@ class MqttBridge:
     def _run(self):
         while not self.stop_event.is_set():
             try:
+                # Watchdog check
+                if not self.connected:
+                    # If we have been disconnected for too long, force a reconnect
+                    # (only if we have attempted to connect at least once)
+                    now = time.time()
+                    # If we never connected, last_disconnect_time might be 0, so check start time too?
+                    # actually, paho loop_start handles initial re-connects normally.
+                    # We only care if it gets stuck.
+                    
+                    # If we are disconnected and it's been a while since we saw a disconnect OR 
+                    # since we started (if never connected)
+                    ref_time = max(self.last_disconnect_time, self._start_ts)
+                    if (now - ref_time) > self.WATCHDOG_TIMEOUT:
+                        self._log(f"Watchdog: Disconnected for > {self.WATCHDOG_TIMEOUT}s. Forcing reconnect...", logging.WARNING)
+                        try:
+                            # Re-initiate connection
+                            # client.reconnect() is blocking, but useful here.
+                            # Ideally we trust loop_start() to reconnect, but if it fails repeatedly 
+                            # (e.g. DNS changes, network interface changes), a manual kick helps.
+                            self.client.reconnect()
+                            self.last_disconnect_time = now # reset timer so we don't spam
+                        except Exception as e:
+                            self._log(f"Watchdog reconnect failed: {e}", logging.ERROR)
+                            # Reset timer to avoid tight loop
+                            self.last_disconnect_time = now 
+
                 if self.connected:
                     self._publish_stats()
                     self._publish_brightness_state()
                     self._publish_service_state()
             except Exception as e:
                 self._log(f"tick failed: {e}", logging.ERROR)
+            
             self.stop_event.wait(self.interval)
 
     # ---------- discovery ----------
