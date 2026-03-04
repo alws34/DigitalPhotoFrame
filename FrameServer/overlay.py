@@ -1,5 +1,6 @@
 import time
 from typing import Dict, Tuple
+
 import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont

@@ -1,15 +1,15 @@
-import os
-import time
-import shutil
+import copy
+import json
 import logging
-import subprocess
-import threading
+import os
 import random
 import re
-import json
+import shutil
+import subprocess
+import threading
+import time
 from datetime import datetime
-from typing import Optional, Tuple, Dict, Callable, List
-import copy
+from typing import Callable, Dict, List, Optional, Tuple
 
 
 class AutoUpdater:

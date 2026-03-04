@@ -1,9 +1,36 @@
-env/*
-users.jsons
-PhotoFrame.log
-*pycache*
+# Environments
+env/
+.env
+.venv
+venv/
+
+# Python
+__pycache__/
 *.pyc
-Images/*
-*.json
-!photoframe_settings.json
-_thumbs/*
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# Settings (Secrets)
+photoframe_settings.json
+users.json
+
+# Media
+Images/
+_thumbs/
+
+# IDE
+.vscode/
+.idea/
+
+# Testing/Type checking
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Logs
+PhotoFrame.log
+*.log

@@ -1,6 +1,9 @@
 from __future__ import annotations
-from PySide6 import QtCore, QtGui, QtWidgets
+
 from typing import List
+
+from PySide6 import QtCore, QtGui, QtWidgets
+
 
 # ---------- Sparkline (Restored High-Quality Version) ----------
 class Sparkline(QtWidgets.QWidget):

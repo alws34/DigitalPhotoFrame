@@ -1,9 +1,9 @@
-import unittest
 import json
 import os
 import sys
 import threading
-from unittest.mock import MagicMock, patch, mock_open, call
+import unittest
+from unittest.mock import mock_open, patch
 
 # Ensure Utilities can be imported
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -11,6 +11,7 @@ parent_dir = os.path.dirname(current_dir)
 sys.path.insert(0, parent_dir)
 
 from Utilities.autoupdate_utils import AutoUpdater
+
 
 class TestAutoUpdater(unittest.TestCase):
 

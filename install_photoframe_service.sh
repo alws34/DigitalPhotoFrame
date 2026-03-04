@@ -115,8 +115,8 @@ python3 -m venv "$VENV_DIR"
 echo "[3/10] Upgrading pip/setuptools/wheel..."
 "$VENV_DIR/bin/pip" install --upgrade pip setuptools wheel
 
-echo "[4/10] Installing Python dependencies from $REQS_FILE ..."
-"$VENV_DIR/bin/pip" install -r "$REQS_FILE"
+echo "[4/10] Installing Python dependencies and package..."
+"$VENV_DIR/bin/pip" install .
 
 ###############################################################################
 # 5. systemd service

@@ -1,11 +1,9 @@
 # Utilities/Weather/weather_icons.py
-import os
 import threading
 from pathlib import Path
 from typing import Optional, Tuple
 
 try:
-    from PIL import Image, ImageDraw, ImageFont
     _PIL_OK = True
 except Exception:
     _PIL_OK = False

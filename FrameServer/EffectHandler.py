@@ -1,30 +1,27 @@
 # region Importing Effects
-from Effects.CheckerboardEffect import CheckerboardEffect
+# endregion Importing Effects
+import random as rand
+
 from Effects.AlphaDissolveEffect import AlphaDissolveEffect
-from Effects.PixelDissolveEffect import PixelDissolveEffect
-from Effects.BlindsEffect import BlindsEffect
-from Effects.ScrollEffect import ScrollEffect
-from Effects.WipeEffect import WipeEffect
-from Effects.ZoomOutEffect import ZoomOutEffect
-from Effects.ZoomInEffect import ZoomInEffect
-from Effects.IrisOpenEffect import IrisOpenEffect
-from Effects.IrisCloseEffect import IrisCloseEffect
-from Effects.BarnDoorOpenEffect import BarnDoorOpenEffect
 from Effects.BarnDoorCloseEffect import BarnDoorCloseEffect
-from Effects.ShrinkEffect import ShrinkEffect
-from Effects.StretchEffect import StretchEffect
+from Effects.BarnDoorOpenEffect import BarnDoorOpenEffect
+from Effects.BlindsEffect import BlindsEffect
+from Effects.CheckerboardEffect import CheckerboardEffect
+from Effects.CrossZoomEffect import CrossZoomEffect
+from Effects.IrisCloseEffect import IrisCloseEffect
+from Effects.IrisOpenEffect import IrisOpenEffect
 from Effects.LinearEffect import LinearEffect
 from Effects.LumaWipeEffect import LumaWipeEffect
+from Effects.PixelDissolveEffect import PixelDissolveEffect
+from Effects.ScrollEffect import ScrollEffect
+from Effects.ShrinkEffect import ShrinkEffect
 from Effects.SoftWipeEffect import SoftWipeEffect
-from Effects.RippleEffect import RippleEffect
-from Effects.SpinZoomFadeEffect import SpinZoomFadeEffect
-from Effects.CrossZoomEffect import CrossZoomEffect
-from Effects.SwirlEffect import SwirlEffect
+from Effects.StretchEffect import StretchEffect
+from Effects.WipeEffect import WipeEffect
 from Effects.ZoomBlurEffect import ZoomBlurEffect
-from Effects.PlainEffect import PlainEffect
-# endregion Importing Effects
+from Effects.ZoomInEffect import ZoomInEffect
+from Effects.ZoomOutEffect import ZoomOutEffect
 
-import random as rand
 
 class EffectHandler:
     def __init__(self):

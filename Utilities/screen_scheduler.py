@@ -1,7 +1,9 @@
 
 import subprocess
-from typing import Optional, TYPE_CHECKING
+from typing import Optional, Any
+
 from PySide6 import QtCore
+
 
 class ScreenScheduler(QtCore.QObject):
     """
@@ -10,7 +12,7 @@ class ScreenScheduler(QtCore.QObject):
     """
     stateChanged = QtCore.Signal(bool)  # True=OFF(asleep), False=ON(awake)
 
-    def __init__(self, owner: "PhotoFrameQtWidget", interval_ms: int = 30000):
+    def __init__(self, owner: "Any", interval_ms: int = 30000):
         super().__init__(owner)
         self._owner = owner
         self._timer = QtCore.QTimer(self)

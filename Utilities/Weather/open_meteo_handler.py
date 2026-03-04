@@ -1,21 +1,24 @@
 # Utilities/Weather/open_meteo_handler.py
-import sys
 import os
+import sys
+
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import json
 import logging
-from datetime import datetime, timedelta
 import threading
-import requests
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Tuple
 
+import requests
 from PIL import Image  # kept because some GUIs still expect PIL.Image for legacy paths
+
 from iFrame import iFrame
 
 # Local icon resolver
 from Utilities.Weather.weather_icons import WeatherIconResolver
+
 
 class OpenMeteoWeatherHandler:
     """

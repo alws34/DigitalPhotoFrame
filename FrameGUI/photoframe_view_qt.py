@@ -1,31 +1,31 @@
 from __future__ import annotations
 
+import logging
 import os
+import shutil
+import subprocess
+import sys
+import threading
+import time
+from typing import Any, Dict, List, Optional
+
 import cv2
 import numpy as np
-import threading
-import logging
-import subprocess
-from typing import Any, Dict, Optional, List
-import sys
-import shutil
-import time
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from iFrame import iFrame
+from FrameGUI.helpers.hardware_manager import HardwareManager
+from FrameGUI.helpers.ui_factory import UIFactory
+from FrameGUI.SettingsFrom.dialog import SettingsDialog
 from FrameGUI.SettingsFrom.model import SettingsModel
 from FrameGUI.SettingsFrom.viewmodel import SettingsViewModel
-from FrameGUI.SettingsFrom.dialog import SettingsDialog
-from Utilities.brightness import set_brightness_percent
-from Utilities.screen_scheduler import ScreenScheduler
-from Utilities.autoupdate_utils import AutoUpdater
 
 # New Components
 from FrameGUI.widgets.image_canvas import ImageCanvas
 from FrameGUI.widgets.overlay_panel import OverlayPanel
-from FrameGUI.helpers.hardware_manager import HardwareManager
-from FrameGUI.helpers.ui_factory import UIFactory
-
+from iFrame import iFrame
+from Utilities.autoupdate_utils import AutoUpdater
+from Utilities.brightness import set_brightness_percent
+from Utilities.screen_scheduler import ScreenScheduler
 
 # ---------------------------------------------------------------------
 # Metaclass to mix Qt widget and iFrame

@@ -1,6 +1,7 @@
-from datetime import datetime
 import threading
-from typing import Callable, List, Dict
+from datetime import datetime
+from typing import Callable, Dict, List
+
 
 class Notifications:
     def __init__(self):

@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, Any
+from typing import Any, Dict
 
 # Wrap your existing handlers behind a tiny adapter for a common interface.
 from Utilities.Weather.accuweather_handler import accuweather_handler
@@ -30,7 +30,7 @@ class WeatherClient:
                 if pil_img is not None:
                     try:
                         import io
-                        from PIL import Image
+
                         buf = io.BytesIO()
                         pil_img.convert("RGBA").save(buf, format="PNG")
                         out["icon"] = buf.getvalue()  # GUI already supports bytes

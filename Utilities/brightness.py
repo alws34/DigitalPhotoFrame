@@ -1,7 +1,8 @@
 # utils/brightness.py
-import os
 import glob
+import os
 import subprocess
+
 
 def _which(name: str) -> str | None:
     try:

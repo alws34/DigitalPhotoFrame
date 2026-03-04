@@ -1,5 +1,5 @@
 import json
-from typing import Dict, Any
+from typing import Any, Dict
 
 
 def load_settings(path: str) -> Dict[str, Any]:

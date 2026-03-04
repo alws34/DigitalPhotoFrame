@@ -1,10 +1,9 @@
 
+import os
+import sys
+import time
 import unittest
 from unittest.mock import MagicMock, patch
-import time
-import threading
-import sys
-import os
 
 # Add project root to path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))

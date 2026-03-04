@@ -1,43 +1,46 @@
-import shutil
-import time
-import os
-import json
 import hashlib
+import io
+import json
+import os
+import platform
+import threading
+import time
+import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from queue import Queue, Full, Empty
-from threading import Thread, Event
-from tqdm import tqdm
+from pathlib import Path
+from queue import Full, Queue
+from threading import Event, Thread
 
 import cv2
+import numpy as np
+import requests
 from flask import (
     Flask,
     Response,
-    jsonify,
-    request,
-    redirect,
-    url_for,
-    send_from_directory,
-    render_template,
     flash,
-    session,
+    jsonify,
+    redirect,
+    render_template,
+    request,
     send_file,
+    send_from_directory,
+    session,
     stream_with_context,
+    url_for,
 )
-from numpy import ndarray
-from werkzeug.security import generate_password_hash, check_password_hash
-from pathlib import Path
-import io
-import zipfile
-import platform
-import requests
-from PIL import Image, ImageOps
-import threading
 from flask_cors import CORS
-import numpy as np
 from numpy import ndarray
+from PIL import Image, ImageOps
+from tqdm import tqdm
+
 from iFrame import iFrame
-from concurrent.futures import ThreadPoolExecutor
-from WebAPI.WebUtils.auth_security import UserStore, ensure_csrf, validate_csrf, RateLimiter
+from WebAPI.WebUtils.auth_security import (
+    RateLimiter,
+    UserStore,
+    ensure_csrf,
+    validate_csrf,
+)
 
 # ---------------------------------------------------------------------
 # HEIC support
@@ -521,7 +524,7 @@ class Backend:
             self._ensure_storage_files()
             return {}
         except json.JSONDecodeError:
-            print(f"[Backend] metadata.json is invalid JSON. Resetting to empty dict.")
+            print("[Backend] metadata.json is invalid JSON. Resetting to empty dict.")
             try:
                 with open(self.METADATA_FILE, "w", encoding="utf-8") as f:
                     json.dump({}, f)
@@ -1065,7 +1068,11 @@ class Backend:
 
         @self.app.route("/signup", methods=["GET", "POST"])
         def signup():
-            from WebAPI.WebUtils.auth_security import EMAIL_RE, USERNAME_RE, password_policy_ok
+            from WebAPI.WebUtils.auth_security import (
+                EMAIL_RE,
+                USERNAME_RE,
+                password_policy_ok,
+            )
 
             if request.method == "POST":
                 if not self._rl_signup.allow(self._client_ip()):

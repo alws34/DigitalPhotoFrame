@@ -2,11 +2,11 @@
 import json
 import logging
 import os
-from datetime import datetime, timedelta
 import threading
-from typing import Optional, Tuple
-import requests
+from datetime import datetime, timedelta
 from pathlib import Path
+
+import requests
 from PIL import Image
 
 from iFrame import iFrame

@@ -1,6 +1,7 @@
-import cv2
-import numpy as np
 import random
+
+import cv2
+
 
 def _ease_smoothstep(t: float) -> float:
     return t * t * (3.0 - 2.0 * t)

@@ -1,33 +1,33 @@
 # region imports
 import hashlib
-import os
-import sys
 import itertools
 import math
+import os
+import sys
 
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+import json
 import logging
+import random as rand
 import threading
 import time
-import random as rand
+from datetime import datetime, timezone
 from enum import Enum
+
 import cv2
 import numpy as np
-import json
-from datetime import datetime, timezone
 import pyheif
-from PIL import Image
+from EffectHandler import EffectHandler
+from image_handler import Image_Utils
 from pillow_heif import register_heif_opener
 
+from iFrame import iFrame
 from Settings import SettingsHandler
-from WebAPI.API import Backend
-from image_handler import Image_Utils
 from Utilities.observer import ImagesObserver
 from Utilities.Weather.weather_adapter import build_weather_client
-from iFrame import iFrame
-from EffectHandler import EffectHandler
+from WebAPI.API import Backend
 
 # endregion imports
 
@@ -753,7 +753,7 @@ class PhotoFrameServer(iFrame):
 
     def _extract_exif_datetime(self, path: str) -> str:
         try:
-            from PIL import Image, ExifTags
+            from PIL import ExifTags, Image
             img = Image.open(path)
             exif = img.getexif()
             if not exif:

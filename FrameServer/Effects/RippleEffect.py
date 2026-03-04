@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 
+
 def _ease_smoothstep(t: float) -> float:
     # Smooth temporal curve for amplitude/fade.
     return t * t * (3.0 - 2.0 * t)

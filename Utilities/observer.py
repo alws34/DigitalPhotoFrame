@@ -1,12 +1,15 @@
 # Utilities/observer.py
-from abc import ABC, abstractmethod
 import logging
+import os
 import threading
 import time
-from watchdog.observers import Observer
+from abc import ABC, abstractmethod
+
 from watchdog.events import FileSystemEventHandler
+from watchdog.observers import Observer
+
 from iFrame import iFrame
-import os
+
 
 class iBoserver(ABC):
     @abstractmethod

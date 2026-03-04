@@ -1,20 +1,56 @@
 # 📸 Digital Photo Frame
 
+![Build Status](https://github.com/alon/DigitalPhotoFrame/actions/workflows/tests.yml/badge.svg)
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
+
 A modern, high-performance photo-frame engine with a web UI. Runs on Raspberry Pi or any Linux/Windows machine. Plays animated slideshows, overlays time/date and weather, and exposes a browser-based management UI.
 
 ## 🚀 Quick Start
 
-```bash
-git clone <your-repo-url> DigitalPhotoFrame
-cd DigitalPhotoFrame
-python3 -m venv env
-source env/bin/activate
-pip install -r requirements.txt
-mkdir -p Images
-python app.py --headless --settings photoframe_settings.json
-```
+### Prerequisites
 
-Open 👉 `http://<host>:<port>/stream` in your browser.
+- Python 3.8+
+- `git`
+
+### Installation
+
+1.  **Clone the repository:**
+
+    ```bash
+    git clone https://github.com/alon/DigitalPhotoFrame.git
+    cd DigitalPhotoFrame
+    ```
+
+2.  **Create a virtual environment:**
+
+    ```bash
+    python3 -m venv env
+    source env/bin/activate  # On Windows: env\Scripts\activate
+    ```
+
+3.  **Install dependencies:**
+
+    ```bash
+    pip install -e .
+    ```
+
+4.  **Configuration:**
+    Copy the example settings file and customize it:
+
+    ```bash
+    cp photoframe_settings.example.json photoframe_settings.json
+    # Edit photoframe_settings.json with your preferred text editor
+    ```
+
+5.  **Run:**
+
+    ```bash
+    mkdir -p Images
+    # Run the application
+    python app.py
+    ```
+
+    Open 👉 `http://<host>:<port>/stream` in your browser.
 
 ## ✨ Highlights
 
@@ -30,11 +66,13 @@ Open 👉 `http://<host>:<port>/stream` in your browser.
 ## 🏗️ Architecture
 
 ### Core components
+
 - **PhotoFrameServer.py** → loads images, runs transitions, owns `frame_to_stream`
 - **WebAPI/API.py** → Flask backend, streams MJPEG at `stream_fps` / `idle_fps`
 - **app.py** → entry point, wires PhotoFrameServer to Backend, GUI or headless
 
 ### Stream behavior
+
 - Transitions: fresh frames at `animation_fps`
 - Idle: last frame re-published at `idle_fps` (default 5)
 - Heartbeat JPEG only if producer stops
@@ -56,91 +94,23 @@ Generators that yield `np.uint8 (H,W,3)` frames. Includes:
 - OpenCV optimizations enabled
 
 Tuning:
+
 - Lower `backend_configs.stream_fps` or `animation_fps`
 - Reduce `image_quality_encoding`
 - Use 1280x720 on low-power devices
 - Adjust `idle_fps`
 
-## 🛠️ Installation
+## 🛠️ Deployment (Raspberry Pi)
 
-### 📦 Raspberry Pi (systemd service)
+See [install_photoframe_service.sh](install_photoframe_service.sh) for systemd service installation.
 
-```bash
-cd /home/pi/Desktop/DigitalPhotoFrame
-chmod +x install_photoframe_service.sh
-./install_photoframe_service.sh
-```
+## 🤝 Contributing
 
-Service management:
-
-```bash
-sudo systemctl status PhotoFrame_Desktop_App
-sudo systemctl restart PhotoFrame_Desktop_App
-sudo systemctl stop PhotoFrame_Desktop_App
-```
-
-### 🖥️ Manual install
-
-```bash
-git clone <your-repo-url> DigitalPhotoFrame
-cd DigitalPhotoFrame
-python3 -m venv env
-source env/bin/activate
-pip install -r requirements.txt
-mkdir -p Images
-python app.py
-```
-
-## ⚙️ Configuration
-
-Example `settings.json`:
-
-```json
-"backend_configs": {
-  "host": "0.0.0.0",
-  "server_port": 5002,
-  "stream_width": 1920,
-  "stream_height": 1080,
-  "stream_fps": 30,
-  "idle_fps": 5,
-  "supersecretkey": "YOUR_SUPERSECRET_KEY"
-}
-```
-
-- `stream_fps`: fps during transitions
-- `idle_fps`: fps when idle
-
-## 🐛 Troubleshooting
-
-- 🔁 **Every other frame shows “waiting for frame”** → increase `idle_fps`
-- 🛑 **Stream freezes but GUI works** → check `srv.m_api = backend` wiring in `app.py`
-- 🌐 **Client disconnects** → disable proxy buffering in nginx:
-
-```nginx
-location /stream {
-    proxy_pass http://127.0.0.1:5002/stream;
-    proxy_http_version 1.1;
-    proxy_set_header Connection "";
-    proxy_buffering off;
-}
-```
-
-## 📂 Project layout
-
-```
-FrameServer/
-├── PhotoFrameServer.py
-├── EffectHandler.py
-├── WebAPI/API.py
-├── Effects/
-├── static/
-├── templates/
-└── Images/
-```
+We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for details.
 
 ## 📜 License
 
-Licensed under the terms in `LICENSE` (non-commercial use).
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## 🙏 Acknowledgements
 

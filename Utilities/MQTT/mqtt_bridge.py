@@ -5,7 +5,7 @@ import socket
 import subprocess
 import threading
 import time
-from typing import Optional, TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
 import psutil
 

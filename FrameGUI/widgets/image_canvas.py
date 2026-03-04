@@ -1,5 +1,7 @@
-from PySide6 import QtWidgets, QtGui, QtCore
 from typing import Optional
+
+from PySide6 import QtCore, QtGui, QtWidgets
+
 
 class ImageCanvas(QtWidgets.QWidget):
     def __init__(self, parent=None):

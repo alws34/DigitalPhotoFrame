@@ -1,0 +1,18 @@
+{
+  "backend_configs": {
+    "host": "0.0.0.0",
+    "server_port": 5002,
+    "stream_width": 1920,
+    "stream_height": 1080,
+    "stream_fps": 30,
+    "idle_fps": 5,
+    "supersecretkey": "CHANGE_ME_IN_PRODUCTION"
+  },
+  "system": {
+    "image_dir": "Images",
+    "service_name": "PhotoFrame"
+  },
+  "autoupdate": {
+    "enabled": true
+  }
+}

@@ -1,6 +1,9 @@
 from __future__ import annotations
-import json, os
-from typing import Any, Dict, List, Tuple
+
+import json
+import os
+from typing import Any, Dict
+
 
 class SettingsModel:
     """Thin model wrapper around the settings dict + helpers."""

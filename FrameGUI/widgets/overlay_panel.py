@@ -1,5 +1,7 @@
-from PySide6 import QtWidgets, QtGui, QtCore
-from typing import Dict, Any
+from typing import Any, Dict
+
+from PySide6 import QtCore, QtGui, QtWidgets
+
 from FrameGUI.helpers.ui_factory import UIFactory
 
 

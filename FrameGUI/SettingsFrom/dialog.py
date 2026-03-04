@@ -1,11 +1,17 @@
 from __future__ import annotations
-from typing import Any, Dict, List, Tuple
+
+import ast
+import io
+import json
+
+import qrcode
+from PIL import Image, ImageSequence
 from PySide6 import QtCore, QtGui, QtWidgets
+
 from .model import SettingsModel
 from .viewmodel import SettingsViewModel
-from .widgets import Sparkline, OnScreenKeyboard
-import qrcode, io, json, ast
-from PIL import Image, ImageSequence
+from .widgets import OnScreenKeyboard, Sparkline
+
 
 class SettingsDialog(QtWidgets.QDialog):
     """

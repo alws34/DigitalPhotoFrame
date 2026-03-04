@@ -1,8 +1,11 @@
 from __future__ import annotations
+
 import logging
 import os
-from PySide6 import QtWidgets, QtGui, QtCore
-from typing import Optional, Dict, Any, Type, Union
+from typing import Optional, Type, Union
+
+from PySide6 import QtCore, QtGui, QtWidgets
+
 
 class UIFactory:
     """

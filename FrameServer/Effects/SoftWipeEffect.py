@@ -1,5 +1,7 @@
-import numpy as np
 import random as _rand
+
+import numpy as np
+
 
 def _ease_smoothstep(t: float) -> float:
     # Smooth and monotonic; good for wipes.

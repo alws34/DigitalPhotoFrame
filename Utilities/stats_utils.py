@@ -1,6 +1,8 @@
-import psutil
-import time
 import glob
+import time
+
+import psutil
+
 
 class StatsService:
     def __init__(self) -> None:

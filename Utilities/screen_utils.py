@@ -1,8 +1,8 @@
-import os
-import time
 import logging
-import threading
+import os
 import subprocess
+import threading
+import time
 from typing import Dict, Optional, Tuple
 
 
@@ -22,8 +22,7 @@ class ScreenController:
             self._thread.start()
 
     def wake(self) -> None:
-        if grace_seconds is None:
-            grace_seconds = int(self._settings.get("screen", {}).get("wake_grace_seconds", 180))
+        grace_seconds = int(self._settings.get("screen", {}).get("wake_grace_seconds", 180))
         grace_seconds = max(1, int(grace_seconds))
         self._wake_until_ts = time.monotonic() + grace_seconds
         self._event.set()

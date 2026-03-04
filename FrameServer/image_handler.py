@@ -1,6 +1,8 @@
+import random as rand
+
 import cv2
 import numpy as np
-import random as rand
+
 
 class Image_Utils():
     def __init__(self, settings: dict):

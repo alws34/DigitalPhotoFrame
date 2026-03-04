@@ -1,8 +1,9 @@
 import logging
-import subprocess
 import shutil
+import subprocess
 import sys
 from typing import Optional
+
 
 class HardwareManager:
     """

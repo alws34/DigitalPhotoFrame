@@ -6,18 +6,21 @@ Digital Photo Frame - Qt main (fullscreen frame; Settings at 800x600).
 """
 
 from __future__ import annotations
-from WebAPI.API import Backend
+
+import argparse
+import json
+import os
+import signal
+import sys
+import threading
+import time
+from typing import Any, Dict, Optional
+
+from PySide6 import QtCore, QtGui, QtWidgets
+
 from Utilities.autoupdate_utils import AutoUpdater
 from Utilities.MQTT.mqtt_bridge import MqttBridge
-import os
-import sys
-import json
-import signal
-import argparse
-import threading
-from typing import Any, Dict, Optional
-import time
-from PySide6 import QtCore, QtGui, QtWidgets
+from WebAPI.API import Backend
 
 QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_DontUseNativeDialogs, True)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))

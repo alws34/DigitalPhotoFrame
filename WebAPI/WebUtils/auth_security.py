@@ -1,16 +1,15 @@
 # auth_security.py
+import hmac
+import json
 import os
 import re
-import json
-import hmac
-import time
 import secrets
-import hashlib
 import tempfile
+import time
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
 
-from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.security import check_password_hash, generate_password_hash
 
 # Optional argon2 (preferred)
 try:
