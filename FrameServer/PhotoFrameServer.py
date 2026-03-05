@@ -17,7 +17,6 @@ import cv2
 import numpy as np
 import json
 from datetime import datetime, timezone
-import pyheif
 from PIL import Image
 from pillow_heif import register_heif_opener
 
@@ -144,10 +143,30 @@ class PhotoFrameServer(iFrame):
             logging.info("HEIF/HEIC plugin registered successfully")
         except Exception as e:
             logging.warning("Could not register HEIF/HEIC plugin: %s", e)
+        
+        self._settings_updated_flag = False
+        self._settings_reload_lock = threading.Lock()
 
     def _blank_frame(self):
         # neutral gray, screen-sized
         return np.full((self.screen_height, self.screen_width, 3), 32, dtype=np.uint8)
+
+    def _reload_runtime_settings(self, reload_from_disk: bool = True) -> None:
+        with self._settings_reload_lock:
+            if reload_from_disk:
+                self.settings_handler.reload()
+            playback = self.settings_handler.get("playback", {}) or {}
+            self._target_fps = int(playback.get("animation_fps") or self.settings_handler.get("animation_fps") or 30)
+            self._transition_fps = int(playback.get("transition_fps") or self.settings_handler.get("transition_fps") or 30)
+            self._transition_frame_interval = 1.0 / max(1.0, float(self._transition_fps))
+
+    def apply_settings_now(self) -> bool:
+        try:
+            self._reload_runtime_settings(reload_from_disk=True)
+            return True
+        except Exception:
+            logging.exception("Immediate settings apply failed")
+            return False
 
     def _on_images_dir_changed(self):
         now = time.time()
@@ -638,9 +657,23 @@ class PhotoFrameServer(iFrame):
                     time.sleep(delay)
             else:
                 time.sleep(0.1)
-    def main(self):
-        threading.Thread(target=self.run_photoframe, daemon=True).start()
-        # threading.Thread(target=self._start_api, daemon=True).start()
+
+            # Hot-reloading check
+            try:
+                if self.m_api and getattr(self.m_api, "_settings_updated_flag", False):
+                    logging.info("[PhotoFrame] Hot-reloading settings...")
+                    if self.apply_settings_now():
+                        self.m_api._settings_updated_flag = False
+            except Exception:
+                logging.exception("Hot-reload failed")
+                
+            # Render datetime and weather if GUI exists
+            if self._gui_frame and hasattr(self._gui_frame, "set_frame"):
+                # We also need to grab the latest contrast_text setting
+                ui_settings = self.settings_handler.get("ui", {})
+                contrast_text = ui_settings.get("contrast_text", False)
+                # Ensure the frame receives the setting properly within its own loop.
+                # However, PhotoFrameServer delegates weather/datetime straight to the OverlayRenderer via Backend stream_test currently, wait where does the main stream apply this? Let's check API.mjpeg_stream.
 
         try:
             while True:

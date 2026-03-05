@@ -20,8 +20,11 @@ class SettingsModel:
         if not out:
             base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
             out = os.path.join(base_dir, "photoframe_settings.json")
-        with open(out, "w", encoding="utf-8") as f:
-            json.dump(self._settings, f, indent=2)
+        try:
+            with open(out, "w", encoding="utf-8") as f:
+                json.dump(self._settings, f, indent=2)
+        except Exception as e:
+            raise
         self._path = out
 
     # ---- structural helpers ----
@@ -51,6 +54,10 @@ class SettingsModel:
         # Sub-objects in UI
         ui.setdefault("margins", {"left": 50, "right": 50, "top": 50, "bottom": 50})
         ui.setdefault("text_shadow", {"alpha": 200, "blur": 10, "offset_x": 2, "offset_y": 2})
+        # Keep compatibility with legacy spacing key location.
+        margins = ui.get("margins", {})
+        if isinstance(margins, dict) and "spacing_between" not in ui and "spacing" in margins:
+            ui["spacing_between"] = margins.get("spacing")
 
         # 5. Screen (complex struct)
         self.ensure_screen_struct()

@@ -13,6 +13,7 @@ import time
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from iFrame import iFrame
+import copy
 from FrameGUI.SettingsFrom.model import SettingsModel
 from FrameGUI.SettingsFrom.viewmodel import SettingsViewModel
 from FrameGUI.SettingsFrom.dialog import SettingsDialog
@@ -74,19 +75,8 @@ class PhotoFrameQtWidget(QtWidgets.QWidget, iFrame, metaclass=IFrameQtWidgetMeta
             lambda off: logging.info("ScreenScheduler: %s", "OFF" if off else "ON")
         )
 
-        # AutoUpdater
-        self._update_stop_evt = threading.Event()
-        self.autoupdater = AutoUpdater(
-            stop_event=self._update_stop_evt,
-            interval_sec=1800,  # every 30m
-            on_update_available=lambda n: logging.info("AutoUpdater: %d commits behind", n),
-            on_updated=lambda out: logging.info("AutoUpdater log:\n%s", out),
-            restart_service_async=self._on_restart_service_async,
-            min_restart_interval_sec=900,
-            auto_restart_on_update=True,
-        )
-
-        self.autoupdater.start()
+        # AutoUpdater (Shared instance will be attached in app.py)
+        self.autoupdater = None
 
         # Signals
         self.dateTimeChanged.connect(self._update_datetime_gui)
@@ -149,11 +139,6 @@ class PhotoFrameQtWidget(QtWidgets.QWidget, iFrame, metaclass=IFrameQtWidgetMeta
     # Public lifecycle
     # -----------------------------------------------------------------
     def stop(self) -> None:
-        try:
-            if hasattr(self, "_update_stop_evt"):
-                self._update_stop_evt.set()
-        except Exception:
-            pass
         self.close()
 
     # -----------------------------------------------------------------
@@ -189,8 +174,84 @@ class PhotoFrameQtWidget(QtWidgets.QWidget, iFrame, metaclass=IFrameQtWidgetMeta
     # -----------------------------------------------------------------
     # Settings dialog
     # -----------------------------------------------------------------
+    def _apply_live_settings(self, settings_data: Optional[Dict[str, Any]] = None) -> None:
+        """Apply updated settings to live GUI components immediately."""
+        if isinstance(settings_data, dict):
+            self.settings = settings_data
+        else:
+            self.settings = {}
+
+        # Keep overlay bound to the latest settings dict.
+        try:
+            if hasattr(self._overlay, "apply_settings") and callable(self._overlay.apply_settings):
+                self._overlay.apply_settings(self.settings)
+            else:
+                self._overlay.settings = self.settings
+                current_time = getattr(self._overlay, "_time_label", None)
+                if current_time is not None:
+                    self._overlay.update_time_and_date(current_time.text())
+        except Exception:
+            logging.exception("Failed to apply live overlay settings")
+
+        # Refresh derived fields used by callbacks/actions.
+        try:
+            sys_cfg = self.settings.get("system", {})
+            self.service_name = sys_cfg.get("service_name") or self.settings.get("service_name") or "photoframe"
+        except Exception:
+            pass
+        try:
+            backend_cfg = self.settings.get("backend_configs", {})
+            self.backend_port = int(backend_cfg.get("server_port", self.backend_port))
+        except Exception:
+            pass
+
+        # Apply screen settings immediately when edited from Config tab.
+        try:
+            scr = self.settings.get("screen", {}) if isinstance(self.settings, dict) else {}
+            if isinstance(scr, dict):
+                if "orientation" in scr:
+                    trans_map = {
+                        "0": "normal", "normal": "normal",
+                        "90": "90", "left": "90",
+                        "270": "270", "right": "270",
+                        "180": "180", "inverted": "180",
+                    }
+                    transform = trans_map.get(str(scr.get("orientation", "normal")).strip().lower(), "normal")
+                    HardwareManager.apply_orientation(transform)
+                if "brightness" in scr:
+                    HardwareManager.apply_brightness(self.screen_ctrl, int(scr.get("brightness", 100)))
+        except Exception:
+            logging.exception("Failed to apply live screen settings")
+
+        try:
+            self._scheduler.recheck_now()
+        except Exception:
+            pass
+
     def _open_settings(self) -> None:
-        model = SettingsModel(self.settings, getattr(self, "settings_path", None))
+        handler = getattr(self, "settings_handler", None)
+        if not handler:
+            # Fallback for direct testing
+            from Settings import SettingsHandler
+            handler = SettingsHandler(getattr(self, "settings_path", "photoframe_settings.json"), logging)
+
+        # Always refresh from disk before opening the editor.
+        try:
+            handler.reload()
+        except Exception:
+            logging.exception("Failed to reload settings before opening dialog.")
+        
+        model = SettingsModel(copy.deepcopy(handler.data), handler.path)
+        # Link model save to handler save and trigger immediate live reload.
+        def _persist_settings(_path: str | None = None) -> None:
+            handler.save(model.data)
+            latest = handler.data if isinstance(handler.data, dict) else model.data
+            self._apply_live_settings(latest)
+            backend = getattr(self, "backend", None)
+            if backend and hasattr(backend, "notify_settings_changed"):
+                backend.notify_settings_changed()
+
+        model.save = _persist_settings
         
         sc = self.screen_ctrl
         wake_cb = sc.wake if (sc and hasattr(sc, "wake") and callable(sc.wake)) else (lambda: None)
@@ -302,7 +363,13 @@ class PhotoFrameQtWidget(QtWidgets.QWidget, iFrame, metaclass=IFrameQtWidgetMeta
     def _on_apply_brightness(self, pct: int) -> bool:
         ok = HardwareManager.apply_brightness(self.screen_ctrl, pct)
         if ok:
-             self.settings.setdefault("screen", {})["brightness"] = pct
+             handler = getattr(self, "settings_handler", None)
+             if handler:
+                 data = handler.data
+                 data.setdefault("screen", {})["brightness"] = pct
+                 handler.save(data)
+                 latest = handler.data if isinstance(handler.data, dict) else data
+                 self._apply_live_settings(latest)
         else:
              QtWidgets.QMessageBox.warning(self, "Brightness", "Screen controller not available.")
         return ok

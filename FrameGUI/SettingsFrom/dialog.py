@@ -120,33 +120,31 @@ class SettingsDialog(QtWidgets.QDialog):
         """)
 
     def _show_msg(self, title: str, text: str) -> None:
-        dlg = QtWidgets.QDialog(self)
-        dlg.setWindowTitle(title or "Message")
-        dlg.setModal(True)
-        dlg.setAttribute(QtCore.Qt.WA_StyledBackground, True)
-        dlg.setStyle(self.style())
-        dlg.setPalette(self.palette())
-        dlg.setStyleSheet(self.styleSheet())
+        safe_title = title or "Message"
+        safe_text = text or ""
 
-        icon = QtWidgets.QLabel()
-        icon.setPixmap(self.style().standardIcon(QtWidgets.QStyle.SP_MessageBoxWarning).pixmap(32, 32))
+        # Always expose messages in the status label as a safe fallback.
+        try:
+            self.vm.maintStatusChanged.emit(f"{safe_title}: {safe_text}")
+        except Exception:
+            pass
 
-        lbl = QtWidgets.QLabel(text or "")
-        lbl.setWordWrap(True)
-        lbl.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+        # Some Qt platform plugins can crash when opening modal dialogs.
+        try:
+            platform_name = (QtWidgets.QApplication.platformName() or "").lower()
+        except Exception:
+            platform_name = ""
+        if platform_name in {"offscreen", "minimal", "linuxfb", "eglfs"}:
+            return
 
-        btn = QtWidgets.QPushButton("OK")
-        btn.clicked.connect(dlg.accept)
-
-        lay = QtWidgets.QGridLayout(dlg)
-        lay.setContentsMargins(12, 12, 12, 12)
-        lay.setHorizontalSpacing(10)
-        lay.addWidget(icon, 0, 0, QtCore.Qt.AlignTop)
-        lay.addWidget(lbl, 0, 1)
-        lay.addWidget(btn, 1, 0, 1, 2, QtCore.Qt.AlignRight)
-
-        dlg.resize(420, dlg.sizeHint().height())
-        dlg.exec()
+        try:
+            msg = QtWidgets.QMessageBox(self)
+            msg.setWindowTitle(safe_title)
+            msg.setText(safe_text)
+            msg.setIcon(QtWidgets.QMessageBox.Warning)
+            msg.exec()
+        except Exception:
+            pass
 
     # =========================================================================
     # TAB: STATS
@@ -696,33 +694,44 @@ class SettingsDialog(QtWidgets.QDialog):
         Saves values back to self.model.data.
         Handles type conversion carefully to match your JSON structure.
         """
-        def set_by_path(obj, path, value):
-            cur = obj
-            for p in path[:-1]: cur = cur[p]
-            cur[path[-1]] = value
-        
-        for path, (w, t) in self._cfg_vars.items():
-            if t == "bool": 
-                val = w.isChecked()
-            elif t == "num":
-                s = w.text().strip()
-                try: 
-                    # Try int first, then float
-                    val = int(s) if s.isdigit() or (s and s[0] in "+-" and s[1:].isdigit()) else float(s)
-                except: 
-                    val = 0
-            elif t == "json":
-                s = w.text().strip()
-                try: val = json.loads(s) if s else []
-                except:
-                    try: val = ast.literal_eval(s)
-                    except: val = s
-            else: 
-                val = w.text()
+        try:
+            def set_by_path(obj, path, value):
+                cur = obj
+                for p in path[:-1]: cur = cur[p]
+                cur[path[-1]] = value
             
-            set_by_path(self.model.data, path, val)
-        
-        self.model.mirror_first_enabled_schedule_to_legacy()
-        self.model.save()
-        self._set_version_label()
-        self._show_msg("Saved", "Settings saved.")
+            for path, (w, t) in self._cfg_vars.items():
+                if t == "bool": 
+                    val = w.isChecked()
+                elif t == "num":
+                    s = w.text().strip()
+                    try: 
+                        # Try int first, then float
+                        val = int(s) if s.isdigit() or (s and s[0] in "+-" and s[1:].isdigit()) else float(s)
+                    except: 
+                        val = 0
+                elif t == "json":
+                    s = w.text().strip()
+                    try: val = json.loads(s) if s else []
+                    except:
+                        try: val = ast.literal_eval(s)
+                        except: val = s
+                else: 
+                    val = w.text()
+                
+                set_by_path(self.model.data, path, val)
+            
+            self.model.mirror_first_enabled_schedule_to_legacy()
+            self.model.save()
+            self._set_version_label()
+            
+            # Notify backend if possible (optional hot reload trigger for GUI saves)
+            try:
+                if hasattr(self.parent(), "backend"):
+                    self.parent().backend.notify_settings_changed()
+            except Exception:
+                pass
+
+            self._show_msg("Saved", "Settings saved.")
+        except Exception as e:
+            self._show_msg("Save Error", f"Failed to save settings: {e}")
