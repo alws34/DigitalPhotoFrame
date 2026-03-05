@@ -11,6 +11,17 @@ from typing import Dict, Optional, Tuple
 
 from werkzeug.security import check_password_hash, generate_password_hash
 
+from WebAPI.database import (
+    get_user_by_email_or_username,
+    create_user_db,
+    update_user_login,
+    increment_failed_login,
+    lock_user,
+    get_all_users,
+    update_password_db,
+    get_user_by_uid
+)
+
 # Optional argon2 (preferred)
 try:
     from argon2 import PasswordHasher  # pip install argon2-cffi
@@ -55,52 +66,14 @@ class UserRecord:
     password_changed_at: Optional[float] = None
 
 class UserStore:
-    """
-    JSON format:
-    {
-      "users": { "<uid>": <UserRecord-as-dict>, ... },
-      "index": { "email": {"e@x": "<uid>"}, "username": {"name": "<uid>"} }
-    }
-    """
-    def __init__(self, path: str):
+    def __init__(self, path: str = ""):
         self.path = path
-        self._data = {"users": {}, "index": {"email": {}, "username": {}}}
-        self._load()
 
     def _load(self) -> None:
-        try:
-            with open(self.path, "r", encoding="utf-8") as f:
-                obj = json.load(f)
-            if isinstance(obj, dict) and "users" in obj and "index" in obj:
-                self._data = obj
-        except FileNotFoundError:
-            self._atomic_save()
-        except Exception:
-            # If corrupt, back it up and start fresh
-            try:
-                os.replace(self.path, self.path + ".corrupt")
-            except Exception:
-                pass
-            self._data = {"users": {}, "index": {"email": {}, "username": {}}}
-            self._atomic_save()
+        pass
 
     def _atomic_save(self) -> None:
-        d = os.path.dirname(self.path)
-        if d:
-            os.makedirs(d, exist_ok=True)
-        tmp_fd, tmp_path = tempfile.mkstemp(dir=d or None, prefix=".users.json.")
-        try:
-            with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
-                json.dump(self._data, f, indent=2, sort_keys=True)
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(tmp_path, self.path)
-        finally:
-            try:
-                if os.path.exists(tmp_path):
-                    os.unlink(tmp_path)
-            except Exception:
-                pass
+        pass
 
     def _new_uid(self) -> str:
         return secrets.token_hex(16)
@@ -108,8 +81,6 @@ class UserStore:
     def _hash_password(self, password: str) -> Tuple[str, str]:
         if _USE_ARGON2:
             return _ARGON2.hash(password), "argon2"
-        # PBKDF2 fallback via Werkzeug
-        # Increase iterations moderately for desktop/server (tune if Pi)
         return generate_password_hash(password, method="pbkdf2:sha256", salt_length=16), "pbkdf2"
 
     def _verify_password(self, algo: str, pw_hash: str, password: str) -> bool:
@@ -121,7 +92,6 @@ class UserStore:
                 return False
         return check_password_hash(pw_hash, password)
 
-    # Public API
     def create_user(self, email: str, username: str, password: str, role: str = "user") -> str:
         email = email.strip().lower()
         username = username.strip()
@@ -133,79 +103,54 @@ class UserStore:
         if not password_policy_ok(password):
             raise ValueError("Password does not meet policy")
 
-        if email in self._data["index"]["email"]:
+        if get_user_by_email_or_username(email) is not None:
             raise ValueError("Email already registered")
-        if username in self._data["index"]["username"]:
+        if get_user_by_email_or_username(username) is not None:
             raise ValueError("Username already taken")
 
         pw_hash, algo = self._hash_password(password)
         uid = self._new_uid()
-        rec = UserRecord(
-            uid=uid,
-            email=email,
-            username=username,
-            pw_hash=pw_hash,
-            algo=algo,
-            role=role,
-            is_active=True,
-            created_at=_now(),
-            password_changed_at=_now(),
-        )
-        self._data["users"][uid] = rec.__dict__
-        self._data["index"]["email"][email] = uid
-        self._data["index"]["username"][username] = uid
-        self._atomic_save()
+        create_user_db(uid, username, email, pw_hash, role, algo, _now(), _now())
         return uid
 
     def find_by_email_or_username(self, identity: str) -> Optional[Dict]:
-        identity_norm = identity.strip()
-        by_email = self._data["index"]["email"].get(identity_norm.lower())
-        if by_email:
-            return self._data["users"].get(by_email)
-        by_user = self._data["index"]["username"].get(identity_norm)
-        if by_user:
-            return self._data["users"].get(by_user)
-        return None
+        return get_user_by_email_or_username(identity.strip())
 
     def verify_login(self, identity: str, password: str) -> Optional[Dict]:
         user = self.find_by_email_or_username(identity)
-        # Always do a constant-time check even if user missing to reduce timing diff
-        fake_hash = generate_password_hash("x")  # PBKDF2 waste
+        fake_hash = generate_password_hash("x")
         if not user:
             _ = check_password_hash(fake_hash, password)
             return None
-        # lockout
+            
         if _now() < float(user.get("lock_until", 0.0)):
             return None
+            
         ok = self._verify_password(user.get("algo", "pbkdf2"), user.get("pw_hash", ""), password)
         if ok:
-            user["failed_count"] = 0
-            user["lock_until"] = 0.0
-            user["last_login"] = _now()
-            self._atomic_save()
-            return user
-        # failure
+            update_user_login(user["uid"], _now())
+            return self.find_by_email_or_username(identity)
+            
+        increment_failed_login(user["username"])
         user["failed_count"] = int(user.get("failed_count", 0)) + 1
-        if user["failed_count"] >= 5:  # lock for 15 minutes
-            user["lock_until"] = _now() + 15 * 60
-            user["failed_count"] = 0
-        self._atomic_save()
+        if user["failed_count"] >= 5:
+            lock_user(user["username"], _now() + 15 * 60)
         return None
 
     def change_password(self, uid: str, new_password: str) -> None:
         if not password_policy_ok(new_password):
             raise ValueError("Password does not meet policy")
-        user = self._data["users"].get(uid)
+            
+        user = get_user_by_uid(uid)
         if not user:
             raise ValueError("User not found")
+            
         pw_hash, algo = self._hash_password(new_password)
-        user["pw_hash"] = pw_hash
-        user["algo"] = algo
-        user["password_changed_at"] = _now()
-        self._atomic_save()
+        update_password_db(uid, pw_hash, algo, _now())
 
     def list_users(self) -> Dict[str, Dict]:
-        return self._data["users"].copy()
+        users = get_all_users()
+        return {u["uid"]: u for u in users}
 
 # -------------- CSRF --------------
 

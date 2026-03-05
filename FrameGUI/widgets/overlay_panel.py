@@ -41,7 +41,7 @@ class OverlayPanel(QtWidgets.QWidget):
         self.shadow_color = QtGui.QColor(0, 0, 0, self.shadow_alpha)
 
         # Spacing
-        self.spacing_val = int(ui_cfg.get("spacing_between", 50))
+        self.spacing_val = int(ui_cfg.get("spacing_between", margins.get("spacing", 50)))
 
         dpr = getattr(self, "devicePixelRatioF", lambda: 1.0)()
 
@@ -168,20 +168,169 @@ class OverlayPanel(QtWidgets.QWidget):
         main.setColumnStretch(0, 1)
         main.setColumnStretch(1, 0)
 
+        # Keep layout references for runtime hot-reload updates.
+        self._left_layout = left_layout
+        self._weather_col_layout = weather_col
+        self._weather_cond_row_layout = cond_row
+        self._main_layout = main
+        self._last_weather_data: Dict[str, Any] = {}
+
+        # Re-apply all visual settings so hot-reload and startup use one path.
+        self.apply_settings(self.settings)
+
+    @staticmethod
+    def _as_int(value: Any, default: int) -> int:
+        try:
+            return int(value)
+        except Exception:
+            return int(default)
+
+    def _view_size(self) -> tuple[int, int]:
+        w = int(self.width())
+        h = int(self.height())
+        if (w <= 0 or h <= 0) and self.parentWidget() is not None:
+            pw = self.parentWidget().width()
+            ph = self.parentWidget().height()
+            if pw > w:
+                w = int(pw)
+            if ph > h:
+                h = int(ph)
+        if w <= 0 or h <= 0:
+            screen = QtWidgets.QApplication.primaryScreen()
+            if screen is not None:
+                geo = screen.availableGeometry()
+                if w <= 0:
+                    w = int(geo.width())
+                if h <= 0:
+                    h = int(geo.height())
+        return max(1, w), max(1, h)
+
+    def _fit_font_sizes(self, time_px: int, date_px: int, spacing: int) -> tuple[int, int]:
+        w, h = self._view_size()
+        avail_h = max(120, h - self.mt - self.mb)
+        # Keep bottom overlay within ~55% of usable height to avoid clipping.
+        max_block_h = int(avail_h * 0.55)
+        block_h = max(1, time_px + date_px + max(0, spacing))
+        if block_h > max_block_h:
+            scale = max_block_h / float(block_h)
+            time_px = max(12, int(time_px * scale))
+            date_px = max(10, int(date_px * scale))
+
+        # Ensure the time line fits horizontally.
+        max_time_w = max(120, int((w - self.ml - self.mr) * 0.60))
+        test_size = int(time_px)
+        while test_size > 12:
+            f = QtGui.QFont(self.font_name)
+            f.setPixelSize(test_size)
+            f.setBold(True)
+            f.setKerning(False)
+            f.setStyleHint(QtGui.QFont.Monospace, QtGui.QFont.PreferDefault)
+            f.setFixedPitch(True)
+            if QtGui.QFontMetrics(f).horizontalAdvance("88:88:88") <= max_time_w:
+                break
+            test_size -= 1
+        time_px = max(12, test_size)
+        if date_px >= time_px:
+            date_px = max(10, int(time_px * 0.7))
+        return time_px, date_px
+
+    def apply_settings(self, settings: Dict[str, Any] | None = None) -> None:
+        if isinstance(settings, dict):
+            self.settings = settings
+        ui_cfg = self.settings.get("ui", {}) if isinstance(self.settings, dict) else {}
+        if not isinstance(ui_cfg, dict):
+            ui_cfg = {}
+
+        self.font_name = UIFactory.load_font(ui_cfg.get("font_name", "Arial"))
+        self.time_px = self._as_int(ui_cfg.get("time_font_size", 120), 120)
+        self.date_px = self._as_int(ui_cfg.get("date_font_size", 80), 80)
+        self.weather_num_px = self.time_px
+        self.weather_desc_px = self.date_px
+
+        margins = ui_cfg.get("margins", {})
+        if not isinstance(margins, dict):
+            margins = {}
+        self.ml = self._as_int(margins.get("left", 80), 80)
+        self.mr = self._as_int(margins.get("right", 50), 50)
+        self.mb = self._as_int(margins.get("bottom", 30), 30)
+        self.mt = self._as_int(margins.get("top", self.mb), self.mb)
+
+        shadow_cfg = ui_cfg.get("text_shadow", {})
+        if not isinstance(shadow_cfg, dict):
+            shadow_cfg = {}
+        self.shadow_blur = self._as_int(shadow_cfg.get("blur", 16), 16)
+        self.shadow_x = self._as_int(shadow_cfg.get("offset_x", 2), 2)
+        self.shadow_y = self._as_int(shadow_cfg.get("offset_y", 2), 2)
+        self.shadow_alpha = max(0, min(255, self._as_int(shadow_cfg.get("alpha", 230), 230)))
+        self.shadow_color = QtGui.QColor(0, 0, 0, self.shadow_alpha)
+
+        self.spacing_val = self._as_int(
+            ui_cfg.get("spacing_between", margins.get("spacing", 50)),
+            50,
+        )
+        self.spacing_val = max(0, self.spacing_val)
+        self.time_px, self.date_px = self._fit_font_sizes(self.time_px, self.date_px, self.spacing_val)
+        self.weather_num_px = self.time_px
+        self.weather_desc_px = self.date_px
+
+        # Fonts
+        UIFactory.apply_font(self._time_label, self.font_name, self.time_px, bold=True)
+        time_font = self._time_label.font()
+        time_font.setKerning(False)
+        time_font.setStyleHint(QtGui.QFont.Monospace, QtGui.QFont.PreferDefault)
+        time_font.setFixedPitch(True)
+        self._time_label.setFont(time_font)
+        UIFactory.apply_font(self._date_label, self.font_name, self.date_px, bold=False)
+        UIFactory.apply_font(self._weather_num, self.font_name, self.weather_num_px, bold=True)
+        UIFactory.apply_font(self._weather_emoji, self.font_name, self.weather_desc_px, bold=True)
+        UIFactory.apply_font(self._weather_desc, self.font_name, self.weather_desc_px, bold=False)
+
+        # Shadow + padding
+        dpr = getattr(self, "devicePixelRatioF", lambda: 1.0)()
+        s_radius = int(self.shadow_blur * dpr)
+        s_dx = int(self.shadow_x * dpr)
+        s_dy = int(self.shadow_y * dpr)
+        UIFactory.apply_shadow(self._time_label, s_radius, s_dx, s_dy, self.shadow_color)
+        UIFactory.apply_shadow(self._date_label, s_radius, s_dx, s_dy, self.shadow_color)
+        UIFactory.apply_shadow(self._weather_widget, s_radius, s_dx, s_dy, self.shadow_color)
+        pad = max(4, s_radius // 2)
+        self._time_label.setContentsMargins(pad, pad, pad, pad)
+        self._date_label.setContentsMargins(pad, pad, pad, pad)
+        self._weather_widget.setContentsMargins(pad, pad, pad, pad)
+
+        # Layout metrics
+        self._left_layout.setSpacing(self.spacing_val)
+        self._weather_col_layout.setSpacing(max(6, self.weather_desc_px // 4))
+        self._weather_cond_row_layout.setSpacing(max(8, self.weather_desc_px // 4))
+        self._main_layout.setContentsMargins(self.ml, self.mt, self.mr, self.mb)
+
+        # Keep weather visible in the desktop layout.
+        self._weather_widget.setVisible(True)
+
+        # Refresh live text with current settings.
+        self.update_time_and_date(self._time_label.text())
+        self.update_weather(self._last_weather_data)
+        self.updateGeometry()
+        self.update()
+
     def update_time_and_date(self, time_text: str) -> None:
         self._time_label.setText(time_text)
         ui_cfg = self.settings.get("ui", {})
         date_fmt = ui_cfg.get("date_format", "dddd, MMM d, yyyy")
         self._date_label.setText(QtCore.QDate.currentDate().toString(date_fmt))
 
-        # Fix width jitter
+        # Fix width jitter without clipping digits.
         fm = QtGui.QFontMetrics(self._time_label.font())
-        w = fm.horizontalAdvance("88:88:88")
-        if self._time_label.width() < w:
-            self._time_label.setFixedWidth(w)
+        time_text = time_text or "00:00:00"
+        text_w = max(fm.horizontalAdvance("88:88:88"), fm.horizontalAdvance(time_text))
+        cm = self._time_label.contentsMargins()
+        shadow_pad = max(2, int(self.shadow_blur * 0.5))
+        w = text_w + cm.left() + cm.right() + shadow_pad
+        self._time_label.setFixedWidth(w)
 
     def update_weather(self, data: dict) -> None:
         data = data or {}
+        self._last_weather_data = dict(data) if isinstance(data, dict) else {}
         temp = data.get("temp", "")
         unit = data.get("unit", "")
         self._weather_num.setText(
@@ -209,3 +358,10 @@ class OverlayPanel(QtWidgets.QWidget):
         if icon_id in (22, 29):
             return "*"
         return ""
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
+        super().resizeEvent(event)
+        try:
+            self.apply_settings(self.settings)
+        except Exception:
+            pass

@@ -1,0 +1,226 @@
+import sqlite3
+import json
+import os
+from contextlib import contextmanager
+
+DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "database.db")
+
+@contextmanager
+def get_db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    try:
+        yield conn
+    finally:
+        conn.commit()
+        conn.close()
+
+def init_db():
+    with get_db() as conn:
+        cursor = conn.cursor()
+        
+        # Create users table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                uid TEXT PRIMARY KEY,
+                username TEXT UNIQUE,
+                email TEXT UNIQUE,
+                pw_hash TEXT,
+                role TEXT,
+                algo TEXT,
+                created_at REAL,
+                last_login REAL,
+                failed_count INTEGER,
+                is_active BOOLEAN,
+                lock_until REAL,
+                password_changed_at REAL
+            )
+        ''')
+        
+        # Create images_metadata table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS images_metadata (
+                hash TEXT PRIMARY KEY,
+                absolute_path TEXT,
+                relative_path TEXT,
+                filename TEXT,
+                caption TEXT,
+                date_added TEXT,
+                date_modified TEXT,
+                date_taken TEXT,
+                filesize INTEGER,
+                height INTEGER,
+                width INTEGER,
+                last_displayed TEXT,
+                uploader TEXT,
+                views INTEGER
+            )
+        ''')
+
+def migrate_jsons_if_needed(users_json_path, metadata_json_path):
+    # Only migrate if DB doesn't have any users and users.json exists
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM users")
+        user_count = cursor.fetchone()[0]
+        
+    if user_count == 0 and os.path.exists(users_json_path):
+        with open(users_json_path, 'r', encoding='utf-8') as f:
+            try:
+                data = json.load(f)
+                users = data.get('users', {})
+                with get_db() as conn:
+                    cursor = conn.cursor()
+                    for uid, u in users.items():
+                        cursor.execute('''
+                            INSERT OR IGNORE INTO users (
+                                uid, username, email, pw_hash, role, algo, 
+                                created_at, last_login, failed_count, is_active, 
+                                lock_until, password_changed_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ''', (
+                            u.get('uid', uid), u.get('username'), u.get('email'), u.get('pw_hash'),
+                            u.get('role', 'user'), u.get('algo', 'pbkdf2'), u.get('created_at', 0.0),
+                            u.get('last_login', 0.0), u.get('failed_count', 0), u.get('is_active', True),
+                            u.get('lock_until', 0.0), u.get('password_changed_at', 0.0)
+                        ))
+                print(f"[Database] Migrated {len(users)} users from {users_json_path}")
+            except Exception as e:
+                print(f"[Database] Error migrating users.json: {e}")
+
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM images_metadata")
+        images_count = cursor.fetchone()[0]
+        
+    if images_count == 0 and os.path.exists(metadata_json_path):
+        with open(metadata_json_path, 'r', encoding='utf-8') as f:
+            try:
+                data = json.load(f)
+                with get_db() as conn:
+                    cursor = conn.cursor()
+                    for img_hash, img in data.items():
+                        cursor.execute('''
+                            INSERT OR IGNORE INTO images_metadata (
+                                hash, absolute_path, relative_path, filename, caption,
+                                date_added, date_modified, date_taken, filesize,
+                                height, width, last_displayed, uploader, views
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ''', (
+                            img.get('hash', img_hash), img.get('absolute_path'), img.get('relative_path'),
+                            img.get('filename'), img.get('caption'), img.get('date_added'),
+                            img.get('date_modified'), img.get('date_taken'), img.get('filesize'),
+                            img.get('height'), img.get('width'), img.get('last_displayed'),
+                            img.get('uploader'), img.get('views', 0)
+                        ))
+                print(f"[Database] Migrated {len(data)} image metadata records from {metadata_json_path}")
+            except Exception as e:
+                print(f"[Database] Error migrating metadata.json: {e}")
+
+# ----- Users API -----
+
+def get_user_by_username(username):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM users WHERE username = ?", (username,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+def get_user_by_uid(uid):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM users WHERE uid = ?", (uid,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+def get_user_by_email_or_username(identity):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        # Identity can be email or username
+        cursor.execute("SELECT * FROM users WHERE lower(email) = ? OR lower(username) = ?", (identity.lower(), identity.lower()))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+def update_user_login(uid, current_time):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET last_login = ?, failed_count = 0 WHERE uid = ?", (current_time, uid))
+
+def increment_failed_login(username):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET failed_count = failed_count + 1 WHERE username = ?", (username,))
+
+def lock_user(username, lock_until):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET lock_until = ? WHERE username = ?", (lock_until, username))
+
+def get_all_users():
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT uid, username, email, role, is_active FROM users")
+        return [dict(row) for row in cursor.fetchall()]
+
+def update_password_db(uid, pw_hash, algo, password_changed_at):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("UPDATE users SET pw_hash = ?, algo = ?, password_changed_at = ? WHERE uid = ?", 
+                       (pw_hash, algo, password_changed_at, uid))
+
+def create_user_db(uid, username, email, pw_hash, role, algo, created_at, password_changed_at):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO users (
+                uid, username, email, pw_hash, role, algo, 
+                created_at, last_login, failed_count, is_active, 
+                lock_until, password_changed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            uid, username, email, pw_hash, role, algo, created_at, 
+            0.0, 0, True, 0.0, password_changed_at
+        ))
+
+# ----- Images Metadata API -----
+
+def get_all_metadata():
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM images_metadata")
+        return {row['hash']: dict(row) for row in cursor.fetchall()}
+
+def get_metadata(img_hash):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM images_metadata WHERE hash = ?", (img_hash,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+
+def update_metadata(img_hash, data):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        
+        # Check if exists
+        cursor.execute("SELECT 1 FROM images_metadata WHERE hash = ?", (img_hash,))
+        if cursor.fetchone():
+            # Update
+            fields = []
+            values = []
+            for k, v in data.items():
+                if k != 'hash':
+                    fields.append(f"{k} = ?")
+                    values.append(v)
+            values.append(img_hash)
+            cursor.execute(f"UPDATE images_metadata SET {', '.join(fields)} WHERE hash = ?", values)
+        else:
+            # Insert
+            data['hash'] = img_hash
+            keys = ', '.join(data.keys())
+            placeholders = ', '.join(['?'] * len(data))
+            cursor.execute(f"INSERT INTO images_metadata ({keys}) VALUES ({placeholders})", list(data.values()))
+
+def delete_metadata(img_hash):
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM images_metadata WHERE hash = ?", (img_hash,))

@@ -143,7 +143,7 @@ def _run_headless(settings: Dict[str, Any], settings_path: str,
     srv = PhotoFrameServer(width=w, height=h, iframe=None,
                            images_dir=images_dir, settings_path=settings_path)
 
-    backend = Backend(frame=srv, settings=settings,
+    backend = Backend(frame=srv, settings_handler=srv.settings_handler,
                       image_dir=images_dir, settings_path=settings_path)
 
     # Inject updater into backend if needed
@@ -198,7 +198,7 @@ def _run_gui(settings: Dict[str, Any], settings_path: str) -> None:
     srv = PhotoFrameServer(width=sw, height=sh, iframe=view,
                            images_dir=images_dir, settings_path=settings_path)
 
-    backend = Backend(frame=srv, settings=settings,
+    backend = Backend(frame=srv, settings_handler=srv.settings_handler,
                       image_dir=images_dir, settings_path=settings_path)
     threading.Thread(target=backend.start, daemon=True).start()
     srv.m_api = backend
@@ -221,7 +221,9 @@ def _run_gui(settings: Dict[str, Any], settings_path: str) -> None:
     # Pass dependencies to View (so Settings Dialog can use them)
     view.backend = backend
     view.mqtt = mqtt
-    view.updater = updater  # <--- Critical for the "Pull Updates" button
+    view.updater = updater
+    # Synchronize shared settings handler
+    view.settings_handler = srv.settings_handler
 
     def _on_quit():
         stop_event.set()  # Stop updater thread

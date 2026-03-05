@@ -547,7 +547,7 @@ async function populateSettingsForm() {
 
   let data = {};
   try {
-    const res = await fetch("/settings", {
+    const res = await fetch("/api/settings/", {
       headers: { "X-Requested-With": "XMLHttpRequest" },
     });
     data = await res.json();

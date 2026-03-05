@@ -27,8 +27,17 @@ from flask import (
     send_from_directory,
     session,
     stream_with_context,
-    url_for,
 )
+from numpy import ndarray
+from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.exceptions import HTTPException
+from pathlib import Path
+import io
+import zipfile
+import platform
+import requests
+from PIL import Image, ImageOps
+import threading
 from flask_cors import CORS
 from numpy import ndarray
 from PIL import Image, ImageOps
@@ -59,6 +68,9 @@ except ImportError:
 except Exception as e:
     print(f"[Backend] Could not register HEIF/HEIC plugin: {e}")
     has_pillow_heif = False
+
+import logging
+from Settings import SettingsHandler
 
 if platform.system() in ("Linux", "Darwin"):
     try:
@@ -166,12 +178,12 @@ def _assign_path(root, parts, value):
 # ---------------------------------------------------------------------
 
 class Backend:
-    def __init__(self, frame: iFrame, settings, image_dir=None, settings_path=None):
+    def __init__(self, frame: iFrame, settings_handler: SettingsHandler, image_dir=None, settings_path=None):
         base = Path(__file__).parent
         self.app = Flask(
             __name__,
-            template_folder=str(base / "./templates"),
-            static_folder=str(base / "./static"),
+            static_folder=str(base.parent / "frontend" / "dist"),
+            static_url_path="/",
         )
         CORS(self.app, supports_credentials=True)
 
@@ -194,24 +206,15 @@ class Backend:
         self._rl_signup = RateLimiter(limit=5, window_sec=300)
 
         self.Frame = frame
-
-        if settings_path:
-            self.SETTINGS_FILE = self.set_absolute_paths(settings_path)
-        else:
-            self.SETTINGS_FILE = self.set_absolute_paths("photoframe_settings.json")
-
-        if settings:
-            self.settings = settings
-        else:
-            self.settings = self.load_settings()
+        self.settings_handler = settings_handler
 
         # --- Resolve IMAGE_DIR using 'system' or root ---
-        sys_cfg = (self.settings.get("system", {}) if isinstance(self.settings, dict) else {})
+        sys_cfg = (self.settings_handler.get("system", {}) or {})
         img_cfg = (
             image_dir
             or sys_cfg.get("image_dir")
-            or (self.settings.get("image_dir") if isinstance(self.settings, dict) else None)
-            or (self.settings.get("images_dir") if isinstance(self.settings, dict) else None)
+            or self.settings_handler.get("image_dir")
+            or self.settings_handler.get("images_dir")
             or "Images"
         )
         self.IMAGE_DIR = self._resolve_dir(img_cfg)
@@ -222,7 +225,7 @@ class Backend:
 
         # --- Resolve log_file_path using 'system' or root ---
         try:
-            cfg_log_path = sys_cfg.get("log_file_path") or (self.settings.get("log_file_path") if isinstance(self.settings, dict) else None)
+            cfg_log_path = sys_cfg.get("log_file_path") or self.settings_handler.get("log_file_path")
             
             if cfg_log_path:
                 self.LOG_FILE_PATH = (
@@ -239,11 +242,7 @@ class Backend:
         except Exception as e:
             print(f"[Backend] Could not apply log_file_path override: {e}")
 
-        backend_cfg = (
-            self.settings.get("backend_configs")
-            if isinstance(self.settings, dict)
-            else getattr(self.settings, "get", lambda *_: {})("backend_configs")
-        ) or {}
+        backend_cfg = self.settings_handler.get("backend_configs") or {}
         self.app.secret_key = env_secret or backend_cfg.get("supersecretkey", "CHANGE_ME")
         self.stream_h = int(backend_cfg.get("stream_height", 1080))
         self.stream_w = int(backend_cfg.get("stream_width", 1920))
@@ -259,12 +258,18 @@ class Backend:
         self.latest_metadata = {}
         self._metadata_lock = threading.Lock()
         self._ensure_storage_files()
+        
+        # Initialize SQLite DB and migrate old JSONs if needed
+        from WebAPI.database import init_db, migrate_jsons_if_needed
+        init_db()
+        migrate_jsons_if_needed(self.USER_DATA_FILE, self.METADATA_FILE)
+
         self._normalize_existing_heic_images()
 
         # --- Encoding quality from 'system' or root ---
         self.encoding_quality = int(
             sys_cfg.get("image_quality_encoding")
-            or (self.settings.get("image_quality_encoding") if isinstance(self.settings, dict) else 80)
+            or self.settings_handler.get("image_quality_encoding")
             or 80
         )
 
@@ -351,7 +356,6 @@ class Backend:
         for path, default in [
             (self.USER_DATA_FILE, {}),
             (self.METADATA_FILE, {}),
-            (self.SETTINGS_FILE, {}),
             (self.LOG_FILE_PATH, ""),
         ]:
             try:
@@ -383,7 +387,7 @@ class Backend:
         return True
 
     def _capture_loop(self):
-        idle_fps = float(self.settings.get("backend_configs", {}).get("idle_fps", 5)) or 5.0
+        idle_fps = float((self.settings_handler.get("backend_configs") or {}).get("idle_fps", 5)) or 5.0
         interval = 1.0 / max(0.1, idle_fps)
 
         last_jpeg = self._make_heartbeat_jpeg(self.stream_w, self.stream_h)
@@ -462,31 +466,13 @@ class Backend:
     # -----------------------------------------------------------------
 
     def load_settings(self):
-        try:
-            with open(self.SETTINGS_FILE, "r") as file:
-                return json.load(file)
-        except FileNotFoundError:
-            print(
-                f"[Backend] Settings file not found: {self.SETTINGS_FILE}. "
-                f"Starting with empty settings."
-            )
-            return {}
-        except json.JSONDecodeError as e:
-            print(
-                f"[Backend] Invalid JSON in settings file {self.SETTINGS_FILE}: {e}. "
-                f"Starting with empty settings."
-            )
-            return {}
-        except Exception as e:
-            print(f"[Backend] Unexpected error reading settings: {e}. Starting with empty settings.")
-            return {}
+        # Always reload from disk so UI/Frontend read current JSON state.
+        self.settings_handler.reload()
+        data = self.settings_handler.data
+        return data if isinstance(data, dict) else {}
 
     def save_settings(self, data):
-        if not os.path.exists(self.SETTINGS_FILE):
-            os.makedirs(os.path.dirname(self.SETTINGS_FILE), exist_ok=True)
-
-        with open(self.SETTINGS_FILE, "w") as file:
-            json.dump(data, file, indent=4)
+        self.settings_handler.save(data)
 
     def allowed_file(self, filename):
         return "." in filename and Path(filename).suffix.lower() in self.ALLOWED_EXTENSIONS
@@ -515,35 +501,17 @@ class Backend:
         return "uid" in session and "user" in session
 
     def load_metadata_db(self):
-        try:
-            with open(self.METADATA_FILE, "r", encoding="utf-8") as f:
-                if os.path.getsize(self.METADATA_FILE) == 0:
-                    return {}
-                return json.load(f)
-        except FileNotFoundError:
-            self._ensure_storage_files()
-            return {}
-        except json.JSONDecodeError:
-            print("[Backend] metadata.json is invalid JSON. Resetting to empty dict.")
-            try:
-                with open(self.METADATA_FILE, "w", encoding="utf-8") as f:
-                    json.dump({}, f)
-            except Exception:
-                pass
-            return {}
-        except Exception as e:
-            print(f"[Backend] load_metadata_db failed: {e}")
-            return {}
+        from WebAPI.database import get_all_metadata
+        return get_all_metadata()
 
     def save_metadata_db(self, data):
-        try:
-            d = os.path.dirname(self.METADATA_FILE)
-            if d:
-                os.makedirs(d, exist_ok=True)
-            with open(self.METADATA_FILE, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=4)
-        except Exception as e:
-            print(f"[Backend] save_metadata_db failed: {e}")
+        from WebAPI.database import update_metadata, delete_metadata, get_all_metadata
+        current_data = get_all_metadata()
+        for h, d in data.items():
+            update_metadata(h, d)
+        for h in current_data:
+            if h not in data:
+                delete_metadata(h)
 
     def compute_image_hash(self, image_path):
         hash_obj = hashlib.sha256()
@@ -557,33 +525,21 @@ class Backend:
     # -----------------------------------------------------------------
 
     def update_image_metadata(self, image_path):
-        metadata_file = self.METADATA_FILE
+        from WebAPI.database import get_metadata, update_metadata
         image_hash = self.compute_image_hash(image_path)
-        new_entry = {
-            "hash": image_hash,
-            "filename": os.path.basename(image_path),
-            "uploader": "unknown",
-            "date_added": datetime.now().isoformat(),
-            "caption": "",
-        }
-
-        try:
-            if os.path.exists(metadata_file) and os.path.getsize(metadata_file) > 0:
-                with open(metadata_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-            else:
-                data = {}
-
-            if image_hash in data:
-                entry = data[image_hash]
-            else:
-                data[image_hash] = new_entry
-                with open(metadata_file, "w", encoding="utf-8") as f:
-                    json.dump(data, f, indent=4)
-                entry = new_entry
-        except Exception as e:
-            print(f"Error updating image DB: {e}")
-            entry = new_entry
+        existing = get_metadata(image_hash)
+        
+        if existing:
+            entry = existing
+        else:
+            entry = {
+                "hash": image_hash,
+                "filename": os.path.basename(image_path),
+                "uploader": "unknown",
+                "date_added": datetime.now().isoformat(),
+                "caption": "",
+            }
+            update_metadata(image_hash, entry)
 
         self.update_current_metadata(entry)
 
@@ -693,755 +649,62 @@ class Backend:
     # -----------------------------------------------------------------
 
     def setup_routes(self):
-        @self.app.context_processor
-        def inject_csrf():
-            return {"csrf_token": lambda: ensure_csrf(session)}
-
-        @self.app.before_request
-        def _csrf_for_all_posts():
-            if request.method in ("POST", "PUT", "PATCH", "DELETE"):
-                if request.path == "/heic_preview":
-                    return None
-                try:
-                    self._require_csrf()
-                except Exception:
-                    if request.is_json or request.headers.get("X-Requested-With") == "XMLHttpRequest":
-                        return jsonify({"error": "Bad request."}), 400
-                    flash("Invalid request.", "error")
-                    return redirect(request.referrer or url_for("index"))
-
-        @self.app.after_request
-        def add_security_headers(resp):
-            resp.headers["X-Content-Type-Options"] = "nosniff"
-            resp.headers["X-Frame-Options"] = "DENY"
-            resp.headers["Referrer-Policy"] = "same-origin"
-            resp.headers["Content-Security-Policy"] = (
-                "default-src 'self'; "
-                "img-src 'self' data: blob: http: https:; "
-                "script-src 'self' https://unpkg.com 'unsafe-eval' 'wasm-unsafe-eval'; "
-                "worker-src 'self' blob:; "
-                "connect-src 'self' blob:; "
-                "style-src 'self' 'unsafe-inline'; "
-                "frame-ancestors 'none';"
-            )
-            return resp
-
-        @self.app.route("/stream")
-        def stream():
-            default_w, default_h = 1920, 1080
-            try:
-                w = int(request.args.get("width", default_w))
-                h = int(request.args.get("height", default_h))
-            except ValueError:
-                w, h = default_w, default_h
-
-            headers = {
-                "Cache-Control": "no-cache, no-store, must-revalidate",
-                "Pragma": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            }
-            return Response(
-                stream_with_context(self.mjpeg_stream(w, h)),
-                mimetype="multipart/x-mixed-replace; boundary=frame",
-                headers=headers,
-                direct_passthrough=True,
-            )
-
-        @self.app.route("/stream_test")
-        def stream_test():
-            boundary_line = b"--frame\r\n"
-
-            def gen():
-                w, h = 640, 360
-                t = 0
-                while True:
-                    bars = np.zeros((h, w, 3), dtype="uint8")
-                    for i, c in enumerate(
-                        [
-                            (255, 0, 0),
-                            (0, 255, 0),
-                            (0, 0, 255),
-                            (255, 255, 0),
-                            (0, 255, 255),
-                            (255, 0, 255),
-                        ]
-                    ):
-                        x0 = int(i * w / 6)
-                        x1 = int((i + 1) * w / 6)
-                        bars[:, x0:x1, :] = c
-                    cv2.putText(
-                        bars,
-                        f"TEST STREAM t={t}",
-                        (10, h - 20),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.8,
-                        (20, 20, 20),
-                        2,
-                        cv2.LINE_AA,
-                    )
-                    ok, jpg = cv2.imencode(".jpg", bars, [cv2.IMWRITE_JPEG_QUALITY, 80])
-                    data = jpg.tobytes() if ok else b""
-                    yield (
-                        boundary_line
-                        + b"Content-Type: image/jpeg\r\n"
-                        + f"Content-Length: {len(data)}\r\n\r\n".encode("ascii")
-                        + data
-                        + b"\r\n"
-                    )
-                    t += 1
-                    time.sleep(0.2)
-
-            return Response(
-                gen(),
-                mimetype="multipart/x-mixed-replace; boundary=frame",
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-            )
-
-        @self.app.route("/heic_preview", methods=["POST"])
-        def heic_preview():
-            if not self.is_authenticated():
-                return jsonify({"error": "unauthorized"}), 401
-
-            f = request.files.get("file")
-            if f is None:
-                return jsonify({"error": "no file"}), 400
-
-            data = f.read()
-            if not data:
-                return jsonify({"error": "empty file"}), 400
-
-            try:
-                if "has_pillow_heif" in globals() and has_pillow_heif:
-                    img = Image.open(io.BytesIO(data))
-                    buf = io.BytesIO()
-                    img.save(buf, format="JPEG", quality=85)
-                    buf.seek(0)
-                    return send_file(buf, mimetype="image/jpeg")
-            except Exception as e:
-                return jsonify({"error": f"server HEIC decode unavailable: {e}"}), 501
-
-            return jsonify({"error": "server HEIC decode unavailable"}), 501
-
-
-        @self.app.route("/system_stats")
-        def system_stats():
-            import psutil
-
-            try:
-                cpu_usage = int(psutil.cpu_percent(interval=None))
-                ram = psutil.virtual_memory()
-                ram_used = ram.used // (1024 * 1024)
-                ram_total = ram.total // (1024 * 1024)
-                ram_percent = ram.percent
-                try:
-                    cpu_temps = psutil.sensors_temperatures().get("cpu_thermal", [])
-                    cpu_temp = round(cpu_temps[0].current, 1) if cpu_temps else "N/A"
-                except Exception:
-                    cpu_temp = "N/A"
-
-                return (
-                    f"CPU: {cpu_usage}%\n"
-                    f"RAM: {ram_percent}% ({ram_used}/{ram_total}MB)\n"
-                    f"CPU Temp: {cpu_temp}C"
-                )
-            except Exception:
-                return "Stats unavailable", 500
-
-        @self.app.route("/settings")
-        def serve_settings():
-            try:
-                with open(self.SETTINGS_FILE, "r") as f:
-                    return jsonify(json.load(f))
-            except Exception as e:
-                return jsonify({"error": "Failed to read settings", "details": str(e)}), 500
-
-        @self.app.route("/current_weather")
-        def current_weather():
-            try:
-                with open(self.SETTINGS_FILE, "r") as f:
-                    settings = json.load(f)
-
-                api_key = settings.get("weather_api_key")
-                location_key = settings.get("location_key")
-
-                if not api_key or not location_key:
-                    return jsonify(
-                        {
-                            "temp": "N/A",
-                            "unit": "C",
-                            "description": "Weather unavailable",
-                            "icon_url": None,
-                        }
-                    ), 400
-
-                url = (
-                    f"http://dataservice.accuweather.com/currentconditions/v1/"
-                    f"{location_key}?apikey={api_key}&details=true"
-                )
-
-                try:
-                    response = requests.get(url)
-                    data = response.json()
-
-                    if not isinstance(data, list) or not data or not isinstance(data[0], dict):
-                        raise ValueError("Unexpected API response")
-
-                    w = data[0]
-                    temp = w.get("Temperature", {}).get("Metric", {}).get("Value")
-                    unit = w.get("Temperature", {}).get("Metric", {}).get("Unit", "C")
-                    description = w.get("WeatherText", "")
-                    icon = int(w.get("WeatherIcon", 0))
-                    icon_url = (
-                        "https://developer.accuweather.com/sites/default/files/"
-                        f"{icon:02d}-s.png"
-                    )
-
-                    weather = {
-                        "temp": round(temp) if isinstance(temp, (int, float)) else "N/A",
-                        "unit": unit,
-                        "description": description,
-                        "icon_url": icon_url,
-                    }
-
-                    with open(self.WEATHER_CACHE, "w") as f:
-                        json.dump(
-                            {
-                                "timestamp": datetime.now().isoformat(),
-                                "weather_data": weather,
-                            },
-                            f,
-                        )
-
-                    print("INFO - Weather icon successfully fetched.")
-                    return jsonify(weather)
-
-                except Exception as live_error:
-                    print("ERROR - Weather fetch failed:", live_error)
-
-                    if os.path.exists(self.WEATHER_CACHE):
-                        with open(self.WEATHER_CACHE, "r") as f:
-                            cached = json.load(f)
-                            weather = cached.get("weather_data", {})
-                            if "icon_url" not in weather and "icon" in weather:
-                                icon = weather["icon"]
-                                weather["icon_url"] = (
-                                    "https://developer.accuweather.com/sites/default/files/"
-                                    f"{icon:02d}-s.png"
-                                )
-
-                            if all(
-                                k in weather
-                                for k in ("temp", "unit", "description", "icon_url")
-                            ):
-                                print(
-                                    "INFO - Serving weather from fallback cache:",
-                                    weather,
-                                )
-                                return jsonify(weather), 200
-
-                    return jsonify(
-                        {
-                            "temp": "N/A",
-                            "unit": "C",
-                            "description": "Weather unavailable",
-                            "icon_url": None,
-                        }
-                    ), 503
-
-            except Exception as e:
-                print("ERROR - Unexpected exception in weather route:", e)
-                return jsonify(
-                    {
-                        "temp": "N/A",
-                        "unit": "C",
-                        "description": "Weather unavailable",
-                        "icon_url": None,
-                    }
-                ), 500
-
-        @self.app.route("/current_metadata")
-        def current_metadata():
-            with self._metadata_lock:
-                return jsonify(self.latest_metadata or {})
-
-        @self.app.route("/metadata_stream")
-        def metadata_stream():
-            def gen():
-                last = None
-                while True:
-                    with self._metadata_lock:
-                        meta = self.latest_metadata
-                    if meta != last:
-                        yield f"data: {json.dumps(meta)}\n\n"
-                        last = meta.copy() if isinstance(meta, dict) else meta
-                    time.sleep(0.1)
-
-            return Response(gen(), mimetype="text/event-stream")
-
-        @self.app.route("/upload_with_metadata", methods=["POST"])
-        def upload_with_metadata():
-            if not self.is_authenticated():
-                return redirect(url_for("login"))
-            try:
-                self._require_csrf()
-            except Exception:
-                return jsonify({"error": "Bad request."}), 400
-
-            uploaded_files = request.files.getlist("file[]")
-            if not uploaded_files:
-                return jsonify({"message": "No files uploaded"}), 400
-
-            metadata_db = self.load_metadata_db()
-
-            for idx, file in enumerate(uploaded_files):
-                if not file or file.filename == "":
-                    continue
-
-                original_filename = file.filename
-                ext = os.path.splitext(original_filename)[1].lower()
-                if ext not in self.ALLOWED_EXTENSIONS:
-                    continue
-
-                caption = request.form.get(f"caption_{idx}", "").strip()
-                uploader = request.form.get(f"uploader_{idx}", "").strip()
-
-                temp_path = os.path.join(self.IMAGE_DIR, original_filename)
-                try:
-                    file.save(temp_path)
-                except Exception as e:
-                    self.Frame.send_log_message(f"{e}")
-                    return jsonify({"message": f"{e}"}), 500
-
-                final_path = temp_path
-                if ext in (".heic", ".heif"):
-                    png_path = os.path.splitext(final_path)[0] + ".png"
-                    final_path = self.convert_heic_to_png(final_path, png_path)
-                    original_filename = os.path.basename(final_path)
-
-
-                file_hash = self.compute_image_hash(final_path)
-
-                metadata = {
-                    "hash": file_hash,
-                    "caption": caption,
-                    "uploader": uploader,
-                    "date_added": datetime.utcnow().isoformat(),
-                    "filename": original_filename,
-                }
-                metadata_db[file_hash] = metadata
-
-            self.save_metadata_db(metadata_db)
-            self.Frame.update_images_list()
-            return jsonify({"message": "Upload successful"}), 200
-
-        @self.app.route("/thumb/<path:filename>")
-        def thumb(filename):
-            if not self.is_authenticated():
-                return redirect(url_for("login"))
-
-            src_path = os.path.join(self.IMAGE_DIR, filename)
-            root_real = os.path.realpath(self.IMAGE_DIR)
-            path_real = os.path.realpath(src_path)
-            if not (os.path.isfile(src_path) and os.path.commonpath([root_real, path_real]) == root_real):
-                return jsonify({"error": "File not found"}), 404
-
-            try:
-                w = int(request.args.get("w", 320))
-                w = max(64, min(w, 1920))
-            except Exception:
-                w = 320
-
-            dst_path = self._thumb_path(filename, w)
-
-            try:
-                if (not os.path.exists(dst_path)) or (
-                    os.path.getmtime(dst_path) < os.path.getmtime(src_path)
-                ):
-                    self._make_thumb(src_path, dst_path, w)
-            except Exception:
-                return send_from_directory(self.IMAGE_DIR, filename)
-
-            resp = send_file(dst_path, mimetype="image/webp", conditional=True)
-            resp.headers["Cache-Control"] = "public, max-age=2592000, immutable"
-            return resp
-
-        @self.app.route("/signup", methods=["GET", "POST"])
-        def signup():
-            from WebAPI.WebUtils.auth_security import (
-                EMAIL_RE,
-                USERNAME_RE,
-                password_policy_ok,
-            )
-
-            if request.method == "POST":
-                if not self._rl_signup.allow(self._client_ip()):
-                    flash("Please wait before trying again.", "error")
-                    return redirect(url_for("signup"))
-
-                try:
-                    self._require_csrf()
-                except Exception:
-                    flash("Invalid request.", "error")
-                    return redirect(url_for("signup"))
-
-                email = (request.form.get("email") or "").strip().lower()
-                username = (request.form.get("username") or "").strip()
-                password = request.form.get("password") or ""
-
-                if not password_policy_ok(password):
-                    flash(
-                        "Password does not meet policy. Use 10+ chars and include at least 3 of: "
-                        "lowercase, uppercase, digits, symbols.",
-                        "error",
-                    )
-                    return render_template(
-                        "signup.html",
-                        email=request.args.get("email", ""),
-                        username=request.args.get("username", ""),
-                    )
-
-                if not (EMAIL_RE.match(email) and USERNAME_RE.match(username)):
-                    flash("Invalid input.", "error")
-                    return redirect(url_for("signup"))
-
-                try:
-                    uid = self._users.create_user(
-                        email=email,
-                        username=username,
-                        password=password,
-                        role="user",
-                    )
-                except ValueError:
-                    flash("Cannot create account.", "error")
-                    return redirect(url_for("signup"))
-                except Exception:
-                    flash("Cannot create account.", "error")
-                    return redirect(url_for("signup"))
-
-                flash("Signup successful. Please log in.", "success")
-                return redirect(url_for("login"))
-
-            return render_template("signup.html")
-
-        @self.app.route("/login", methods=["GET", "POST"])
-        def login():
-            if request.method == "POST":
-                if not self._rl_login.allow(self._client_ip()):
-                    flash("Invalid credentials.")
-                    return redirect(url_for("login"))
-
-                try:
-                    self._require_csrf()
-                except Exception:
-                    flash("Invalid credentials.")
-                    return redirect(url_for("login"))
-
-                identity = (request.form.get("email_or_username") or "").strip()
-                password = request.form.get("password") or ""
-                user = self._users.verify_login(identity, password)
-                if not user or not user.get("is_active", True):
-                    flash("Invalid credentials.")
-                    return redirect(url_for("login"))
-
-                self._rotate_session(user["username"], user["uid"], user.get("role", "user"))
-                flash("Login successful!")
-                return redirect(url_for("index"))
-            return render_template("login.html")
-
-        @self.app.route("/logout", methods=["POST", "GET"])
-        def logout():
-            if request.method == "POST":
-                try:
-                    self._require_csrf()
-                except Exception:
-                    pass
-            session.clear()
-            flash("You have been logged out.")
-            return redirect(url_for("login"))
-
-        @self.app.route("/")
-        def index():
-            if not self.is_authenticated():
-                return redirect(url_for("login"))
-
-            images = self.get_images_from_directory()
-            image_count = len(images)
-            settings = self.load_settings()
-
-            metadata_db = self.load_metadata_db()
-
-            def _date_for_filename(fn: str) -> str:
-                for meta in metadata_db.values():
-                    if meta.get("filename") == fn and meta.get("date_added"):
-                        return meta["date_added"]
-                fp = os.path.join(self.IMAGE_DIR, fn)
-                try:
-                    ts = os.path.getmtime(fp)
-                    return datetime.fromtimestamp(ts).isoformat()
-                except Exception:
-                    return ""
-
-            images_data = [{"name": fn, "date_added": _date_for_filename(fn)} for fn in images]
-
-            latest_metadata = {}
-            if images:
-                first = images[0]
-                entry = None
-                for meta in metadata_db.values():
-                    if meta.get("filename") == first:
-                        entry = meta
-                        break
-                if entry:
-                    latest_metadata = entry
-
-            username = session.get("user", "Guest")
-            return render_template(
-                "index.html",
-                images=images,
-                images_data=images_data,
-                image_count=image_count,
-                settings=settings,
-                latest_metadata=latest_metadata,
-                username=username,
-            )
-
-        @self.app.route("/get_latest_metadata")
-        def latest_metadata():
-            return jsonify(self.latest_metadata)
-
-        @self.app.route("/save_settings", methods=["POST"])
-        def save_settings_route():
-            if not self.is_authenticated():
-                return redirect(url_for("login"))
-            try:
-                self._require_csrf()
-            except Exception:
-                return jsonify({"error": "Bad request."}), 400
-
-            try:
-                nested = {}
-
-                for k in request.form:
-                    if k == "csrf_token":
-                        continue
-                    values = request.form.getlist(k)
-                    for v in values:
-                        parts = _split_bracketed(k)
-                        _assign_path(nested, parts, _parse_value(v))
-
-                self.save_settings(nested)
-                flash("Settings updated successfully.")
-            except Exception as e:
-                flash(f"Failed to update settings: {e}")
-            return redirect(url_for("index"))
-
-        @self.app.route("/images/<path:filename>")
-        def serve_image(filename):
-            if not self.is_authenticated():
-                return redirect(url_for("login"))
-            return send_from_directory(self.IMAGE_DIR, filename)
-
-        @self.app.route("/upload", methods=["POST"])
-        def upload_files():
-            if not self.is_authenticated():
-                return redirect(url_for("login"))
-            try:
-                self._require_csrf()
-            except Exception:
-                return jsonify({"error": "Bad request."}), 400
-
-            if "file[]" not in request.files:
-                flash("No file part")
-                return redirect(url_for("index"))
-
-            files = request.files.getlist("file[]")
-            for file in files:
-                if file and self.allowed_file(file.filename):
-                    file_path = os.path.join(self.IMAGE_DIR, file.filename)
-                    file_extension = Path(file.filename).suffix.lower()
-                    file.save(file_path)
-                    if file_extension in {".heic", ".heif"}:
-                        png_path = os.path.splitext(file_path)[0] + ".png"
-                        file_path = self.convert_heic_to_png(file_path, png_path)
-                    self.store_image_metadata(file_path)
-            return redirect(url_for("index"))
-
-
-        @self.app.route("/delete/<filename>", methods=["POST"])
-        def delete_image(filename):
-            if not self.is_authenticated():
-                return redirect(url_for("login"))
-            try:
-                self._require_csrf()
-            except Exception:
-                return jsonify({"error": "Bad request."}), 400
-
-            try:
-                os.remove(os.path.join(self.IMAGE_DIR, filename))
-                flash(f"File {filename} successfully deleted.")
-            except FileNotFoundError:
-                flash(f"File {filename} not found.")
-            return redirect(url_for("index"))
-
-        @self.app.route("/download/<filename>")
-        def download_image(filename):
-            if not self.is_authenticated():
-                return redirect(url_for("login"))
-            return send_from_directory(self.IMAGE_DIR, filename, as_attachment=True)
-
-        @self.app.route("/delete_selected", methods=["POST"])
-        def delete_selected():
-            if not self.is_authenticated():
-                return redirect(url_for("login"))
-            try:
-                self._require_csrf()
-            except Exception:
-                return jsonify({"error": "Bad request."}), 400
-
-            selected_files = request.form.getlist("selected_files")
-            for filename in selected_files:
-                try:
-                    os.remove(os.path.join(self.IMAGE_DIR, filename))
-                    flash(f"File {filename} successfully deleted.")
-                except FileNotFoundError:
-                    flash(f"File {filename} not found.")
-            return redirect(url_for("index"))
-
-        @self.app.route("/download_selected", methods=["POST"])
-        def download_selected():
-            if not self.is_authenticated():
-                return redirect(url_for("login"))
-            try:
-                self._require_csrf()
-            except Exception:
-                return jsonify({"error": "Bad request."}), 400
-
-            selected_files = request.form.getlist("selected_files")
-            if not selected_files:
-                flash("No files selected for download.")
-                return redirect(url_for("index"))
-
-            zip_buffer = io.BytesIO()
-            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zipf:
-                for filename in selected_files:
-                    filepath = os.path.join(self.IMAGE_DIR, filename)
-                    if os.path.isfile(filepath):
-                        zipf.write(filepath, arcname=filename)
-            zip_buffer.seek(0)
-            return send_file(
-                zip_buffer,
-                download_name="selected_images.zip",
-                as_attachment=True,
-            )
-
-        @self.app.route("/download_logs")
-        def download_logs():
-            try:
-                return send_file(
-                    self.LOG_FILE_PATH,
-                    as_attachment=True,
-                    download_name="PhotoFrame.log",
-                )
-            except FileNotFoundError:
-                return jsonify({"error": "Log file not found"}), 404
-            except Exception as e:
-                return jsonify({"error": str(e)}), 500
-
-        @self.app.route("/logs", methods=["GET"])
-        def get_logs():
-            try:
-                with open(self.LOG_FILE_PATH, "r") as log_file:
-                    logs = log_file.readlines()
-                return jsonify({"logs": logs}), 200
-            except FileNotFoundError:
-                return jsonify({"error": "Log file not found"}), 404
-            except Exception as e:
-                return jsonify({"error": str(e)}), 500
-
-        @self.app.route("/stream_logs")
-        def stream_logs():
-            def generate_logs():
-                with open(self.LOG_FILE_PATH, "r") as log_file:
-                    log_file.seek(0)
-                    for line in log_file:
-                        yield f"data: {line}\n\n"
-                    log_file.seek(0, os.SEEK_END)
-                    while True:
-                        line = log_file.readline()
-                        if line:
-                            yield f"data: {line}\n\n"
-                        time.sleep(1)
-
-            return Response(generate_logs(), content_type="text/event-stream")
-
-        @self.app.route("/clear_logs", methods=["POST"])
-        def clear_logs():
-            if not self.is_authenticated():
-                return redirect(url_for("login"))
-            try:
-                self._require_csrf()
-            except Exception:
-                return jsonify({"error": "Bad request."}), 400
-
-            try:
-                with open(self.LOG_FILE_PATH, "w") as log_file:
-                    log_file.truncate(0)
-                return jsonify({"message": "Log file cleared successfully."}), 200
-            except Exception as e:
-                return jsonify({"error": str(e)}), 500
-
-        @self.app.route("/image_metadata")
-        def get_image_metadata():
-            filename = request.args.get("filename")
-            if not filename:
-                return jsonify({"error": "Filename not provided."}), 400
-
-            filepath = os.path.join(self.IMAGE_DIR, filename)
-            if not os.path.exists(filepath):
-                return jsonify({"error": "File not found."}), 404
-
-            metadata_db = self.load_metadata_db()
-
-            for meta in metadata_db.values():
-                if meta.get("filename") == filename:
-                    return jsonify(meta)
-
-            self.store_image_metadata(filepath)
-            metadata_db = self.load_metadata_db()
-            file_hash = self.compute_image_hash(filepath)
-            return jsonify(metadata_db.get(file_hash, {}))
-
-        @self.app.route("/update_metadata", methods=["POST"])
-        def update_metadata():
-            if not self.is_authenticated():
-                return redirect(url_for("login"))
-            try:
-                self._require_csrf()
-            except Exception:
-                return jsonify({"error": "Bad request."}), 400
-
-            data = request.get_json(force=True, silent=True) or {}
-            file_hash = data.get("hash")
-            caption = data.get("caption", "")
-            uploader = data.get("uploader")
-
-            if not file_hash:
-                return jsonify({"error": "Hash not provided."}), 400
-
-            metadata_db = self.load_metadata_db()
-
-            if file_hash not in metadata_db:
-                return jsonify({"error": "Metadata not found for this hash."}), 404
-
-            metadata_db[file_hash]["caption"] = caption
-            if uploader is not None:
-                metadata_db[file_hash]["uploader"] = uploader
-
-            self.save_metadata_db(metadata_db)
-
-            self.latest_metadata = metadata_db[file_hash]
-            return jsonify({"message": "Metadata updated successfully."})
+        self.app.config['backend'] = self
+        
+        # --- RFC 9457 Error Handlers ---
+        @self.app.errorhandler(HTTPException)
+        def handle_exception(e):
+            response = jsonify({
+                "title": e.name,
+                "status": e.code,
+                "detail": e.description,
+                "instance": request.path
+            })
+            response.content_type = "application/problem+json"
+            return response, e.code
+
+        @self.app.errorhandler(Exception)
+        def handle_unexpected_error(e):
+            logging.exception("Unexpected error: %s", e)
+            response = jsonify({
+                "title": "Internal Server Error",
+                "status": 500,
+                "detail": "An unexpected error occurred.",
+                "instance": request.path
+            })
+            response.content_type = "application/problem+json"
+            return response, 500
+
+        from WebAPI.routes.auth import auth_bp
+        from WebAPI.routes.settings import settings_bp
+        from WebAPI.routes.images import images_bp
+        from WebAPI.routes.stream import stream_bp
+        
+        self.app.register_blueprint(auth_bp)
+        self.app.register_blueprint(settings_bp)
+        self.app.register_blueprint(images_bp)
+        self.app.register_blueprint(stream_bp)
+        
+        @self.app.route('/', defaults={'path': ''})
+        @self.app.route('/<path:path>')
+        def serve_react(path):
+            if path and os.path.exists(os.path.join(self.app.static_folder, path)):
+                return send_from_directory(self.app.static_folder, path)
+            return send_from_directory(self.app.static_folder, 'index.html')
+
+    def notify_settings_changed(self):
+        """Notify any listeners (like the FrameServer) that settings have been updated."""
+        self._settings_updated_flag = True
+        try:
+            apply_now = getattr(self.Frame, "apply_settings_now", None)
+            if callable(apply_now) and apply_now():
+                self._settings_updated_flag = False
+                logging.info("[Backend] Settings applied immediately.")
+                return
+        except Exception:
+            logging.exception("[Backend] Immediate settings apply failed; using deferred reload.")
+
+        logging.info("[Backend] Settings change notified (deferred).")
 
     # -----------------------------------------------------------------
     # HEIC conversion

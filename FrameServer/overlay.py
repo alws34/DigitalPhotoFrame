@@ -88,11 +88,22 @@ class OverlayRenderer:
         margins: Dict[str, int],
         weather: Dict,
         font_color: Tuple[int, int, int] = (255, 255, 255),
+        contrast_text: bool = False,
     ) -> np.ndarray:
         base_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
         base = Image.fromarray(base_rgb).convert("RGBA")
-        overlay = self.render_overlay_rgba(base.width, base.height, margins, weather, font_color)
-        out_rgba = Image.alpha_composite(base, overlay)
+        overlay_layer = self.render_overlay_rgba(base.width, base.height, margins, weather, font_color)
+        
+        if contrast_text:
+            text_mask = overlay_layer.split()[3]
+            base_array = np.array(base)
+            inverted_base = 255 - base_array[:, :, :3]
+            inverted_rgba = np.dstack((inverted_base, np.array(text_mask)))
+            inverted_img = Image.fromarray(inverted_rgba, "RGBA")
+            out_rgba = Image.alpha_composite(base, inverted_img)
+        else:
+            out_rgba = Image.alpha_composite(base, overlay_layer)
+            
         return cv2.cvtColor(np.array(out_rgba.convert("RGB")), cv2.COLOR_RGB2BGR)
         # Clock strings
         # current_time = time.strftime("%H:%M:%S")
@@ -195,7 +206,8 @@ class OverlayRenderer:
         ml = int(margins.get("left", 50))
         mb = int(margins.get("bottom", 50))
         mr = int(margins.get("right", 50))
-        spacing = int(margins.get("spacing", 10))
+        # Support both legacy "spacing" and newer "spacing_between" keys.
+        spacing = int(margins.get("spacing_between", margins.get("spacing", 10)))
 
         # Measure
         tb = draw.textbbox((0, 0), current_time, font=self.time_font)

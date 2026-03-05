@@ -34,3 +34,4 @@ _thumbs/
 # Logs
 PhotoFrame.log
 *.log
+.claude/*
