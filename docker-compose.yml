@@ -1,0 +1,16 @@
+services:
+  photoframe:
+    build: .
+    container_name: photoframe
+    restart: unless-stopped
+    ports:
+      - "${PHOTOFRAME_PORT:-5002}:${PHOTOFRAME_PORT:-5002}"
+    volumes:
+      - ./Images:/app/Images
+      - ./photoframe_settings.json:/app/photoframe_settings.json
+      - photoframe-data:/data
+    environment:
+      - PHOTOFRAME_SECRET_KEY=${PHOTOFRAME_SECRET_KEY:-change-me-in-production}
+
+volumes:
+  photoframe-data:

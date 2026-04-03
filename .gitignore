@@ -26,6 +26,9 @@ _thumbs/
 .vscode/
 .idea/
 
+# Personal Claude overrides
+CLAUDE.local.md
+
 # Testing/Type checking
 .mypy_cache/
 .pytest_cache/
@@ -34,4 +37,12 @@ _thumbs/
 # Logs
 PhotoFrame.log
 *.log
+
+# Claude Code
 .claude/*
+!.claude/settings.json
+!.claude/hooks/
+!.claude/hooks/*.sh
+!.claude/rules/
+!.claude/rules/**/*.md
+.claude/worktrees/

@@ -1,0 +1,66 @@
+# ==============================================================
+# Stage 1: Build React frontend
+# ==============================================================
+FROM node:20-slim AS frontend-build
+
+WORKDIR /build/frontend
+COPY frontend/package.json frontend/package-lock.json* ./
+RUN npm ci --no-audit --no-fund
+COPY frontend/ ./
+RUN npm run build
+
+# ==============================================================
+# Stage 2: Python runtime (pygame display + Flask backend)
+# ==============================================================
+FROM python:3.11-slim
+
+LABEL maintainer="DigitalPhotoFrame"
+LABEL description="Digital Photo Frame - pygame display + Flask backend"
+
+WORKDIR /app
+
+# System dependencies for OpenCV, Pillow, pillow-heif, and SDL2 (pygame)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1 \
+    libglib2.0-0 \
+    libsm6 \
+    libxrender1 \
+    libxext6 \
+    libjpeg62-turbo \
+    libopenjp2-7 \
+    libheif1 \
+    libde265-0 \
+    libsdl2-2.0-0 \
+    libsdl2-image-2.0-0 \
+    libsdl2-mixer-2.0-0 \
+    libsdl2-ttf-2.0-0 \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies
+COPY requirements-docker.txt ./
+RUN pip install --no-cache-dir -r requirements-docker.txt
+
+# Copy application code
+COPY app.py config.py Settings.py iFrame.py pyproject.toml ./
+COPY FrameServer/ ./FrameServer/
+COPY FrameGUI/ ./FrameGUI/
+COPY WebAPI/ ./WebAPI/
+COPY Utilities/ ./Utilities/
+COPY arial.ttf ./
+
+# Copy built frontend from stage 1
+COPY --from=frontend-build /build/frontend/dist ./frontend/dist
+
+# Create default directories
+RUN mkdir -p /app/Images /data
+
+# Settings and images are expected as volumes
+VOLUME ["/app/Images", "/data"]
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD python -c "import json,urllib.request;p=json.load(open('/app/photoframe_settings.json')).get('backend_configs',{}).get('server_port',5002);urllib.request.urlopen(f'http://localhost:{p}/')" || exit 1
+
+# Default: pygame display mode (use --headless for server-only)
+ENTRYPOINT ["python", "app.py"]
+CMD ["--display", "pygame"]

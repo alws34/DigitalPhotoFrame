@@ -654,6 +654,9 @@ class Backend:
         # --- RFC 9457 Error Handlers ---
         @self.app.errorhandler(HTTPException)
         def handle_exception(e):
+            # SPA fallback: serve index.html for 404s on non-API routes
+            if e.code == 404 and not request.path.startswith("/api/"):
+                return send_from_directory(self.app.static_folder, "index.html")
             response = jsonify({
                 "title": e.name,
                 "status": e.code,

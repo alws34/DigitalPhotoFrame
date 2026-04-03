@@ -23,7 +23,10 @@ from datetime import datetime, timezone
 from PIL import Image
 from pillow_heif import register_heif_opener
 
+from EffectHandler import EffectHandler
+from image_handler import Image_Utils
 from iFrame import iFrame
+from overlay import OverlayRenderer
 from Settings import SettingsHandler
 from Utilities.observer import ImagesObserver
 from Utilities.Weather.weather_adapter import build_weather_client
@@ -105,24 +108,42 @@ class PhotoFrameServer(iFrame):
         self.effects = self.EffectHandler.get_effects()
         self.update_images_list()
 
+        # --- Overlay renderer (bakes date/time/weather into every frame) ---
+        ui_cfg = self.settings_handler.get("ui", {}) or {}
+        font_path = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            ui_cfg.get("font_name", "arial.ttf"),
+        )
+        if not os.path.isfile(font_path):
+            font_path = "arial.ttf"
+        try:
+            self._overlay = OverlayRenderer(
+                font_path=font_path,
+                time_font_size=int(ui_cfg.get("time_font_size", 80)),
+                date_font_size=int(ui_cfg.get("date_font_size", 60)),
+                stats_font_size=int((self.settings_handler.get("stats", {}) or {}).get("font_size", 20)),
+                desired_size=(self.screen_width, self.screen_height),
+            )
+        except Exception:
+            logging.exception("Failed to create OverlayRenderer; overlays disabled")
+            self._overlay = None
+        self._weather_data = {}
+        self._weather_lock = threading.Lock()
+
+        # Weather client and loop (all modes)
+        self._weather_stop = threading.Event()
+        self.weather_client = build_weather_client(self, self.settings_handler)
+        self._weather_thread = None
+        self._start_local_weather_loop()
+
+        # DateTime thread for GUI mode only (overlay is baked in _send_frame for all modes)
         if self._gui_frame:
-            # Keep a handle to the thread so we can join on shutdown
             self._date_time_thread = threading.Thread(
                 target=self.start_date_time_loop,
                 name="DateTimeThread",
                 daemon=True,
             )
             self._date_time_thread.start()
-
-            # Weather client and loop
-            self._weather_stop = threading.Event()
-            self.weather_client = build_weather_client(self, self.settings_handler)
-
-            self._weather_stop = threading.Event()
-            self.weather_client = build_weather_client(self, self.settings_handler)
-
-            self._weather_thread = None
-            self._start_local_weather_loop()
         else:
             self._date_time_thread = None
 
@@ -198,7 +219,12 @@ class PhotoFrameServer(iFrame):
             while not self._weather_stop.is_set():
                 try:
                     self.weather_client.fetch()
-                    self._gui_frame.set_weather(self.weather_client.data() or {})
+                    data = self.weather_client.data() or {}
+                    with self._weather_lock:
+                        self._weather_data = data
+                    # Also push to GUI if it exists
+                    if self._gui_frame and hasattr(self._gui_frame, "set_weather"):
+                        self._gui_frame.set_weather(data)
                 except Exception:
                     logging.exception("weather loop error (server)")
                 self._weather_stop.wait(poll_sec)
@@ -257,6 +283,26 @@ class PhotoFrameServer(iFrame):
             arr = self.image_handler.resize_image_with_background(
                 arr, self.screen_width, self.screen_height
             )
+
+        # Bake overlay (date/time/weather) into the frame
+        if self._overlay:
+            try:
+                ui_cfg = self.settings_handler.get("ui", {}) or {}
+                show_weather = ui_cfg.get("show_weather", False)
+                contrast_text = ui_cfg.get("contrast_text", False)
+                margins = ui_cfg.get("margins", {}) or {}
+                margins.setdefault("spacing_between", ui_cfg.get("spacing_between", 50))
+
+                with self._weather_lock:
+                    weather = dict(self._weather_data) if show_weather else {}
+
+                arr = self._overlay.render_datetime_and_weather(
+                    arr, margins, weather,
+                    font_color=(255, 255, 255),
+                    contrast_text=contrast_text,
+                )
+            except Exception:
+                logging.exception("Overlay render failed; sending raw frame")
 
         # Make the current frame available to the backend streamer
         self.frame_to_stream = arr

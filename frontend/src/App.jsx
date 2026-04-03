@@ -7,6 +7,7 @@ import StreamView from './pages/StreamView';
 import GalleryView from './pages/GalleryView';
 import SettingsView from './pages/SettingsView';
 import ResetPassword from './pages/ResetPassword';
+import FrameView from './pages/FrameView';
 
 const PrivateRoute = ({ children }) => {
   const { user, loading } = useAuth();
@@ -26,6 +27,7 @@ function App() {
           <Route path="/login" element={<Login />} />
           <Route path="/signup" element={<Signup />} />
           <Route path="/reset-password" element={<ResetPassword />} />
+          <Route path="/frame" element={<FrameView />} />
           <Route path="/" element={
             <PrivateRoute>
               <DashboardLayout />
