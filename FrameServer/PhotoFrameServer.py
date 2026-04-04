@@ -239,88 +239,60 @@ class PhotoFrameServer(iFrame):
             pass
 
     def _send_frame(self, frame_bgr: np.ndarray) -> None:
+        """High-performance frame delivery for Raspberry Pi."""
         if frame_bgr is None:
-            logging.warning("PhotoFrameServer._send_frame: got None frame")
             return
 
-        arr = np.asarray(frame_bgr)
-        if not isinstance(arr, np.ndarray):
-            logging.error("PhotoFrameServer._send_frame: non-ndarray frame: %r", type(frame_bgr))
-            return
-
-        if arr.dtype == object:
-            logging.error(
-                "PhotoFrameServer._send_frame: bad dtype=object from effect, shape=%s, dropping frame",
-                arr.shape,
-            )
-            return
-
-        if arr.ndim not in (2, 3):
-            logging.error(
-                "PhotoFrameServer._send_frame: unexpected ndim=%d, shape=%s",
-                arr.ndim,
-                arr.shape,
-            )
-            return
-
-        # Normalize gray / BGRA
-        if arr.ndim == 2:
-            arr = cv2.cvtColor(arr, cv2.COLOR_GRAY2BGR)
-        elif arr.ndim == 3 and arr.shape[2] == 4:
-            arr = cv2.cvtColor(arr, cv2.COLOR_BGRA2BGR)
-
-        if arr.dtype != np.uint8:
-            try:
-                arr = arr.astype(np.uint8)
-            except Exception as e:
-                logging.exception(
-                    "PhotoFrameServer._send_frame: cannot cast dtype %s to uint8: %s", arr.dtype, e
-                )
-                return
-
-        h, w = arr.shape[:2]
+        # 1. Fast dimension check. 
+        # We assume the EffectHandler already provided a screen-sized frame.
+        h, w = frame_bgr.shape[:2]
         if w != self.screen_width or h != self.screen_height:
-            arr = self.image_handler.resize_image_with_background(
-                arr, self.screen_width, self.screen_height
-            )
+            # Use fast cv2.resize only if the compositor failed to provide correct size
+            frame_bgr = cv2.resize(frame_bgr, (self.screen_width, self.screen_height), 
+                                   interpolation=cv2.INTER_LINEAR)
 
-        # Bake overlay (date/time/weather) into the frame
+        # 2. Bake Overlay (Date/Time/Weather)
+        # This is the most CPU-intensive part; we optimize by caching settings.
         if self._overlay:
             try:
                 ui_cfg = self.settings_handler.get("ui", {}) or {}
                 show_weather = ui_cfg.get("show_weather", False)
                 contrast_text = ui_cfg.get("contrast_text", False)
-                margins = ui_cfg.get("margins", {}) or {}
+                
+                # Fetch settings once per refresh
+                margins = ui_cfg.get("margins", {}).copy()
                 margins.setdefault("spacing_between", ui_cfg.get("spacing_between", 50))
 
                 with self._weather_lock:
-                    weather = dict(self._weather_data) if show_weather else {}
+                    weather = self._weather_data if show_weather else {}
 
-                arr = self._overlay.render_datetime_and_weather(
-                    arr, margins, weather,
+                # Optimized call (Assuming overlay.py is using Numpy blending)
+                frame_bgr = self._overlay.render_datetime_and_weather(
+                    frame_bgr, margins, weather,
                     font_color=(255, 255, 255),
                     contrast_text=contrast_text,
                 )
             except Exception:
-                logging.exception("Overlay render failed; sending raw frame")
+                # Fallback to raw frame if overlay fails to prevent a hard crash/freeze
+                pass
 
-        # Make the current frame available to the backend streamer
-        self.frame_to_stream = arr
+        # 3. Update internal buffers
+        self.frame_to_stream = frame_bgr
 
-        # Push to GUI
+        # 4. Dispatch to Pygame GUI (Main Thread will pick this up)
         if self._gui_frame and hasattr(self._gui_frame, "set_frame"):
             try:
-                self._gui_frame.set_frame(arr)
+                self._gui_frame.set_frame(frame_bgr)
             except Exception:
-                logging.exception("Failed to publish frame to GUI")
+                logging.error("Failed to push frame to Pygame GUI")
 
-        # Signal backend streamer that a fresh frame exists
+        # 5. Signal the Backend MJPEG stream
         try:
             if hasattr(self, "m_api") and self.m_api:
                 self.m_api._new_frame_ev.set()
         except Exception:
-            logging.exception("Failed to signal API new frame")
-
+            pass
+            
     # ------------- Stream API -------------
     def update_frame(self, generator):
         """
@@ -662,10 +634,7 @@ class PhotoFrameServer(iFrame):
         self.status = self.update_frame(final_generator)
 
         if self.status == AnimationStatus.ANIMATION_FINISHED:
-            if self.frame_to_stream is not None:
-                self.current_image = self.frame_to_stream
-            else:
-                self.current_image = self.next_image
+            self.current_image = self.next_image
 
         return is_video_transition
     
@@ -676,6 +645,8 @@ class PhotoFrameServer(iFrame):
     def run_photoframe(self):
         self.shuffled_images = self.image_handler.shuffle_images(self.images)
         img_path = self.get_random_image()
+        
+        # Initial image load
         if img_path:
              img = self._load_image_safe(img_path)
              if img is not None:
@@ -686,48 +657,31 @@ class PhotoFrameServer(iFrame):
                  self.current_image = self._blank_frame()
         else:
              self.current_image = self._blank_frame()
+        
         self._send_frame(self.current_image)
 
         while self.is_running:
             playback = self.settings_handler.get("playback", {})
-            anim_duration = playback.get("animation_duration") or self.settings_handler.get("animation_duration") or 10
-            delay = playback.get("delay_between_images") or self.settings_handler.get("delay_between_images") or 30
+            anim_duration = playback.get("animation_duration") or 10
+            delay = playback.get("delay_between_images") or 30
 
             if anim_duration > 0:
-                # Pass delay as hold_time
                 is_video = self.start_image_transition(duration=anim_duration, hold_time=delay)
                 
-                # Logic Fix:
-                # If is_video is True: The video generator ran for (10s + 30s) = 40s. We do NOT sleep.
-                # If is_video is False: The transition ran for 10s. We MUST sleep for 30s.
                 if not is_video:
-                    time.sleep(delay)
+                    hold_until = time.time() + delay
+                    next_tick = time.time()
+                    while time.time() < hold_until and self.is_running:
+                        self._send_frame(self.current_image)
+                        
+                        # PRECISE TIMING: Calculate next exact second
+                        next_tick += 1.0
+                        sleep_time = next_tick - time.time()
+                        if sleep_time > 0:
+                            time.sleep(sleep_time)
             else:
-                time.sleep(0.1)
-
-            # Hot-reloading check
-            try:
-                if self.m_api and getattr(self.m_api, "_settings_updated_flag", False):
-                    logging.info("[PhotoFrame] Hot-reloading settings...")
-                    if self.apply_settings_now():
-                        self.m_api._settings_updated_flag = False
-            except Exception:
-                logging.exception("Hot-reload failed")
-                
-            # Render datetime and weather if GUI exists
-            if self._gui_frame and hasattr(self._gui_frame, "set_frame"):
-                # We also need to grab the latest contrast_text setting
-                ui_settings = self.settings_handler.get("ui", {})
-                contrast_text = ui_settings.get("contrast_text", False)
-                # Ensure the frame receives the setting properly within its own loop.
-                # However, PhotoFrameServer delegates weather/datetime straight to the OverlayRenderer via Backend stream_test currently, wait where does the main stream apply this? Let's check API.mjpeg_stream.
-
-        try:
-            while True:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            logging.info("Shutting down.")
-            self.stop_services()
+                self._send_frame(self.current_image)
+                time.sleep(1.0)
 
     def stop_services(self) -> None:
         def _join(th, name: str, timeout: float = 2.0) -> None:

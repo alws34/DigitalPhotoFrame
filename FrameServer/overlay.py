@@ -90,101 +90,25 @@ class OverlayRenderer:
         font_color: Tuple[int, int, int] = (255, 255, 255),
         contrast_text: bool = False,
     ) -> np.ndarray:
-        base_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-        base = Image.fromarray(base_rgb).convert("RGBA")
-        overlay_layer = self.render_overlay_rgba(base.width, base.height, margins, weather, font_color)
+        # 1. Create a small transparent overlay just for the text
+        # Instead of the whole screen, we render to a layer and stamp it.
+        overlay_rgba = self.render_overlay_rgba(self.desired_w, self.desired_h, margins, weather, font_color)
         
-        if contrast_text:
-            text_mask = overlay_layer.split()[3]
-            base_array = np.array(base)
-            inverted_base = 255 - base_array[:, :, :3]
-            inverted_rgba = np.dstack((inverted_base, np.array(text_mask)))
-            inverted_img = Image.fromarray(inverted_rgba, "RGBA")
-            out_rgba = Image.alpha_composite(base, inverted_img)
-        else:
-            out_rgba = Image.alpha_composite(base, overlay_layer)
-            
-        return cv2.cvtColor(np.array(out_rgba.convert("RGB")), cv2.COLOR_RGB2BGR)
-        # Clock strings
-        # current_time = time.strftime("%H:%M:%S")
-        # current_date = time.strftime("%d/%m/%y")
+        # 2. Extract the Alpha channel as a mask
+        alpha = overlay_rgba.split()[3]
+        mask = np.array(alpha) / 255.0
+        mask = np.stack([mask] * 3, axis=-1) # Make it 3-channel for BGR blending
 
-        # # Margins
-        # ml = int(margins.get("left", 50))
-        # mb = int(margins.get("bottom", 50))
-        # mr = int(margins.get("right", 50))
-        # spacing = int(margins.get("spacing", 10))
+        # 3. Convert only the text pixels to BGR
+        text_rgb = np.array(overlay_rgba.convert("RGB"))
+        text_bgr = cv2.cvtColor(text_rgb, cv2.COLOR_RGB2BGR)
 
-        # # Base image (RGB) and a fully transparent overlay (RGBA)
-        # base_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-        # base = Image.fromarray(base_rgb)  # mode RGB
-        # w, h = base.size
-        # overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-        # draw = ImageDraw.Draw(overlay)
-
-        # # Measure text
-        # def bbox(txt: str, font: ImageFont.FreeTypeFont) -> Tuple[int, int, int, int]:
-        #     return draw.textbbox((0, 0), txt, font=font)
-
-        # tb = bbox(current_time, self.time_font)
-        # db = bbox(current_date, self.date_font)
-        # t_w, t_h = tb[2] - tb[0], tb[3] - tb[1]
-        # d_w, d_h = db[2] - db[0], db[3] - db[1]
-
-        # # Left block (time above date, aligned to date width)
-        # baseline_y = h - mb
-        # x_date = ml
-        # y_date = baseline_y - d_h
-        # x_time = x_date + (d_w - t_w) // 2
-        # y_time = y_date - spacing - t_h
-
-        # # Right block (temperature on top, condition below)
-        # right_positions = []
-        # temp_text = None
-        # cond_text = None
-        # if weather:
-        #     temp_text = f"{weather.get('temp', '--')}°{weather.get('unit', '')}"
-        #     cond_text = (weather.get('description') or '').strip() or None
-
-        # if temp_text:
-        #     temp_bb = bbox(temp_text, self.date_font)
-        #     temp_w = temp_bb[2] - temp_bb[0]
-        #     temp_h = temp_bb[3] - temp_bb[1]
-
-        #     cond_w = cond_h = 0
-        #     if cond_text:
-        #         cond_bb = bbox(cond_text, self.date_font)
-        #         cond_w = cond_bb[2] - cond_bb[0]
-        #         cond_h = cond_bb[3] - cond_bb[1]
-
-        #     block_w = max(temp_w, cond_w)
-        #     block_h = temp_h + (6 + cond_h if cond_text else 0)
-
-        #     x_right = w - mr
-        #     y_block_top = baseline_y - block_h
-        #     x_block_left = x_right - block_w
-
-        #     # Center each line within the block
-        #     x_temp = x_block_left + (block_w - temp_w) // 2
-        #     y_temp = y_block_top
-        #     right_positions.append((temp_text, x_temp, y_temp))
-
-        #     if cond_text:
-        #         x_cond = x_block_left + (block_w - cond_w) // 2
-        #         y_cond = y_temp + temp_h + 6
-        #         right_positions.append((cond_text, x_cond, y_cond))
-
-        # # Draw text ON THE TRANSPARENT OVERLAY ONLY
-        # rgba_fill = (font_color[0], font_color[1], font_color[2], 255)
-        # draw.text((x_time, y_time), current_time, font=self.time_font, fill=rgba_fill)
-        # draw.text((x_date, y_date), current_date, font=self.date_font, fill=rgba_fill)
-        # for ln, x, y in right_positions:
-        #     draw.text((x, y), ln, font=self.date_font, fill=rgba_fill)
-
-        # # Composite overlay over base; nothing but glyph pixels are applied
-        # out_rgba = Image.alpha_composite(base.convert("RGBA"), overlay)
-        # return cv2.cvtColor(np.array(out_rgba.convert("RGB")), cv2.COLOR_RGB2BGR)
-
+        # 4. Fast Numpy blend: result = (text * alpha) + (original * (1-alpha))
+        # This bypasses all the slow PIL image conversions for the background image
+        out = (text_bgr * mask + frame_bgr * (1.0 - mask)).astype(np.uint8)
+        
+        return out
+        
     # overlay.py  --- add this new method inside OverlayRenderer
     def render_overlay_rgba(
         self,

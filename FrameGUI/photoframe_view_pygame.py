@@ -78,46 +78,40 @@ class PhotoFramePygame:
     # Frame display (called from compositor thread)
     # -----------------------------------------------------------------
     def set_frame(self, bgr: np.ndarray) -> None:
-        """Receive a BGR numpy frame and prepare it for display."""
-        if bgr is None or not isinstance(bgr, np.ndarray):
-            return
+        """Just store the raw array. Do not do SDL/CV2 work here."""
+        if bgr is None: return
+        with self._frame_lock:
+            self._pending_bgr = bgr # Store the 'raw' numpy array
+
+    def render_pending_frame(self) -> bool:
+        """Do the heavy lifting on the Main Thread."""
+        with self._frame_lock:
+            bgr = getattr(self, "_pending_bgr", None)
+            self._pending_bgr = None # Reset so we don't process it twice
+
+        if bgr is None:
+            return False
 
         try:
-            # BGR -> RGB
+            # 1. Convert BGR to RGB (Main Thread is safer for CV2/Pygame)
             rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-            h, w = rgb.shape[:2]
-
-            # Create pygame surface from numpy array
-            # pygame expects (width, height) shaped data via surfarray
+            
+            # 2. Create Surface
             surface = pygame.surfarray.make_surface(
                 np.ascontiguousarray(rgb.swapaxes(0, 1))
             )
 
-            # Scale to screen if needed
-            if w != self.width or h != self.height:
-                surface = pygame.transform.smoothscale(
-                    surface, (self.width, self.height)
-                )
+            # 3. Scale if necessary
+            if surface.get_width() != self.width or surface.get_height() != self.height:
+                surface = pygame.transform.smoothscale(surface, (self.width, self.height))
 
-            with self._frame_lock:
-                self._latest_surface = surface
-
-        except Exception:
-            logging.exception("PhotoFramePygame.set_frame failed")
-
-    def render_pending_frame(self) -> bool:
-        """Blit the latest frame to screen. Call from the main thread."""
-        with self._frame_lock:
-            surface = self._latest_surface
-            self._latest_surface = None
-
-        if surface is None:
+            # 4. Draw
+            self.screen.blit(surface, (0, 0))
+            pygame.display.flip()
+            return True
+        except Exception as e:
+            logging.error(f"Pygame Render Error: {e}")
             return False
-
-        self.screen.blit(surface, (0, 0))
-        pygame.display.flip()
-        return True
-
     # -----------------------------------------------------------------
     # Event handling (call from main thread)
     # -----------------------------------------------------------------
