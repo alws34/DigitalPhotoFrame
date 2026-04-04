@@ -5,28 +5,32 @@
 ```
 +-------------- Raspberry Pi Host ---------------+
 |                                                 |
-|  +---- Docker Container -----+                  |
-|  |  Python Backend            |   port 5002     |
-|  |  (Flask + compositor)      |<----------------|
-|  |  React Frontend            |                  |
-|  |  (built, served static)    |                  |
-|  +----------------------------+                  |
-|                                                  |
-|  +---- Host Services --------+                   |
-|  |  cage (Wayland kiosk)      |                  |
-|  |  +- Chromium --kiosk       |---> Display      |
-|  |     localhost:5002/frame   |                   |
-|  +----------------------------+                   |
-|                                                   |
-|  /dev/dri -----------> GPU access                 |
-|  /sys/class/backlight -> Brightness control       |
-|  /dev/input/* --------> Touch (via cage)          |
+|  +---- Docker Container ----------------------+ |
+|  |  Python Backend (Flask + compositor)        | |
+|  |  React Frontend (built, served static)      | |
+|  |  pygame / SDL2 (fullscreen display)         | |
+|  |                                             | |
+|  |  Renders frames directly to display         | |
+|  |  via DRM/KMS or Wayland                     | |
+|  |  Serves admin UI on port 5002               | |
+|  |  Serves MJPEG stream at /api/stream         | |
+|  +------+--------------------------------------+ |
+|         |                                        |
+|  /dev/dri -----------> GPU / DRM-KMS             |
+|  /dev/input ---------> Touch / mouse             |
+|  /sys/class/backlight -> Brightness control      |
+|  Wayland socket -----> Wayland display           |
 +---------------------------------------------------+
 ```
 
-The Docker container runs the Python backend in headless mode and serves the React frontend. On the Pi, a lightweight Wayland compositor (cage) runs Chromium in kiosk mode, pointing at the container's `/frame` page.
+The Docker container runs the full stack: Python backend, React admin UI, and a pygame/SDL2 display client. On the Pi, SDL2 renders frames fullscreen directly to the display via DRM/KMS or Wayland — no browser, no kiosk, no encoding overhead.
 
-**Why this split?** The app code (backend + frontend) changes frequently and ships via Docker. The kiosk browser is a one-time host setup that rarely needs updating. Touch input, GPU, and display are handled natively by the host.
+**Display modes** (controlled by `app.py`):
+- `--display pygame` — SDL2 fullscreen; default in Docker, ~10 MB overhead
+- `--display qt` — PySide6/Qt fullscreen; legacy, not included in the Docker image
+- `--headless` — backend + API only, no display window
+
+The MJPEG stream at `/api/stream` is still available for remote viewing from a phone, browser, or a second screen.
 
 ## Quick Start (Mac / Development)
 
@@ -42,9 +46,10 @@ cd DigitalPhotoFrame
 docker compose up --build
 ```
 
+On Mac, pygame runs with a dummy display inside the container (no window appears). Use the admin UI and stream endpoint to interact with the app.
+
 Open in your browser:
 - **Admin UI:** http://localhost:5002 (login required)
-- **Frame View:** http://localhost:5002/frame (what the kiosk displays)
 - **MJPEG Stream:** http://localhost:5002/api/stream
 
 ### Stop
@@ -59,7 +64,7 @@ docker compose down
 2. Rebuild: `docker compose up --build`
 3. The multi-stage build recompiles the frontend and restarts the backend
 
-For faster frontend iteration during development, run Vite dev server separately:
+For faster frontend iteration, run the Vite dev server separately:
 ```bash
 cd frontend && npm install && npm run dev
 # Frontend at http://localhost:5173, proxied API calls go to the container
@@ -69,7 +74,7 @@ cd frontend && npm install && npm run dev
 
 ### Prerequisites
 
-- Raspberry Pi 4 or 5 (2GB+ RAM recommended)
+- Raspberry Pi 4 or 5 (2 GB+ RAM recommended)
 - Raspberry Pi OS Bookworm (64-bit recommended)
 - Display connected (official Pi display, HDMI, or any other)
 - Network connection (Wi-Fi or Ethernet)
@@ -83,49 +88,62 @@ sudo bash install_docker_kiosk.sh
 sudo reboot
 ```
 
-After reboot, the photo frame starts automatically.
+After reboot, the container starts automatically and renders the photo frame directly to the display.
 
 ### What the installer does
 
 1. **Installs Docker** and docker compose plugin
-2. **Installs cage** (minimal Wayland compositor) and Chromium
-3. **Sets up backlight permissions** (udev rules for brightness control)
-4. **Builds the Docker container** with Pi device access (GPU, backlight)
-5. **Creates a systemd service** (`photoframe-kiosk`) for the kiosk browser
-6. **Creates helper scripts** for day-to-day management
+2. **Sets up device permissions** (udev rules for `/dev/dri`, `/dev/input`, backlight)
+3. **Builds the Docker container** using `docker-compose.pi.yml` overlay for device access
+4. **Creates a systemd service** (`photoframe`) that starts the container on boot
+
+No cage or Chromium is installed by default. The container renders directly to the display via SDL2.
+
+### Pi compose command
+
+The Pi overlay adds GPU, input, backlight, and Wayland socket access:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.pi.yml up -d
+```
+
+SDL2 auto-detects the best driver (`wayland` → `kmsdrm` → `x11`). Override if needed:
+
+```bash
+# Headless Pi (no desktop, DRM direct):
+SDL_VIDEODRIVER=kmsdrm docker compose -f docker-compose.yml -f docker-compose.pi.yml up -d
+
+# Pi OS with Wayland desktop:
+SDL_VIDEODRIVER=wayland docker compose -f docker-compose.yml -f docker-compose.pi.yml up -d
+```
 
 ### Updating
-
-Pull the latest code and rebuild:
 
 ```bash
 ./update.sh
 ```
 
-This does: `git pull` + `docker compose up --build` + restart kiosk.
+This does: `git pull` + `docker compose up --build`.
 
 ### Managing services
 
 ```bash
-# View backend logs
+# View logs
 ./logs.sh
+# or
+docker compose logs -f photoframe
 
-# Restart everything (backend + kiosk)
+# Restart container
 ./restart.sh
-
-# Docker container only
+# or
 docker compose restart
 
-# Kiosk browser only
-sudo systemctl restart photoframe-kiosk
-
-# Stop everything
+# Stop
 docker compose down
-sudo systemctl stop photoframe-kiosk
 
 # Check status
 docker compose ps
-sudo systemctl status photoframe-kiosk
+sudo systemctl status photoframe
 ```
 
 ## Configuration
@@ -133,7 +151,7 @@ sudo systemctl status photoframe-kiosk
 Settings live in `photoframe_settings.json` (mounted into the container as a volume).
 
 Edit via:
-1. **Web UI:** Navigate to http://<pi-ip>:5002/settings (login required)
+1. **Web UI:** Navigate to http://\<pi-ip\>:5002/settings (login required)
 2. **Direct edit:** Modify the JSON file, then `docker compose restart`
 
 ### Important settings for Docker
@@ -146,7 +164,7 @@ Edit via:
 
 ### Images
 
-Place photos in the `Images/` directory. It's mounted as a Docker volume, so files persist across container rebuilds.
+Place photos in the `Images/` directory. It is mounted as a Docker volume, so files persist across container rebuilds.
 
 ```bash
 # Copy photos
@@ -156,6 +174,16 @@ cp /path/to/photos/*.jpg Images/
 ```
 
 Supported formats: JPG, PNG, GIF, BMP, WebP, HEIC/HEIF, MOV, MP4
+
+### Remote viewing
+
+The MJPEG stream at `/api/stream` works from any device on the same network:
+
+```
+http://<pi-ip>:5002/api/stream
+```
+
+If you want a second screen showing the stream via Chromium kiosk, set that up separately on the host — it is no longer part of the default install.
 
 ### MQTT (Home Assistant)
 
@@ -172,14 +200,22 @@ Or set `mqtt.host` to your broker's IP address (not `localhost`).
 
 | File | Purpose |
 |------|---------|
-| `Dockerfile` | Multi-stage build (Node frontend + Python backend) |
+| `Dockerfile` | Multi-stage build (Node frontend + Python 3.11-slim + SDL2 runtime) |
 | `docker-compose.yml` | Base compose config (works on Mac and Pi) |
-| `docker-compose.pi.yml` | Pi overlay (GPU, backlight device access) |
-| `requirements-docker.txt` | Python deps without PySide6/Qt (lighter) |
-| `install_docker_kiosk.sh` | One-command Pi setup (Docker + kiosk browser) |
+| `docker-compose.pi.yml` | Pi overlay: GPU, input, backlight, Wayland socket |
+| `requirements-docker.txt` | Python deps without PySide6/Qt (uses opencv-headless + pygame) |
+| `install_docker_kiosk.sh` | One-command Pi setup (Docker + device permissions + systemd service) |
 | `update.sh` | Pull + rebuild + restart |
-| `restart.sh` | Restart backend + kiosk |
-| `logs.sh` | Tail backend logs |
+| `restart.sh` | Restart container |
+| `logs.sh` | Tail container logs |
+
+## Resource Usage
+
+Typical on Raspberry Pi 4 (2 GB):
+- **Docker container (Python + pygame):** ~150-250 MB RAM
+- **No browser overhead** — pygame renders directly, no Chromium running
+- **CPU:** 5-15% idle, 30-50% during transitions
+- **Disk:** ~500 MB for Docker image (vs ~2.5 GB with PySide6)
 
 ## Troubleshooting
 
@@ -191,26 +227,49 @@ docker compose logs photoframe
 
 Common issues:
 - Missing `photoframe_settings.json` — copy from example: `cp photoframe_settings.example.json photoframe_settings.json`
-- Port 5001 in use — change the port mapping in `docker-compose.yml`
+- Port 5002 in use — change `PHOTOFRAME_PORT` in `.env` or override in `docker-compose.yml`
 
-### Kiosk shows black screen
+### No display / black screen on Pi
 
-The backend might not be ready. The kiosk service waits up to 60s, but if the first build is slow:
+The container cannot find a display. Check device access:
 
 ```bash
-# Check if backend is up
-curl http://localhost:5002/
+# Confirm /dev/dri exists
+ls /dev/dri/
 
-# Check container status
-docker compose ps
+# Make sure you're using the Pi overlay
+docker compose -f docker-compose.yml -f docker-compose.pi.yml up -d
 
-# Restart kiosk after backend is ready
-sudo systemctl restart photoframe-kiosk
+# Force a specific SDL video driver
+SDL_VIDEODRIVER=kmsdrm docker compose -f docker-compose.yml -f docker-compose.pi.yml up -d
 ```
+
+Also check logs for SDL errors:
+```bash
+docker compose logs photoframe | grep -i sdl
+```
+
+### SDL_VIDEODRIVER issues
+
+If pygame fails to open a display, try each driver in order:
+
+```bash
+# Direct DRM (no desktop environment needed):
+SDL_VIDEODRIVER=kmsdrm
+
+# Wayland (Pi OS Bookworm desktop):
+SDL_VIDEODRIVER=wayland
+
+# X11 (if running under an X session):
+SDL_VIDEODRIVER=x11
+```
+
+Set the chosen value as an environment variable in `docker-compose.pi.yml`.
 
 ### No touch input
 
-Touch is handled by cage on the host. Check your display:
+Verify `/dev/input` is passed through (handled by `docker-compose.pi.yml`) and check available input devices:
+
 ```bash
 libinput list-devices
 ```
@@ -218,6 +277,7 @@ libinput list-devices
 ### Brightness control not working
 
 The container needs `/sys/class/backlight` mounted. Verify:
+
 ```bash
 # Check backlight device exists
 ls /sys/class/backlight/
@@ -226,7 +286,7 @@ ls /sys/class/backlight/
 ls -la /sys/class/backlight/*/brightness
 
 # Ensure Pi user is in video group
-groups pi
+groups $USER
 ```
 
 ### Rebuilding from scratch
@@ -234,7 +294,6 @@ groups pi
 ```bash
 docker compose down -v          # Remove container + volumes
 docker compose up --build       # Full rebuild
-sudo systemctl restart photoframe-kiosk
 ```
 
 ## Migrating from bare-metal install
@@ -245,11 +304,3 @@ If you previously ran the app using `install_photoframe_service.sh` (systemd + v
 2. Your `Images/` directory and `photoframe_settings.json` are preserved (Docker mounts them)
 3. Run the Docker installer: `sudo bash install_docker_kiosk.sh && sudo reboot`
 4. The old `env/` venv directory can be deleted after verifying Docker works
-
-## Resource Usage
-
-Typical on Raspberry Pi 4 (2GB):
-- **Docker container:** ~150-250 MB RAM (Python backend + compositor)
-- **Chromium kiosk:** ~100-150 MB RAM
-- **CPU:** 5-15% idle, 30-50% during transitions
-- **Disk:** ~500 MB for Docker image (vs ~2.5 GB with PySide6)

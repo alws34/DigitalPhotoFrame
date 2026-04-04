@@ -476,6 +476,8 @@ class AutoUpdater:
     # Repo detection / Git plumbing
     # ------------------------------------------------------------------
     def _find_repo_root(self) -> Optional[str]:
+        if not shutil.which("git"):
+            return None
         here = os.path.abspath(os.path.dirname(__file__))
         env = self._git_env()
         ok, out = self._run_git(

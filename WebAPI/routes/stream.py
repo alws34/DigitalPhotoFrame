@@ -5,7 +5,7 @@ import cv2
 
 stream_bp = Blueprint('stream_bp', __name__, url_prefix='/api/stream')
 
-@stream_bp.route("/", methods=["GET"])
+@stream_bp.route("/", methods=["GET"], strict_slashes=False)
 def stream():
     backend = current_app.config['backend']
     default_w, default_h = 1920, 1080
