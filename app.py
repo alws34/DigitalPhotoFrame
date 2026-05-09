@@ -13,7 +13,6 @@ Modes:
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import signal
 import sys
@@ -22,6 +21,8 @@ import time
 from typing import Any, Dict, Optional
 
 from Utilities.autoupdate_utils import AutoUpdater
+from Utilities.config_store import load_settings as _load_settings_from_db
+from Utilities import config_events
 from Utilities.MQTT.mqtt_bridge import MqttBridge
 from WebAPI.API import Backend
 
@@ -32,18 +33,6 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 def _abs_path(p: str) -> str:
     return p if os.path.isabs(p) else os.path.abspath(os.path.join(BASE_DIR, p))
-
-
-def _load_settings(path: str) -> Dict[str, Any]:
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return {}
-    except Exception as e:
-        print(
-            f"[PhotoFrame] Failed to load settings '{path}': {e}", file=sys.stderr)
-        return {}
 
 
 # ------------------------------ runners ------------------------------
@@ -332,7 +321,8 @@ def main() -> None:
     args = p.parse_args()
 
     settings_path = _abs_path(args.settings)
-    settings = _load_settings(settings_path)
+    settings = _load_settings_from_db(json_path=settings_path)
+    config_events.start_watcher()
 
     if args.headless:
         _run_headless(settings, settings_path, args.width, args.height)
