@@ -3,11 +3,6 @@ import json
 import os
 from contextlib import contextmanager
 
-DB_PATH = os.environ.get(
-    "PF_DB_PATH",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "database.db")
-)
-
 @contextmanager
 def get_db():
     path = os.environ.get(
@@ -152,9 +147,9 @@ def migrate_settings_if_needed(json_path: str) -> None:
                 "INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES ('main', ?, ?)",
                 (blob, _time.time())
             )
-        print(f"[database] Migrated settings from {json_path}")
+        print(f"[Database] Migrated settings from {json_path}")
     except Exception as e:
-        print(f"[database] Settings migration failed: {e}")
+        print(f"[Database] Settings migration failed: {e}")
 
 # ----- Users API -----
 
