@@ -52,9 +52,16 @@ class AutoUpdater:
         self._min_restart_interval = int(min_restart_interval_sec)
         self._last_restart_ts = 0
 
+        from Utilities.config_events import on_settings_changed
+        on_settings_changed(self._on_settings_changed)
+
     # ------------------------------------------------------------------
     # Public
     # ------------------------------------------------------------------
+    def _on_settings_changed(self, new_data: dict) -> None:
+        au = new_data.get("autoupdate", {})
+        self._auto_restart_on_update = bool(au.get("enabled", True))
+
     def start(self) -> None:
         if self._thread is None:
             self._thread = threading.Thread(target=self._worker, daemon=True)

@@ -104,6 +104,23 @@ class MqttBridge:
         self.last_disconnect_time = 0
         self.WATCHDOG_TIMEOUT = 60  # seconds
 
+        from Utilities.config_events import on_settings_changed
+        on_settings_changed(self._on_settings_changed)
+
+    def _on_settings_changed(self, new_data: dict) -> None:
+        new_cfg = (new_data.get("mqtt") or {}).copy()
+        if (new_cfg.get("host") != self.cfg.get("host") or
+                new_cfg.get("port") != self.cfg.get("port")):
+            self.cfg = new_cfg
+            self.settings = new_data
+            self._log("[MqttBridge] Settings changed — reconnecting", logging.INFO)
+            try:
+                self.disconnect()
+            except Exception:
+                pass
+        else:
+            self.cfg = new_cfg
+            self.settings = new_data
 
     def start(self):
         if not self.enabled:
