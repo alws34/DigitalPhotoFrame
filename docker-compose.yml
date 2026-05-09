@@ -3,15 +3,24 @@ services:
     build: .
     container_name: photoframe
     restart: unless-stopped
+    network_mode: host  # Highly recommended for local GUI apps
     ports:
       - "${PHOTOFRAME_PORT:-5002}:${PHOTOFRAME_PORT:-5002}"
     volumes:
       - ./Images:/app/Images
       - ./photoframe_settings.json:/app/photoframe_settings.json
       - photoframe-data:/data
+      - /tmp/.X11-unix:/tmp/.X11-unix        # X11 Socket
+      - /run/user/1000:/run/user/1000        # Wayland Socket
+      - /dev/shm:/dev/shm                    # Prevents memory crashes
     environment:
       - PHOTOFRAME_SECRET_KEY=${PHOTOFRAME_SECRET_KEY:-change-me-in-production}
-      - PF_DB_PATH=/data/photoframe.db
-
+      - DISPLAY=:0
+      - WAYLAND_DISPLAY=wayland-0
+      - XDG_RUNTIME_DIR=/run/user/1000
+      - SDL_VIDEODRIVER=x11                  # Uses XWayland (most stable for Pi Desktop)
+    devices:
+      - /dev/dri:/dev/dri                    # GPU Acceleration
+    privileged: true                         # Usually required for GPU access on Pi
 volumes:
   photoframe-data:

@@ -1,0 +1,106 @@
+{
+  "system": {
+    "service_name": "PhotoFrame_Desktop_App",
+    "image_dir": "Images",
+    "log_file_path": "./FrameServer/PhotoFrame.log",
+    "image_quality_encoding": 100
+  },
+  "playback": {
+    "animation_duration": 10,
+    "delay_between_images": 30,
+    "animation_fps": 30
+  },
+  "ui": {
+    "font_name": "arial.ttf",
+    "date_format": "dddd, MMM d, yyyy",
+    "time_font_size": 80,
+    "date_font_size": 50,
+    "spacing_between": 50,
+    "margins": {
+      "left": 50,
+      "bottom": 30,
+      "right": 50
+    },
+    "text_shadow": {
+      "blur": 16,
+      "offset_x": 2,
+      "offset_y": 2,
+      "alpha": 230
+    }
+  },
+  "effects": {
+    "allow_translucent_background": true,
+    "background_opacity": 0.4,
+    "background_blur_radius": 61,
+    "shadow_opacity": 0.85,
+    "shadow_blur_radius": 71
+  },
+  "open_meteo": {
+    "latitude": "32.0853",
+    "longitude": "34.7818",
+    "units": "metric",
+    "timezone": "auto",
+    "temperature_unit": "celsius",
+    "windspeed_unit": "kmh",
+    "wind_speed_unit": "kmh",
+    "precipitation_unit": "mm",
+    "timeformat": "iso8601",
+    "cache_ttl_minutes": 60
+  },
+  "backend_configs": {
+    "host": "0.0.0.0",
+    "server_port": 5002,
+    "stream_width": 1920,
+    "stream_height": 1080,
+    "stream_fps": 30,
+    "supersecretkey": "YOUR_SUPERSECRET_KEY"
+  },
+  "stats": {
+    "show": false,
+    "font_size": 20,
+    "font_color": "yellow"
+  },
+  "about": {
+    "text": "Digital Photo Frame by alws34. This app streams images over HTTP (MJPEG), overlays time/date/weather, and runs on Raspberry Pi or desktop. Use the Settings dialog to connect Wi-Fi, tweak screen options, and manage the service.",
+    "image_path": "",
+    "version": "1.0.2"
+  },
+  "screen": {
+    "orientation": 270,
+    "brightness": 50,
+    "schedule_enabled": true,
+    "off_hour": 0,
+    "on_hour": 7,
+    "schedules": [
+      {
+        "enabled": true,
+        "off_hour": 0,
+        "on_hour": 7,
+        "days": [0, 1, 2, 3, 4, 5, 6]
+      }
+    ]
+  },
+  "mqtt": {
+    "enabled": true,
+    "host": "192.168.0.185",
+    "port": 1883,
+    "username": "mqtt2",
+    "password": "320479Aa!",
+    "tls": false,
+    "client_id": "photoframe-livingroom",
+    "base_topic": "photoframe",
+    "discovery": true,
+    "discovery_prefix": "homeassistant",
+    "interval_seconds": 1,
+    "retain_config": true
+  },
+  "autoupdate": {
+    "enabled": true,
+    "hour": 4,
+    "minute": 0,
+    "repo_path": "",
+    "remote": "origin",
+    "branch": "None",
+    "shallow_ok": true
+  }
+}
