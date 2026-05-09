@@ -23,14 +23,17 @@ from datetime import datetime, timezone
 from PIL import Image
 from pillow_heif import register_heif_opener
 
+import sys as _sys, os as _os
+_sys.path.insert(0, _os.path.abspath(_os.path.join(_os.path.dirname(__file__), "..")))
+from Utilities.config_store import load_settings as _load_settings
+from Utilities.config_events import on_settings_changed
+
 from EffectHandler import EffectHandler
 from image_handler import Image_Utils
 from iFrame import iFrame
 from overlay import OverlayRenderer
-from Settings import SettingsHandler
 from Utilities.observer import ImagesObserver
 from Utilities.Weather.weather_adapter import build_weather_client
-from WebAPI.API import Backend
 
 # endregion imports
 
@@ -80,8 +83,8 @@ class PhotoFrameServer(iFrame):
         except Exception as e:
             self.logger.exception("Failed to set OpenCV optimizations: %s", e)
 
-        self.settings_handler_path = os.path.abspath(settings_path)
-        self.settings_handler = SettingsHandler(SETTINGS_PATH, logging)
+        self._settings: dict = _load_settings()
+        self._settings_lock = threading.Lock()
 
         if not self.set_images_dir(images_dir=images_dir):
             logging.error("Failed to set images directory. Exiting.")
@@ -91,9 +94,9 @@ class PhotoFrameServer(iFrame):
         self.screen_height = height
 
         # --- FPS from 'playback' or root ---
-        playback = self.settings_handler.get("playback", {})
-        self._target_fps = int(playback.get("animation_fps") or self.settings_handler.get("animation_fps") or 30)
-        self._transition_fps = int(playback.get("transition_fps") or self.settings_handler.get("transition_fps") or 30)
+        playback = self._settings.get("playback", {})
+        self._target_fps = int(playback.get("animation_fps") or self._settings.get("animation_fps") or 30)
+        self._transition_fps = int(playback.get("transition_fps") or self._settings.get("transition_fps") or 30)
         self._transition_frame_interval = 1.0 / max(1.0, float(self._transition_fps))
 
         self.current_image_idx = 0
@@ -104,12 +107,12 @@ class PhotoFrameServer(iFrame):
         self.is_running = True
 
         self.EffectHandler = EffectHandler()
-        self.image_handler = Image_Utils(settings=self.settings_handler)
+        self.image_handler = Image_Utils(settings=self._settings)
         self.effects = self.EffectHandler.get_effects()
         self.update_images_list()
 
         # --- Overlay renderer (bakes date/time/weather into every frame) ---
-        ui_cfg = self.settings_handler.get("ui", {}) or {}
+        ui_cfg = self._settings.get("ui", {}) or {}
         font_path = os.path.join(
             os.path.dirname(os.path.dirname(__file__)),
             ui_cfg.get("font_name", "arial.ttf"),
@@ -121,7 +124,7 @@ class PhotoFrameServer(iFrame):
                 font_path=font_path,
                 time_font_size=int(ui_cfg.get("time_font_size", 80)),
                 date_font_size=int(ui_cfg.get("date_font_size", 60)),
-                stats_font_size=int((self.settings_handler.get("stats", {}) or {}).get("font_size", 20)),
+                stats_font_size=int((self._settings.get("stats", {}) or {}).get("font_size", 20)),
                 desired_size=(self.screen_width, self.screen_height),
             )
         except Exception:
@@ -132,7 +135,7 @@ class PhotoFrameServer(iFrame):
 
         # Weather client and loop (all modes)
         self._weather_stop = threading.Event()
-        self.weather_client = build_weather_client(self, self.settings_handler)
+        self.weather_client = build_weather_client(self, self._settings)
         self._weather_thread = None
         self._start_local_weather_loop()
 
@@ -169,6 +172,12 @@ class PhotoFrameServer(iFrame):
         self._settings_updated_flag = False
         self._settings_reload_lock = threading.Lock()
 
+        # Compatibility shim so app.py can still pass srv.settings_handler to Backend()
+        # (removed in Task 6)
+        self.settings_handler = self._settings
+
+        on_settings_changed(self._on_settings_changed)
+
     def _blank_frame(self):
         # neutral gray, screen-sized
         return np.full((self.screen_height, self.screen_width, 3), 32, dtype=np.uint8)
@@ -176,11 +185,20 @@ class PhotoFrameServer(iFrame):
     def _reload_runtime_settings(self, reload_from_disk: bool = True) -> None:
         with self._settings_reload_lock:
             if reload_from_disk:
-                self.settings_handler.reload()
-            playback = self.settings_handler.get("playback", {}) or {}
-            self._target_fps = int(playback.get("animation_fps") or self.settings_handler.get("animation_fps") or 30)
-            self._transition_fps = int(playback.get("transition_fps") or self.settings_handler.get("transition_fps") or 30)
+                self._settings = _load_settings()
+            playback = self._settings.get("playback", {}) or {}
+            self._target_fps = int(playback.get("animation_fps") or self._settings.get("animation_fps") or 30)
+            self._transition_fps = int(playback.get("transition_fps") or self._settings.get("transition_fps") or 30)
             self._transition_frame_interval = 1.0 / max(1.0, float(self._transition_fps))
+
+    def _on_settings_changed(self, new_data: dict) -> None:
+        with self._settings_lock:
+            self._settings = new_data
+        playback = new_data.get("playback", {})
+        self._target_fps = int(playback.get("animation_fps", 30))
+        self._transition_fps = int(playback.get("transition_fps", self._target_fps))
+        self._transition_frame_interval = 1.0 / max(1.0, float(self._transition_fps))
+        self.logger.info("[PhotoFrameServer] Settings hot-reloaded")
 
     def apply_settings_now(self) -> bool:
         try:
@@ -213,7 +231,7 @@ class PhotoFrameServer(iFrame):
             time.sleep(1)
 
     def _start_local_weather_loop(self) -> None:
-        poll_sec = int(self.settings_handler.get("weather_poll_seconds", 900))  # default 15 min
+        poll_sec = int(self._settings.get("weather_poll_seconds", 900))  # default 15 min
 
         def _weather_loop():
             while not self._weather_stop.is_set():
@@ -287,7 +305,7 @@ class PhotoFrameServer(iFrame):
         # Bake overlay (date/time/weather) into the frame
         if self._overlay:
             try:
-                ui_cfg = self.settings_handler.get("ui", {}) or {}
+                ui_cfg = self._settings.get("ui", {}) or {}
                 show_weather = ui_cfg.get("show_weather", False)
                 contrast_text = ui_cfg.get("contrast_text", False)
                 margins = ui_cfg.get("margins", {}) or {}
@@ -434,8 +452,8 @@ class PhotoFrameServer(iFrame):
                 self.IMAGE_DIR = os.path.join(base_root, images_dir)
         else:
             # --- Search 'system' -> 'image_dir', else root ---
-            sys_cfg = self.settings_handler.get("system", {})
-            cfg = sys_cfg.get("image_dir") or self.settings_handler.get("images_dir") or "Images"
+            sys_cfg = self._settings.get("system", {})
+            cfg = sys_cfg.get("image_dir") or self._settings.get("images_dir") or "Images"
             
             if os.path.isabs(cfg):
                 self.IMAGE_DIR = cfg
@@ -689,9 +707,9 @@ class PhotoFrameServer(iFrame):
         self._send_frame(self.current_image)
 
         while self.is_running:
-            playback = self.settings_handler.get("playback", {})
-            anim_duration = playback.get("animation_duration") or self.settings_handler.get("animation_duration") or 10
-            delay = playback.get("delay_between_images") or self.settings_handler.get("delay_between_images") or 30
+            playback = self._settings.get("playback", {})
+            anim_duration = playback.get("animation_duration") or self._settings.get("animation_duration") or 10
+            delay = playback.get("delay_between_images") or self._settings.get("delay_between_images") or 30
 
             if anim_duration > 0:
                 # Pass delay as hold_time
@@ -717,7 +735,7 @@ class PhotoFrameServer(iFrame):
             # Render datetime and weather if GUI exists
             if self._gui_frame and hasattr(self._gui_frame, "set_frame"):
                 # We also need to grab the latest contrast_text setting
-                ui_settings = self.settings_handler.get("ui", {})
+                ui_settings = self._settings.get("ui", {})
                 contrast_text = ui_settings.get("contrast_text", False)
                 # Ensure the frame receives the setting properly within its own loop.
                 # However, PhotoFrameServer delegates weather/datetime straight to the OverlayRenderer via Backend stream_test currently, wait where does the main stream apply this? Let's check API.mjpeg_stream.
@@ -782,18 +800,6 @@ class PhotoFrameServer(iFrame):
             logging.exception("GUI stop failed")
 
         logging.info("PhotoFrameServer.stop_services: done.")
-
-    def _start_api(self):
-        try:
-            self.m_api = Backend(
-                frame=self,
-                settings=self.settings_handler,
-                image_dir=self.IMAGE_DIR,
-                settings_path=self.settings_handler_path
-            )
-            self.m_api.start()
-        except Exception:
-            logging.exception("Failed to start Backend API")
 
     # ------------- Metadata (server-owned) -------------
 
