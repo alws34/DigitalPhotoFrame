@@ -74,8 +74,7 @@ def _run_headless(settings: Dict[str, Any], settings_path: str,
     srv = PhotoFrameServer(width=w, height=h, iframe=None,
                            images_dir=images_dir, settings_path=settings_path)
 
-    backend = Backend(frame=srv, settings_handler=srv.settings_handler,
-                      image_dir=images_dir, settings_path=settings_path)
+    backend = Backend(frame=srv, image_dir=images_dir)
     backend.updater = updater
 
     threading.Thread(target=backend.start, daemon=True).start()
@@ -116,8 +115,7 @@ def _run_pygame(settings: Dict[str, Any], settings_path: str) -> None:
                            images_dir=images_dir, settings_path=settings_path)
 
     # Start Flask backend
-    backend = Backend(frame=srv, settings_handler=srv.settings_handler,
-                      image_dir=images_dir, settings_path=settings_path)
+    backend = Backend(frame=srv, image_dir=images_dir)
     threading.Thread(target=backend.start, daemon=True).start()
     srv.m_api = backend
 
@@ -259,8 +257,7 @@ def _run_gui(settings: Dict[str, Any], settings_path: str) -> None:
     srv = PhotoFrameServer(width=sw, height=sh, iframe=view,
                            images_dir=images_dir, settings_path=settings_path)
 
-    backend = Backend(frame=srv, settings_handler=srv.settings_handler,
-                      image_dir=images_dir, settings_path=settings_path)
+    backend = Backend(frame=srv, image_dir=images_dir)
     threading.Thread(target=backend.start, daemon=True).start()
     srv.m_api = backend
 

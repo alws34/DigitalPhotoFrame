@@ -31,16 +31,8 @@ from flask import (
 from numpy import ndarray
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.exceptions import HTTPException
-from pathlib import Path
-import io
-import zipfile
-import platform
-import requests
 from PIL import Image, ImageOps
-import threading
 from flask_cors import CORS
-from numpy import ndarray
-from PIL import Image, ImageOps
 from tqdm import tqdm
 
 from iFrame import iFrame
@@ -70,7 +62,7 @@ except Exception as e:
     has_pillow_heif = False
 
 import logging
-from Settings import SettingsHandler
+from Utilities.config_store import load_settings as _cs_load, save_settings as _cs_save
 
 if platform.system() in ("Linux", "Darwin"):
     try:
@@ -178,7 +170,7 @@ def _assign_path(root, parts, value):
 # ---------------------------------------------------------------------
 
 class Backend:
-    def __init__(self, frame: iFrame, settings_handler: SettingsHandler, image_dir=None, settings_path=None):
+    def __init__(self, frame: iFrame, image_dir=None, settings_path=None):
         base = Path(__file__).parent
         self.app = Flask(
             __name__,
@@ -206,15 +198,15 @@ class Backend:
         self._rl_signup = RateLimiter(limit=5, window_sec=300)
 
         self.Frame = frame
-        self.settings_handler = settings_handler
+        _init_settings = _cs_load()
 
         # --- Resolve IMAGE_DIR using 'system' or root ---
-        sys_cfg = (self.settings_handler.get("system", {}) or {})
+        sys_cfg = (_init_settings.get("system", {}) or {})
         img_cfg = (
             image_dir
             or sys_cfg.get("image_dir")
-            or self.settings_handler.get("image_dir")
-            or self.settings_handler.get("images_dir")
+            or _init_settings.get("image_dir")
+            or _init_settings.get("images_dir")
             or "Images"
         )
         self.IMAGE_DIR = self._resolve_dir(img_cfg)
@@ -225,7 +217,7 @@ class Backend:
 
         # --- Resolve log_file_path using 'system' or root ---
         try:
-            cfg_log_path = sys_cfg.get("log_file_path") or self.settings_handler.get("log_file_path")
+            cfg_log_path = sys_cfg.get("log_file_path") or _init_settings.get("log_file_path")
             
             if cfg_log_path:
                 self.LOG_FILE_PATH = (
@@ -242,7 +234,7 @@ class Backend:
         except Exception as e:
             print(f"[Backend] Could not apply log_file_path override: {e}")
 
-        backend_cfg = self.settings_handler.get("backend_configs") or {}
+        backend_cfg = _init_settings.get("backend_configs") or {}
         self.app.secret_key = env_secret or backend_cfg.get("supersecretkey", "CHANGE_ME")
         self.stream_h = int(backend_cfg.get("stream_height", 1080))
         self.stream_w = int(backend_cfg.get("stream_width", 1920))
@@ -269,7 +261,7 @@ class Backend:
         # --- Encoding quality from 'system' or root ---
         self.encoding_quality = int(
             sys_cfg.get("image_quality_encoding")
-            or self.settings_handler.get("image_quality_encoding")
+            or _init_settings.get("image_quality_encoding")
             or 80
         )
 
@@ -387,7 +379,7 @@ class Backend:
         return True
 
     def _capture_loop(self):
-        idle_fps = float((self.settings_handler.get("backend_configs") or {}).get("idle_fps", 5)) or 5.0
+        idle_fps = float((_cs_load().get("backend_configs") or {}).get("idle_fps", 5)) or 5.0
         interval = 1.0 / max(0.1, idle_fps)
 
         last_jpeg = self._make_heartbeat_jpeg(self.stream_w, self.stream_h)
@@ -466,13 +458,10 @@ class Backend:
     # -----------------------------------------------------------------
 
     def load_settings(self):
-        # Always reload from disk so UI/Frontend read current JSON state.
-        self.settings_handler.reload()
-        data = self.settings_handler.data
-        return data if isinstance(data, dict) else {}
+        return _cs_load()
 
-    def save_settings(self, data):
-        self.settings_handler.save(data)
+    def save_settings(self, data: dict):
+        _cs_save(data)
 
     def allowed_file(self, filename):
         return "." in filename and Path(filename).suffix.lower() in self.ALLOWED_EXTENSIONS
@@ -695,20 +684,6 @@ class Backend:
                 return send_from_directory(self.app.static_folder, path)
             return send_from_directory(self.app.static_folder, 'index.html')
 
-    def notify_settings_changed(self):
-        """Notify any listeners (like the FrameServer) that settings have been updated."""
-        self._settings_updated_flag = True
-        try:
-            apply_now = getattr(self.Frame, "apply_settings_now", None)
-            if callable(apply_now) and apply_now():
-                self._settings_updated_flag = False
-                logging.info("[Backend] Settings applied immediately.")
-                return
-        except Exception:
-            logging.exception("[Backend] Immediate settings apply failed; using deferred reload.")
-
-        logging.info("[Backend] Settings change notified (deferred).")
-
     # -----------------------------------------------------------------
     # HEIC conversion
     # -----------------------------------------------------------------
@@ -801,7 +776,7 @@ class Backend:
 
 
 if __name__ == "__main__":
-    backend = Backend(frame=None, settings={}) 
+    backend = Backend(frame=None)
     backend.start()
     while True:
         time.sleep(10)

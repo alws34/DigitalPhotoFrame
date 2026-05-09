@@ -31,7 +31,6 @@ def update_settings():
             return jsonify({"error": "Invalid payload."}), 400
             
         backend.save_settings(new_settings)
-        backend.notify_settings_changed()
         return jsonify({"message": "Settings updated successfully."})
     except Exception as e:
         return jsonify({"error": f"Failed to update settings: {e}"}), 500
