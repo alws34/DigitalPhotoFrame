@@ -1,18 +1,16 @@
 from __future__ import annotations
 
-import ast
 import io
-import json
-import os
+import json as _json
 from typing import Any, Dict
 
 import qrcode
-from PIL import Image, ImageSequence
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from .viewmodel import SettingsViewModel
-from .widgets import OnScreenKeyboard, Sparkline
 from Utilities.config_store import save_settings as _cs_save
+
+from .viewmodel import SettingsViewModel
+from .widgets import Sparkline
 
 
 class SettingsModel:
@@ -96,13 +94,15 @@ class SettingsDialog(QtWidgets.QDialog):
     """
     Main settings dialog (View).
     Fully compatible with deeply nested JSON settings structures.
+    Dynamic tabs rendered from config_store with hot-reload support.
     """
+    _hot_reload_signal = QtCore.Signal(dict)
+
     def __init__(self, vm: SettingsViewModel, model: SettingsModel, parent=None):
         super().__init__(parent)
         self.vm = vm
         self.model = model
 
-        # 1. Apply robust styling for visibility on all screens
         self._apply_safe_theme()
 
         self.setWindowTitle("Settings")
@@ -111,50 +111,45 @@ class SettingsDialog(QtWidgets.QDialog):
                     min(600, screen.height() - 40))
         self.setModal(True)
 
-        # 2. Setup Layout
         self.setLayout(QtWidgets.QVBoxLayout())
-        tabs = QtWidgets.QTabWidget(self)
-        self.layout().addWidget(tabs)
+        self._tabs = QtWidgets.QTabWidget(self)
+        self.layout().addWidget(self._tabs)
+        self._pending_changes: dict = {}
 
-        # 3. Build Tabs
-        self._stats   = self._build_stats_tab()
-        self._wifi    = self._build_wifi_tab()
-        self._screen  = self._build_screen_tab()
-        self._notif   = self._build_notifications_tab()
-        self._config  = self._build_config_tab()
-        self._about   = self._build_about_tab()
+        # Pinned System tab (stats/QR/graphs)
+        stats_tab = self._build_stats_tab()
+        self._tabs.addTab(self._wrap_scroll(stats_tab), "System")
 
-        # 4. Wrap in ScrollAreas (Prevents UI being cut off on 800x480 screens)
-        tabs.addTab(self._wrap_scroll(self._stats),  "Stats")
-        tabs.addTab(self._wrap_scroll(self._wifi),   "Wi-Fi")
-        tabs.addTab(self._wrap_scroll(self._screen), "Screen")
-        tabs.addTab(self._wrap_scroll(self._notif),  "Notifications")
-        tabs.addTab(self._wrap_scroll(self._config), "Config")
-        tabs.addTab(self._wrap_scroll(self._about),  "About")
+        # Dynamic settings tabs
+        from Utilities.config_store import load_settings
+        current_settings = load_settings()
+        self._build_dynamic_tabs(current_settings)
 
-        # 5. Wire Signals
+        # Save button
+        save_btn = QtWidgets.QPushButton("Save")
+        save_btn.clicked.connect(self._save_settings)
+        self.layout().addWidget(save_btn)
+
+        # Wire stats signals
         vm.statsChanged.connect(self._on_stats_changed)
         vm.qrTextChanged.connect(self._on_qr_changed)
-        vm.networksChanged.connect(self._set_networks)
-        vm.wifiResult.connect(self._wifi_result)
         vm.maintStatusChanged.connect(self._set_maint_status)
-        vm.notificationsChanged.connect(self._fill_notifications)
-        
-        # Graph signals
         vm.cpuPushed.connect(self.cpu_graph.push)
         vm.ramPushed.connect(self.ram_graph.push)
         vm.tempPushed.connect(self.tmp_graph.push)
         vm.cpuPushed.connect(lambda v: self.cpu_val.setText(f"{v:.0f}%"))
-        vm.ramPushed.connect(lambda v: self.ram_val.setText(f"{v:.0f}%"))
+        vm.ramPushed.connect(lambda v: self.ram_val.setText(f"{v:.1f}%"))
         vm.tempPushed.connect(lambda v: self.tmp_val.setText(f"{v:.1f} C"))
 
-        # 6. Initial Data Load
+        # Hot reload via Qt signal (thread-safe)
+        self._hot_reload_signal.connect(self._refresh_from_settings)
+        from Utilities.config_events import on_settings_changed
+        on_settings_changed(self._on_hot_reload)
+
         vm.prime()
         vm.start_local_stats(1000)
-        vm.refresh_notifications()
-        vm.scan_wifi()
         self._set_version_label()
-        
+
     def _wrap_scroll(self, widget: QtWidgets.QWidget) -> QtWidgets.QScrollArea:
         """Helper to make any tab scrollable."""
         sc = QtWidgets.QScrollArea()
@@ -232,21 +227,26 @@ class SettingsDialog(QtWidgets.QDialog):
             pass
 
     # =========================================================================
-    # TAB: STATS
+    # TAB: SYSTEM (stats/QR/graphs)
     # =========================================================================
     def _build_stats_tab(self):
-        w = QtWidgets.QWidget(); lay = QtWidgets.QVBoxLayout(w)
-        
+        w = QtWidgets.QWidget()
+        lay = QtWidgets.QVBoxLayout(w)
+
         # QR and Info Area
-        top = QtWidgets.QWidget(); top_l = QtWidgets.QVBoxLayout(top); top_l.setAlignment(QtCore.Qt.AlignHCenter)
+        top = QtWidgets.QWidget()
+        top_l = QtWidgets.QVBoxLayout(top)
+        top_l.setAlignment(QtCore.Qt.AlignHCenter)
         self.ssid_lbl = QtWidgets.QLabel("Wi-Fi: Loading...")
-        self.url_lbl  = QtWidgets.QLabel("URL: Loading...")
+        self.url_lbl = QtWidgets.QLabel("URL: Loading...")
         self.ssid_lbl.setWordWrap(True)
         self.url_lbl.setWordWrap(True)
-        self.qr_lbl   = QtWidgets.QLabel()
-        self.qr_lbl.setMinimumSize(160,160); self.qr_lbl.setAlignment(QtCore.Qt.AlignCenter)
-        
-        for lbl in (self.ssid_lbl, self.url_lbl): lbl.setAlignment(QtCore.Qt.AlignCenter)
+        self.qr_lbl = QtWidgets.QLabel()
+        self.qr_lbl.setMinimumSize(160, 160)
+        self.qr_lbl.setAlignment(QtCore.Qt.AlignCenter)
+
+        for lbl in (self.ssid_lbl, self.url_lbl):
+            lbl.setAlignment(QtCore.Qt.AlignCenter)
         top_l.addWidget(self.ssid_lbl)
         top_l.addWidget(self.url_lbl)
         top_l.addWidget(self.qr_lbl)
@@ -260,7 +260,8 @@ class SettingsDialog(QtWidgets.QDialog):
         lay.addWidget(top)
 
         # Graphs
-        g = QtWidgets.QWidget(); gl = QtWidgets.QFormLayout(g)
+        g = QtWidgets.QWidget()
+        gl = QtWidgets.QFormLayout(g)
         policy = getattr(QtWidgets.QFormLayout, "WrapAllRows",
                  getattr(QtWidgets.QFormLayout, "WrapLongRows",
                          QtWidgets.QFormLayout.DontWrapRows))
@@ -269,7 +270,8 @@ class SettingsDialog(QtWidgets.QDialog):
 
         def row(w_graph_attr: str, init_text: str) -> QtWidgets.QWidget:
             wrap = QtWidgets.QWidget()
-            hl = QtWidgets.QHBoxLayout(wrap); hl.setContentsMargins(0,0,0,0)
+            hl = QtWidgets.QHBoxLayout(wrap)
+            hl.setContentsMargins(0, 0, 0, 0)
             graph = Sparkline(maxlen=60)
             setattr(self, w_graph_attr, graph)
             val_lbl = QtWidgets.QLabel(init_text)
@@ -280,20 +282,26 @@ class SettingsDialog(QtWidgets.QDialog):
             hl.addWidget(val_lbl, 0)
             return wrap
 
-        self.cpu_graph = Sparkline(maxlen=60); self.ram_graph = Sparkline(maxlen=60); self.tmp_graph = Sparkline(maxlen=60)
+        self.cpu_graph = Sparkline(maxlen=60)
+        self.ram_graph = Sparkline(maxlen=60)
+        self.tmp_graph = Sparkline(maxlen=60)
         gl.addRow("CPU %",  row("cpu_graph", "0%"))
         gl.addRow("RAM %",  row("ram_graph", "0%"))
         gl.addRow("Temp C", row("tmp_graph", "0.0 C"))
         lay.addWidget(g)
 
         # Maintenance Buttons
-        row = QtWidgets.QHBoxLayout()
+        maint_row = QtWidgets.QHBoxLayout()
         self.pull_btn = QtWidgets.QPushButton("Pull updates now", clicked=self.vm.pull_updates)
         self.restart_btn = QtWidgets.QPushButton("Restart service", clicked=self.vm.restart_service)
         self.maint_status = QtWidgets.QLabel("")
         self.maint_status.setWordWrap(True)
-        row.addWidget(self.pull_btn); row.addSpacing(8); row.addWidget(self.restart_btn); row.addSpacing(16); row.addWidget(self.maint_status, 1)
-        lay.addLayout(row)
+        maint_row.addWidget(self.pull_btn)
+        maint_row.addSpacing(8)
+        maint_row.addWidget(self.restart_btn)
+        maint_row.addSpacing(16)
+        maint_row.addWidget(self.maint_status, 1)
+        lay.addLayout(maint_row)
         lay.addStretch(1)
         return w
 
@@ -308,7 +316,7 @@ class SettingsDialog(QtWidgets.QDialog):
         except Exception:
             pass
 
-    @QtCore.Slot(str,str)
+    @QtCore.Slot(str, str)
     def _on_stats_changed(self, ssid: str, url: str):
         self.ssid_lbl.setText(f"Wi-Fi: {ssid}")
         self.url_lbl.setText(f"URL: {url}")
@@ -316,507 +324,125 @@ class SettingsDialog(QtWidgets.QDialog):
     @QtCore.Slot(str)
     def _on_qr_changed(self, text: str):
         img = qrcode.make(text)
-        buf = io.BytesIO(); img.save(buf, format="PNG")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
         qimg = QtGui.QImage.fromData(buf.getvalue(), "PNG")
-        self.qr_lbl.setPixmap(QtGui.QPixmap.fromImage(qimg).scaled(160,160, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation))
+        self.qr_lbl.setPixmap(
+            QtGui.QPixmap.fromImage(qimg).scaled(
+                160, 160, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation
+            )
+        )
 
     @QtCore.Slot(str)
-    def _set_maint_status(self, s: str): self.maint_status.setText(s)
+    def _set_maint_status(self, s: str):
+        self.maint_status.setText(s)
 
     # =========================================================================
-    # TAB: WI-FI
+    # showEvent / resizeEvent
     # =========================================================================
-    def _build_wifi_tab(self):
-        w = QtWidgets.QWidget(); v = QtWidgets.QVBoxLayout(w)
-        
-        row = QtWidgets.QHBoxLayout()
-        row.addWidget(QtWidgets.QLabel("Network:"))
-        self.ssid_cb = QtWidgets.QComboBox(); self.ssid_cb.setEditable(False)
-        row.addWidget(self.ssid_cb, 1)
-        v.addLayout(row)
+    def showEvent(self, e):
+        super().showEvent(e)
 
-        row2 = QtWidgets.QHBoxLayout()
-        row2.addWidget(QtWidgets.QLabel("Password:"))
-        self.pwd = QtWidgets.QLineEdit(); self.pwd.setEchoMode(QtWidgets.QLineEdit.Password)
-        row2.addWidget(self.pwd, 1)
-        self.show_pw = QtWidgets.QCheckBox("Show")
-        self.show_pw.toggled.connect(lambda on: self.pwd.setEchoMode(QtWidgets.QLineEdit.Normal if on else QtWidgets.QLineEdit.Password))
-        row2.addWidget(self.show_pw)
-        v.addLayout(row2)
-
-        row3 = QtWidgets.QHBoxLayout()
-        self.rescan = QtWidgets.QPushButton("Rescan", clicked=self.vm.scan_wifi)
-        self.connect = QtWidgets.QPushButton("Connect", clicked=lambda: self.vm.connect_wifi(self.ssid_cb.currentText().strip(), self.pwd.text()))
-        row3.addWidget(self.rescan); row3.addWidget(self.connect)
-        v.addLayout(row3)
-
-        # On-Screen Keyboard
-        kb = OnScreenKeyboard(); v.addWidget(kb)
-        def on_key(k: str):
-            if k == "Backspace":
-                self.pwd.backspace(); return
-            if k == "Left":
-                self.pwd.cursorBackward(False, 1); return
-            if k == "Right":
-                self.pwd.cursorForward(False, 1); return
-            if k == "Space":
-                self.pwd.insert(" "); return
-            if k in ("Tab","Enter"): return
-            self.pwd.insert(k)
-        kb.keyPressed.connect(on_key)
-        v.addStretch(1)
-        return w
-
-    @QtCore.Slot(list)
-    def _set_networks(self, ssids: list):
-        self.ssid_cb.clear()
-        self.ssid_cb.addItems(ssids)
-
-    @QtCore.Slot(bool,str)
-    def _wifi_result(self, ok: bool, msg: str):
-        self._show_msg("Wi-Fi" if ok else "Connection failed",
-                   msg.strip() or ("OK" if ok else "Unknown error"))
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
 
     # =========================================================================
-    # TAB: SCREEN (Orientation, Brightness, Schedules)
+    # DYNAMIC SETTINGS TABS
     # =========================================================================
-    def _build_screen_tab(self):
-        w = QtWidgets.QWidget(); v = QtWidgets.QVBoxLayout(w); v.setSpacing(10)
-        
-        # Touch-friendly sizing for screen controls
-        w.setStyleSheet("""
-            QCheckBox::indicator { width: 28px; height: 28px; }
-            QRadioButton::indicator { width: 26px; height: 26px; }
-            QPushButton { min-height: 40px; }
-            QToolButton { min-height: 52px; min-width: 64px; padding: 8px 14px; }
-            QComboBox, QLineEdit { min-height: 36px; }
-            QLabel.valueLabel { font-weight: bold; }
-        """)
+    def _build_dynamic_tabs(self, settings: dict) -> None:
+        SKIP = {"about"}
+        for key, section in settings.items():
+            if key in SKIP or not isinstance(section, dict):
+                continue
+            tab_label = key.replace("_", " ").title()
+            widget = self._build_section_widget(section, parent_key=key)
+            self._tabs.addTab(self._wrap_scroll(widget), tab_label)
 
-        # Access "screen" from the root JSON if present
-        scr = self.model.ensure_screen_struct()
+    def _build_section_widget(self, section: dict, parent_key: str) -> QtWidgets.QWidget:
+        widget = QtWidgets.QWidget()
+        form = QtWidgets.QFormLayout(widget)
+        form.setRowWrapPolicy(QtWidgets.QFormLayout.WrapLongRows)
+        for key, value in section.items():
+            label = key.replace("_", " ").title()
+            input_widget = self._make_input_widget(key, value, parent_key)
+            if input_widget:
+                form.addRow(label, input_widget)
+        return widget
 
-        # --- Orientation ---
-        box = QtWidgets.QGroupBox("Orientation")
-        gl = QtWidgets.QGridLayout(box)
-        self.orient = QtWidgets.QButtonGroup(self)
-        options = [("Normal","normal"),("Left (90)","90"),("Inverted (180)","180"),("Right (270)","270")]
-        
-        # Safe access to orientation (handles int 270 vs str "270")
-        current_orient = str(scr.get("orientation", "normal"))
-        
-        for i,(label,val) in enumerate(options):
-            rb = QtWidgets.QRadioButton(label)
-            self.orient.addButton(rb)
-            rb.setProperty("val", val)
-            if current_orient == val:
-                rb.setChecked(True)
-            gl.addWidget(rb, 0, i)
-        apply_btn = QtWidgets.QPushButton("Apply Orientation",
-                                        clicked=lambda: self.vm.apply_orientation(self._current_orientation()))
-        gl.addWidget(apply_btn, 1, 0, 1, len(options))
-        v.addWidget(box)
+    def _make_input_widget(self, key: str, value, parent_key: str) -> QtWidgets.QWidget | None:
+        def on_bool(state, k=key, pk=parent_key):
+            self._pending_changes.setdefault(pk, {})[k] = bool(state)
 
-        # --- Brightness ---
-        bgrp = QtWidgets.QGroupBox("Brightness")
-        bl = QtWidgets.QHBoxLayout(bgrp); bl.setContentsMargins(12, 8, 12, 8); bl.setSpacing(12)
-        
-        self.b_minus = QtWidgets.QToolButton(); self.b_minus.setText("-")
-        self.b_minus.setAutoRepeat(True); self.b_minus.setAutoRepeatDelay(300); self.b_minus.setAutoRepeatInterval(120)
-        
-        self.b_plus = QtWidgets.QToolButton(); self.b_plus.setText("+")
-        self.b_plus.setAutoRepeat(True); self.b_plus.setAutoRepeatDelay(300); self.b_plus.setAutoRepeatInterval(120)
-        
-        btn_font = QtGui.QFont(self.font().family(), 30, QtGui.QFont.Bold) 
-        self.b_minus.setFont(btn_font); self.b_plus.setFont(btn_font)
+        def on_int(val, k=key, pk=parent_key):
+            self._pending_changes.setdefault(pk, {})[k] = int(val)
 
-        self.b_val = QtWidgets.QLabel(f"{int(scr.get('brightness', 100))}%")
-        f = self.b_val.font(); f.setPointSize(max(35, f.pointSize() + 2)); f.setBold(True)
-        self.b_val.setFont(f); self.b_val.setAlignment(QtCore.Qt.AlignCenter); self.b_val.setMinimumWidth(72)
+        def on_float(val, k=key, pk=parent_key):
+            self._pending_changes.setdefault(pk, {})[k] = float(val)
 
-        bl.addStretch(1); bl.addWidget(self.b_minus, 0); bl.addWidget(self.b_val, 0); bl.addWidget(self.b_plus, 0); bl.addStretch(1)
-        v.addWidget(bgrp)
+        def on_str(text, k=key, pk=parent_key):
+            self._pending_changes.setdefault(pk, {})[k] = text
 
-        self._debounce = QtCore.QTimer(self); self._debounce.setSingleShot(True)
-        self._debounce.timeout.connect(self._apply_brightness_debounced)
-        self.b_minus.clicked.connect(lambda: self._brightness_step(-10))
-        self.b_plus.clicked.connect(lambda: self._brightness_step(+10))
-
-        self.b_status = QtWidgets.QLabel(""); self.b_status.setWordWrap(True)
-        self.vm.maintStatusChanged.connect(self.b_status.setText)
-        v.addWidget(self.b_status)
-        
-        # --- Schedules ---
-        v.addWidget(self._build_schedules_editor(), 1)
-        v.addStretch(0)
-        return w
-
-    def _current_orientation(self) -> str:
-        for b in self.orient.buttons():
-            if b.isChecked():
-                return b.property("val") or "normal"
-        return "normal"
-
-    def _brightness_step(self, delta: int) -> None:
-        try: cur = int(self.b_val.text().rstrip("%").strip())
-        except: cur = 100
-        new = max(10, min(100, ((cur + delta + 5) // 10) * 10))
-        if new != cur:
-            self.b_val.setText(f"{new}%")
-            self._debounce.start(150)
-
-    def _apply_brightness_debounced(self):
-        try: pct = int(self.b_val.text().rstrip("%").strip())
-        except: pct = 100
-        self.vm.apply_brightness(int(pct))
-
-    def _build_schedules_editor(self) -> QtWidgets.QGroupBox:
-        """Detailed editor for scheduling screen on/off times."""
-        scr = self.model.ensure_screen_struct()
-        group = QtWidgets.QGroupBox("Auto screen on/off schedules")
-        outer = QtWidgets.QVBoxLayout(group); outer.setSpacing(10); outer.setContentsMargins(8, 8, 8, 8)
-
-        master = QtWidgets.QCheckBox("Enable scheduling")
-        master.setChecked(bool(scr.get("schedule_enabled", False)))
-        def on_master(on: bool):
-            scr["schedule_enabled"] = bool(on)
-            self.model.save()
-            self.vm.maintStatusChanged.emit("Scheduling enabled" if on else "Scheduling disabled")
-            self._set_sched_rows_enabled(on)
-        master.toggled.connect(on_master)
-        outer.addWidget(master)
-
-        scroll = QtWidgets.QScrollArea(); scroll.setWidgetResizable(True); scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
-        outer.addWidget(scroll, 1)
-        container = QtWidgets.QWidget()
-        self._sched_container = QtWidgets.QVBoxLayout(container); self._sched_container.setSpacing(10); self._sched_container.setContentsMargins(0, 0, 0, 0)
-        scroll.setWidget(container)
-
-        def render():
-            while self._sched_container.count():
-                item = self._sched_container.takeAt(0)
-                if item.widget(): item.widget().deleteLater()
-
-            schedules = scr.get("schedules", [])
-            for idx, item in enumerate(schedules):
-                block = QtWidgets.QFrame(); block.setFrameShape(QtWidgets.QFrame.StyledPanel)
-                block.setStyleSheet("QFrame { background: #ffffff; border: 1px solid #cfcfcf; border-radius: 6px; }")
-                col = QtWidgets.QVBoxLayout(block); col.setSpacing(8); col.setContentsMargins(8, 8, 8, 8)
-
-                r0 = QtWidgets.QHBoxLayout()
-                enabled = QtWidgets.QCheckBox("Enabled"); enabled.setChecked(bool(item.get("enabled", False)))
-                del_btn = QtWidgets.QPushButton("Delete")
-                r0.addWidget(enabled, 0); r0.addStretch(1); r0.addWidget(del_btn, 0)
-                col.addLayout(r0)
-
-                days_lbls = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"]
-                chosen = set(int(d) for d in item.get("days", []))
-                days_wrap = QtWidgets.QWidget(); days = QtWidgets.QGridLayout(days_wrap); days.setContentsMargins(0,0,0,0)
-                day_buttons = []
-                for d, name in enumerate(days_lbls):
-                    btn = QtWidgets.QToolButton(); btn.setText(name); btn.setCheckable(True); btn.setChecked(d in chosen)
-                    btn.setMinimumSize(72, 44)
-                    btn.setStyleSheet("QToolButton { border: 1px solid #c0c0c0; border-radius: 6px; } QToolButton:checked { background: #d0e8ff; border-color: #7fb3ff; }")
-                    day_buttons.append(btn); days.addWidget(btn, d // 4, d % 4)
-                col.addWidget(QtWidgets.QLabel("Days:")); col.addWidget(days_wrap)
-
-                time_row = QtWidgets.QHBoxLayout()
-                def time_col(title: str, init_val: int):
-                    wrap = QtWidgets.QVBoxLayout(); wrap.setSpacing(6)
-                    wrap.addWidget(QtWidgets.QLabel(title))
-                    dial = QtWidgets.QDial(); dial.setRange(0, 23); dial.setWrapping(True); dial.setNotchesVisible(True); dial.setFixedSize(120, 120)
-                    dial.setValue(int(init_val) % 24)
-                    lbl = QtWidgets.QLabel(f"{dial.value():02d}:00"); lf = lbl.font(); lf.setPointSize(max(13, lf.pointSize() + 1)); lf.setBold(True); lbl.setFont(lf); lbl.setAlignment(QtCore.Qt.AlignHCenter)
-                    wrap.addWidget(dial, 0, QtCore.Qt.AlignHCenter); wrap.addWidget(lbl, 0, QtCore.Qt.AlignHCenter)
-                    return wrap, dial, lbl
-
-                off_col, off_dial, off_lbl = time_col("Off at:", item.get("off_hour", 0))
-                on_col,  on_dial,  on_lbl  = time_col("On at:",  item.get("on_hour", 7))
-                time_row.addLayout(off_col, 1); time_row.addStretch(1); time_row.addLayout(on_col, 1)
-                col.addLayout(time_row)
-
-                summary = QtWidgets.QLabel(f"{off_dial.value():02d}:00 -> {on_dial.value():02d}:00")
-                sf = summary.font(); sf.setBold(True); summary.setFont(sf); summary.setAlignment(QtCore.Qt.AlignCenter)
-                col.addWidget(summary)
-
-                def commit(i=idx):
-                    days_sel = [d for d,b in enumerate(day_buttons) if b.isChecked()]
-                    scr["schedules"][i] = { "enabled": enabled.isChecked(), "off_hour": int(off_dial.value()), "on_hour":  int(on_dial.value()), "days": days_sel }
-                    self.model.mirror_first_enabled_schedule_to_legacy()
-                    self.model.save()
-                    self.vm.set_schedules(scr["schedules"])
-                    off_lbl.setText(f"{off_dial.value():02d}:00"); on_lbl.setText(f"{on_dial.value():02d}:00")
-                    summary.setText(f"{off_dial.value():02d}:00 -> {on_dial.value():02d}:00")
-
-                enabled.toggled.connect(lambda _, i=idx: commit(i))
-                for b in day_buttons: b.toggled.connect(lambda _, i=idx: commit(i))
-                off_dial.valueChanged.connect(lambda _, i=idx: commit(i))
-                on_dial.valueChanged.connect(lambda _, i=idx: commit(i))
-                del_btn.clicked.connect(lambda _, i=idx: (scr["schedules"].pop(i), self.model.save(), render(), self.vm.set_schedules(scr["schedules"])))
-                self._sched_container.addWidget(block)
-
-            add = QtWidgets.QPushButton("Add schedule")
-            add.clicked.connect(lambda: (scr["schedules"].append({"enabled": True, "off_hour": 0, "on_hour": 7, "days": [0,1,2,3,4,5,6]}), self.model.save(), render(), self.vm.set_schedules(scr["schedules"])))
-            self._sched_container.addWidget(add); self._sched_container.addStretch(1)
-
-        render()
-        self._set_sched_rows_enabled(master.isChecked())
-        return group
-
-    def _set_sched_rows_enabled(self, on: bool) -> None:
-        for i in range(self._sched_container.count()):
-            w = self._sched_container.itemAt(i).widget()
-            if w: w.setEnabled(on)
-
-    # =========================================================================
-    # TAB: ABOUT
-    # =========================================================================
-    def _build_about_tab(self):
-        w = QtWidgets.QWidget(); v = QtWidgets.QVBoxLayout(w)
-        # Check for 'about' key in root, as per new JSON
-        about = self.model.data.get("about", {}) if isinstance(self.model.data, dict) else {}
-        text = about.get("text","Digital Photo Frame")
-        img_path = about.get("image_path","")
-        
-        lbl = QtWidgets.QLabel(str(text))
-        lbl.setWordWrap(True)
-        lbl.setAlignment(QtCore.Qt.AlignHCenter)
-        v.addWidget(lbl)
-        
-        self._about_img_refs = None
-        if isinstance(img_path, str) and img_path and QtCore.QFileInfo(img_path).isFile():
-            try:
-                im = Image.open(img_path)
-                if getattr(im, "is_animated", False):
-                    frames = [f.copy().resize((300,300), Image.Resampling.LANCZOS) for f in ImageSequence.Iterator(im)]
-                    self._about_img_refs = [self._to_qpix(fr) for fr in frames]
-                    pic = QtWidgets.QLabel(alignment=QtCore.Qt.AlignCenter); v.addWidget(pic)
-                    def animate(i=0):
-                        pic.setPixmap(self._about_img_refs[i])
-                        QtCore.QTimer.singleShot(im.info.get("duration", 100), lambda: animate((i+1)%len(self._about_img_refs)))
-                    animate()
-                else:
-                    pix = self._to_qpix(im.resize((300,300), Image.Resampling.LANCZOS))
-                    v.addWidget(QtWidgets.QLabel(pixmap=pix, alignment=QtCore.Qt.AlignCenter))
-            except Exception:
-                pass
-        v.addStretch(1)
-        
-        footer = QtWidgets.QLabel("Created by: alws34 \nhttps://github.com/alws34/")
-        footer.setAlignment(QtCore.Qt.AlignHCenter); footer.setWordWrap(True); footer.setStyleSheet("color: #666666; font-size: 11px;")
-        v.addWidget(footer)
-        return w
-
-    @staticmethod
-    def _to_qpix(pil_img) -> QtGui.QPixmap:
-        buf = io.BytesIO(); pil_img.save(buf, format="PNG"); qimg = QtGui.QImage.fromData(buf.getvalue(), "PNG")
-        return QtGui.QPixmap.fromImage(qimg)
-
-    # =========================================================================
-    # TAB: NOTIFICATIONS
-    # =========================================================================
-    def _build_notifications_tab(self):
-        w = QtWidgets.QWidget(); v = QtWidgets.QVBoxLayout(w)
-        self.notif = QtWidgets.QTableWidget(0, 3)
-        self.notif.setHorizontalHeaderLabels(["TS","LEVEL","TEXT"])
-        self.notif.horizontalHeader().setStretchLastSection(True)
-        v.addWidget(self.notif)
-        row = QtWidgets.QHBoxLayout()
-        row.addWidget(QtWidgets.QPushButton("Refresh", clicked=self.vm.refresh_notifications))
-        row.addWidget(QtWidgets.QPushButton("Clear", clicked=self.vm.clear_notifications))
-        row.addStretch(1)
-        v.addLayout(row)
-        return w
-
-    @QtCore.Slot(list)
-    def _fill_notifications(self, items: list):
-        self.notif.setRowCount(0)
-        for it in items:
-            r = self.notif.rowCount(); self.notif.insertRow(r)
-            self.notif.setItem(r,0, QtWidgets.QTableWidgetItem(str(it.get("ts",""))))
-            self.notif.setItem(r,1, QtWidgets.QTableWidgetItem(str(it.get("level",""))))
-            self.notif.setItem(r,2, QtWidgets.QTableWidgetItem(str(it.get("text",""))))
-
-    # =========================================================================
-    # TAB: CONFIG (Generic JSON Editor)
-    # =========================================================================
-    def _build_config_tab(self):
-        """
-        Builds a generic editor.
-        Because the new JSON is heavily nested (ui->margins, ui->text_shadow),
-        we use a recursive strategy. 
-        Top level keys -> Scalars (Top section) or Dicts (Tabs).
-        Nested Dicts -> GroupBoxes.
-        """
-        outer = QtWidgets.QWidget(); ov = QtWidgets.QVBoxLayout(outer); ov.setContentsMargins(6, 6, 6, 6); ov.setSpacing(8)
-        self._cfg_vars = {}
-
-        # 1. Separate Root Level Items
-        free, nested = {}, {}
-        for k, v in (self.model.data.items() if isinstance(self.model.data, dict) else []):
-            (nested if isinstance(v, dict) else free)[k] = v
-
-        splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
-        self._config_splitter = splitter
-
-        # 2. Top Section: General Scalars
-        gen_scroll = QtWidgets.QScrollArea(); gen_scroll.setWidgetResizable(True)
-        gen_wrap = QtWidgets.QWidget(); gen_scroll.setWidget(gen_wrap)
-        gen_v = QtWidgets.QVBoxLayout(gen_wrap); gen_v.setContentsMargins(6, 6, 6, 6); gen_v.setSpacing(8)
-        
-        general = QtWidgets.QGroupBox("General (Root Fields)")
-        gform = QtWidgets.QFormLayout(general)
-        gform.setRowWrapPolicy(QtWidgets.QFormLayout.DontWrapRows); gform.setFieldGrowthPolicy(QtWidgets.QFormLayout.ExpandingFieldsGrow)
-        gform.setLabelAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter); gform.setFormAlignment(QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
-        
-        for key in sorted(free.keys()):
-            self._render_scalar_row(gform, key, free[key], (key,))
-        gen_v.addWidget(general)
-        splitter.addWidget(gen_scroll)
-
-        # 3. Bottom Section: Tabs for Root Dictionaries (System, Playback, UI, etc.)
-        tabs_container = QtWidgets.QWidget(); tc_v = QtWidgets.QVBoxLayout(tabs_container); tc_v.setContentsMargins(0, 0, 0, 0)
-        nb = QtWidgets.QTabWidget(); tc_v.addWidget(nb, 1)
-
-        if nested:
-            for key in sorted(nested.keys()):
-                # Each root dictionary gets a Tab
-                page_scroll = QtWidgets.QScrollArea(); page_scroll.setWidgetResizable(True)
-                page = QtWidgets.QWidget(); page_scroll.setWidget(page)
-                page_v = QtWidgets.QVBoxLayout(page); page_v.setContentsMargins(6, 6, 6, 6); page_v.setSpacing(8)
-
-                # Recursive render inside the tab
-                self._render_dict_into_tab(page_v, str(key), nested[key], (key,))
-                page_v.addStretch(1)
-                nb.addTab(page_scroll, str(key))
-
-        splitter.addWidget(tabs_container)
-        ov.addWidget(splitter, 1)
-
-        # 4. Action Buttons
-        btnrow = QtWidgets.QHBoxLayout()
-        btnrow.addWidget(QtWidgets.QPushButton("Save", clicked=self._config_save))
-        btnrow.addWidget(QtWidgets.QPushButton("Revert", clicked=self._config_revert))
-        btnrow.addStretch(1)
-        ov.addLayout(btnrow)
-        return outer
-
-    def _render_dict_into_tab(self, layout: QtWidgets.QVBoxLayout, title: str, data: dict, path: tuple):
-        """
-        Recursively renders a dictionary into groupboxes.
-        Used for deeper nesting (e.g. ui -> text_shadow).
-        """
-        free, nested = {}, {}
-        for k, v in data.items():
-            (nested if isinstance(v, dict) else free)[k] = v
-
-        # Render scalars in this dict
-        if free:
-            sect = QtWidgets.QGroupBox(f"{title} properties")
-            form = QtWidgets.QFormLayout(sect)
-            form.setRowWrapPolicy(QtWidgets.QFormLayout.DontWrapRows)
-            form.setFieldGrowthPolicy(QtWidgets.QFormLayout.ExpandingFieldsGrow)
-            form.setLabelAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
-            form.setFormAlignment(QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
-            for key in sorted(free.keys()):
-                self._render_scalar_row(form, key, free[key], path + (key,))
-            layout.addWidget(sect)
-
-        # Recursively render nested dicts as GroupBoxes
-        if nested:
-            for key in sorted(nested.keys()):
-                sub_group = QtWidgets.QGroupBox(key)
-                sub_layout = QtWidgets.QVBoxLayout(sub_group)
-                self._render_dict_into_tab(sub_layout, key, nested[key], path + (key,))
-                layout.addWidget(sub_group)
-
-    def _render_scalar_row(self, form: QtWidgets.QFormLayout, label: str, value: object, path: tuple):
-        """Helper to render a single form row based on value type."""
-        lab = QtWidgets.QLabel(label)
         if isinstance(value, bool):
-            w = QtWidgets.QCheckBox(); w.setChecked(bool(value)); form.addRow(lab, w); self._cfg_vars[path] = (w, "bool"); return
-        if isinstance(value, int) or isinstance(value, float):
-            w = QtWidgets.QLineEdit(str(value))
-            w.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
-            form.addRow(lab, w); self._cfg_vars[path] = (w, "num"); return
-        if isinstance(value, list):
-            w = QtWidgets.QLineEdit(json.dumps(value))
-            w.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
-            form.addRow(lab, w); self._cfg_vars[path] = (w, "json"); return
-        
-        # Default string
-        w = QtWidgets.QLineEdit("" if value is None else str(value))
-        w.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Fixed)
-        form.addRow(lab, w); self._cfg_vars[path] = (w, "str")
+            w = QtWidgets.QCheckBox()
+            w.setChecked(value)
+            w.stateChanged.connect(on_bool)
+            return w
 
-    def _set_config_splitter_50_50(self) -> None:
-        try:
-            sp = getattr(self, "_config_splitter", None)
-            if sp:
-                t = sum(sp.sizes()) or max(2, sp.height())
-                # Give slightly more room to the tabs (bottom)
-                sp.setSizes([t // 4, t - (t // 4)]) 
-        except: pass
+        if isinstance(value, int):
+            w = QtWidgets.QSpinBox()
+            w.setRange(-9999999, 9999999)
+            w.setValue(value)
+            w.valueChanged.connect(on_int)
+            return w
 
-    def showEvent(self, e): super().showEvent(e); QtCore.QTimer.singleShot(0, self._set_config_splitter_50_50)
-    def resizeEvent(self, e): super().resizeEvent(e); self._set_config_splitter_50_50()
+        if isinstance(value, float):
+            w = QtWidgets.QDoubleSpinBox()
+            w.setRange(-9999999.0, 9999999.0)
+            w.setDecimals(3)
+            w.setValue(value)
+            w.valueChanged.connect(on_float)
+            return w
 
-    def _config_revert(self):
-        tabs = self.findChild(QtWidgets.QTabWidget)
-        if not tabs: return
-        # Re-build config tab
-        for i in range(tabs.count()):
-            if tabs.tabText(i) == "Config":
-                new_cfg = self._build_config_tab()
-                self._config = new_cfg
-                tabs.removeTab(i)
-                tabs.insertTab(i, self._wrap_scroll(new_cfg), "Config")
-                tabs.setCurrentIndex(i)
-                break
+        if isinstance(value, str):
+            w = QtWidgets.QLineEdit(value)
+            w.textChanged.connect(on_str)
+            return w
 
-    def _config_save(self):
-        """
-        Saves values back to self.model.data.
-        Handles type conversion carefully to match your JSON structure.
-        """
-        try:
-            def set_by_path(obj, path, value):
-                cur = obj
-                for p in path[:-1]: cur = cur[p]
-                cur[path[-1]] = value
-            
-            for path, (w, t) in self._cfg_vars.items():
-                if t == "bool": 
-                    val = w.isChecked()
-                elif t == "num":
-                    s = w.text().strip()
-                    try: 
-                        # Try int first, then float
-                        val = int(s) if s.isdigit() or (s and s[0] in "+-" and s[1:].isdigit()) else float(s)
-                    except: 
-                        val = 0
-                elif t == "json":
-                    s = w.text().strip()
-                    try: val = json.loads(s) if s else []
-                    except:
-                        try: val = ast.literal_eval(s)
-                        except: val = s
-                else: 
-                    val = w.text()
-                
-                set_by_path(self.model.data, path, val)
-            
-            self.model.mirror_first_enabled_schedule_to_legacy()
-            self.model.save()
-            self._set_version_label()
-            
-            # Notify backend if possible (optional hot reload trigger for GUI saves)
-            try:
-                if hasattr(self.parent(), "backend"):
-                    self.parent().backend.notify_settings_changed()
-            except Exception:
-                pass
+        if isinstance(value, dict):
+            w = QtWidgets.QGroupBox()
+            layout = QtWidgets.QVBoxLayout(w)
+            inner = self._build_section_widget(value, parent_key=f"{parent_key}.{key}")
+            layout.addWidget(inner)
+            return w
 
-            self._show_msg("Saved", "Settings saved.")
-        except Exception as e:
-            self._show_msg("Save Error", f"Failed to save settings: {e}")
+        w = QtWidgets.QPlainTextEdit(_json.dumps(value, indent=2))
+        w.setFixedHeight(80)
+        return w
+
+    def _save_settings(self) -> None:
+        from Utilities.config_store import load_settings, save_settings
+        current = load_settings()
+        for section_key, changes in self._pending_changes.items():
+            if "." in section_key:
+                parts = section_key.split(".")
+                target = current
+                for part in parts[:-1]:
+                    target = target.setdefault(part, {})
+                target[parts[-1]] = changes
+            else:
+                if isinstance(current.get(section_key), dict):
+                    current[section_key].update(changes)
+                else:
+                    current[section_key] = changes
+        save_settings(current)
+        self._pending_changes.clear()
+
+    def _on_hot_reload(self, new_data: dict) -> None:
+        self._hot_reload_signal.emit(new_data)
+
+    @QtCore.Slot(dict)
+    def _refresh_from_settings(self, new_data: dict) -> None:
+        while self._tabs.count() > 1:
+            self._tabs.removeTab(1)
+        self._build_dynamic_tabs(new_data)
+        self._pending_changes.clear()
