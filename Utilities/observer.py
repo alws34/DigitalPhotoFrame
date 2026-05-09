@@ -134,7 +134,7 @@ class ImagesObserver(iBoserver):
         return len(self.images)
 
     def get_images_from_directory(self) -> list:
-        valid_extensions = (".jpg", ".jpeg", ".png", ".gif", ".bmp")
+        valid_extensions = (".jpg", ".jpeg", ".png", ".gif", ".bmp", ".heic", ".heif")
         images = []
         for root, _, files in os.walk(self.images_dir):
             for file in files:
