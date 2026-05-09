@@ -153,8 +153,8 @@ def load_settings(json_path: str | None = None) -> dict[str, Any]:
         try:
             saved = json.loads(row["value"])
             return _deep_merge(get_default_settings(), saved)
-        except Exception:
-            pass
+        except (json.JSONDecodeError, ValueError, TypeError) as e:
+            print(f"[Config] Corrupt settings in DB, using defaults: {e}")
 
     # Empty DB — try JSON migration
     if json_path is None:
