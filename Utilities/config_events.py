@@ -30,6 +30,8 @@ def notify_settings_changed(new_data: dict) -> None:
 def start_watcher() -> None:
     """Start watchdog observer on the sentinel file directory."""
     global _observer
+    if _observer is not None:
+        stop_watcher()
     from watchdog.observers import Observer
     from watchdog.events import FileSystemEventHandler
 
