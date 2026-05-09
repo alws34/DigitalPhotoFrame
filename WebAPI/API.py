@@ -169,7 +169,7 @@ def _assign_path(root, parts, value):
 # Backend
 # ---------------------------------------------------------------------
 
-class Backend:
+class APIServer:
     def __init__(self, frame: iFrame, image_dir=None, settings_path=None):
         base = Path(__file__).parent
         self.app = Flask(

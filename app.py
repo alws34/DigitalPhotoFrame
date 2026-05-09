@@ -24,7 +24,7 @@ from Utilities.autoupdate_utils import AutoUpdater
 from Utilities.config_store import load_settings as _load_settings_from_db
 from Utilities import config_events
 from Utilities.MQTT.mqtt_bridge import MqttBridge
-from WebAPI.API import Backend
+from WebAPI.API import APIServer
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -74,7 +74,7 @@ def _run_headless(settings: Dict[str, Any], settings_path: str,
     srv = PhotoFrameServer(width=w, height=h, iframe=None,
                            images_dir=images_dir, settings_path=settings_path)
 
-    backend = Backend(frame=srv, image_dir=images_dir)
+    backend = APIServer(frame=srv, image_dir=images_dir)
     backend.updater = updater
 
     threading.Thread(target=backend.start, daemon=True).start()
@@ -115,7 +115,7 @@ def _run_pygame(settings: Dict[str, Any], settings_path: str) -> None:
                            images_dir=images_dir, settings_path=settings_path)
 
     # Start Flask backend
-    backend = Backend(frame=srv, image_dir=images_dir)
+    backend = APIServer(frame=srv, image_dir=images_dir)
     threading.Thread(target=backend.start, daemon=True).start()
     srv.m_api = backend
 
@@ -257,7 +257,7 @@ def _run_gui(settings: Dict[str, Any], settings_path: str) -> None:
     srv = PhotoFrameServer(width=sw, height=sh, iframe=view,
                            images_dir=images_dir, settings_path=settings_path)
 
-    backend = Backend(frame=srv, image_dir=images_dir)
+    backend = APIServer(frame=srv, image_dir=images_dir)
     threading.Thread(target=backend.start, daemon=True).start()
     srv.m_api = backend
 
