@@ -1,8 +1,13 @@
-from flask import Blueprint, request, jsonify, session, current_app
-from WebAPI.WebUtils.auth_security import EMAIL_RE, USERNAME_RE, password_policy_ok
-from WebAPI.database import get_user_by_email_or_username, create_user_db, update_user_login, increment_failed_login, lock_user, update_password_db
 import time
-from werkzeug.security import generate_password_hash, check_password_hash
+
+from flask import Blueprint, current_app, jsonify, request, session
+from werkzeug.security import generate_password_hash
+
+from WebAPI.database import (
+    get_user_by_email_or_username,
+    update_password_db,
+)
+from WebAPI.WebUtils.auth_security import EMAIL_RE, USERNAME_RE, password_policy_ok
 
 auth_bp = Blueprint('auth_bp', __name__, url_prefix='/api/auth')
 

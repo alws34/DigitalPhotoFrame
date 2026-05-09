@@ -1,6 +1,6 @@
 
 import subprocess
-from typing import Optional, Any
+from typing import Any, Optional
 
 from PySide6 import QtCore
 

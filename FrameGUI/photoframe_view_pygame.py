@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
-from typing import Any, Optional
+from typing import Optional
 
 import cv2
 import numpy as np

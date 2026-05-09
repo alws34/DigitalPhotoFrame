@@ -4,7 +4,6 @@ import os
 import threading
 import time
 from abc import ABC, abstractmethod
-
 from typing import TYPE_CHECKING
 
 from watchdog.events import FileSystemEventHandler

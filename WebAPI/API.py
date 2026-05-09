@@ -1,11 +1,9 @@
 import hashlib
-import io
 import json
 import os
 import platform
 import threading
 import time
-import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
@@ -14,26 +12,18 @@ from threading import Event, Thread
 
 import cv2
 import numpy as np
-import requests
 from flask import (
     Flask,
-    Response,
-    flash,
     jsonify,
-    redirect,
-    render_template,
     request,
-    send_file,
     send_from_directory,
     session,
-    stream_with_context,
 )
-from numpy import ndarray
-from werkzeug.security import generate_password_hash, check_password_hash
-from werkzeug.exceptions import HTTPException
-from PIL import Image, ImageOps
 from flask_cors import CORS
+from numpy import ndarray
+from PIL import Image, ImageOps
 from tqdm import tqdm
+from werkzeug.exceptions import HTTPException
 
 from FrameServer.PhotoFrameServer import iFrame
 from WebAPI.WebUtils.auth_security import (
@@ -62,7 +52,9 @@ except Exception as e:
     has_pillow_heif = False
 
 import logging
-from Utilities.config_store import load_settings as _cs_load, save_settings as _cs_save
+
+from Utilities.config_store import load_settings as _cs_load
+from Utilities.config_store import save_settings as _cs_save
 
 if platform.system() in ("Linux", "Darwin"):
     try:
@@ -494,7 +486,7 @@ class APIServer:
         return get_all_metadata()
 
     def save_metadata_db(self, data):
-        from WebAPI.database import update_metadata, delete_metadata, get_all_metadata
+        from WebAPI.database import delete_metadata, get_all_metadata, update_metadata
         current_data = get_all_metadata()
         for h, d in data.items():
             update_metadata(h, d)
@@ -668,8 +660,8 @@ class APIServer:
             return response, 500
 
         from WebAPI.routes.auth import auth_bp
-        from WebAPI.routes.settings import settings_bp
         from WebAPI.routes.images import images_bp
+        from WebAPI.routes.settings import settings_bp
         from WebAPI.routes.stream import stream_bp
         
         self.app.register_blueprint(auth_bp)

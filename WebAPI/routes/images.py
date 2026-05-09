@@ -1,8 +1,15 @@
-from flask import Blueprint, request, jsonify, current_app, send_from_directory, send_file
 import os
 from datetime import datetime
 from pathlib import Path
-import io
+
+from flask import (
+    Blueprint,
+    current_app,
+    jsonify,
+    request,
+    send_file,
+    send_from_directory,
+)
 
 images_bp = Blueprint('images_bp', __name__, url_prefix='/api/images')
 

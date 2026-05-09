@@ -10,7 +10,9 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 import json
 import logging
+import os as _os
 import random as rand
+import sys as _sys
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -19,19 +21,15 @@ from enum import Enum
 
 import cv2
 import numpy as np
-import json
-from datetime import datetime, timezone
-from PIL import Image
 from pillow_heif import register_heif_opener
 
-import sys as _sys, os as _os
 _sys.path.insert(0, _os.path.abspath(_os.path.join(_os.path.dirname(__file__), "..")))
-from Utilities.config_store import load_settings as _load_settings
-from Utilities.config_events import on_settings_changed
-
 from EffectHandler import EffectHandler
 from image_handler import Image_Utils
 from overlay import OverlayRenderer
+
+from Utilities.config_events import on_settings_changed
+from Utilities.config_store import load_settings as _load_settings
 from Utilities.observer import ImagesObserver
 from Utilities.Weather.weather_adapter import build_weather_client
 

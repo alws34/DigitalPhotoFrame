@@ -1,7 +1,14 @@
-from flask import Blueprint, request, jsonify, current_app, Response, stream_with_context
 import time
-import numpy as np
+
 import cv2
+import numpy as np
+from flask import (
+    Blueprint,
+    Response,
+    current_app,
+    request,
+    stream_with_context,
+)
 
 stream_bp = Blueprint('stream_bp', __name__, url_prefix='/api/stream')
 

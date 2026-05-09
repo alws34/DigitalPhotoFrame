@@ -1,11 +1,11 @@
-import os
-import pytest
+
 
 
 def test_app_settings_table_created(tmp_path, monkeypatch):
     monkeypatch.setenv("PF_DB_PATH", str(tmp_path / "test.db"))
     # Force reimport so env var is picked up
     import importlib
+
     import WebAPI.database as db_mod
     importlib.reload(db_mod)
     db_mod.init_db()
@@ -18,11 +18,13 @@ def test_app_settings_table_created(tmp_path, monkeypatch):
 
 import json as _json
 
+
 def test_migrate_settings_if_needed_loads_json(tmp_path, monkeypatch):
     monkeypatch.setenv("PF_DB_PATH", str(tmp_path / "test.db"))
     json_path = tmp_path / "settings.json"
     json_path.write_text(_json.dumps({"playback": {"animation_fps": 20}}))
     import importlib
+
     import WebAPI.database as db_mod
     importlib.reload(db_mod)
     db_mod.init_db()
@@ -40,6 +42,7 @@ def test_migrate_settings_if_needed_idempotent(tmp_path, monkeypatch):
     json_path = tmp_path / "settings.json"
     json_path.write_text(_json.dumps({"playback": {"animation_fps": 20}}))
     import importlib
+
     import WebAPI.database as db_mod
     importlib.reload(db_mod)
     db_mod.init_db()
@@ -55,6 +58,7 @@ def test_migrate_settings_if_needed_idempotent(tmp_path, monkeypatch):
 def test_migrate_settings_if_needed_missing_file(tmp_path, monkeypatch):
     monkeypatch.setenv("PF_DB_PATH", str(tmp_path / "test.db"))
     import importlib
+
     import WebAPI.database as db_mod
     importlib.reload(db_mod)
     db_mod.init_db()
@@ -67,7 +71,8 @@ def test_migrate_settings_if_needed_missing_file(tmp_path, monkeypatch):
     assert count == 0
 
 
-import json, time
+import json
+
 
 def test_load_returns_defaults_when_empty(tmp_path, monkeypatch):
     monkeypatch.setenv("PF_DB_PATH", str(tmp_path / "test.db"))

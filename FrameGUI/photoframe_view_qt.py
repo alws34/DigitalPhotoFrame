@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import logging
 import os
 import shutil
@@ -13,15 +14,13 @@ import cv2
 import numpy as np
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from FrameServer.PhotoFrameServer import iFrame
-import copy
 from FrameGUI.SettingsFrom.dialog import SettingsModel
 from FrameGUI.SettingsFrom.viewmodel import SettingsViewModel
 
 # New Components
 from FrameGUI.widgets.image_canvas import ImageCanvas
 from FrameGUI.widgets.overlay_panel import OverlayPanel
-from Utilities.autoupdate_utils import AutoUpdater
+from FrameServer.PhotoFrameServer import iFrame
 from Utilities.brightness import set_brightness_percent
 from Utilities.screen_scheduler import ScreenScheduler
 
@@ -226,7 +225,8 @@ class PhotoFrameQtWidget(QtWidgets.QWidget, iFrame, metaclass=IFrameQtWidgetMeta
             pass
 
     def _open_settings(self) -> None:
-        from Utilities.config_store import load_settings as _cs_load, save_settings as _cs_save
+        from Utilities.config_store import load_settings as _cs_load
+        from Utilities.config_store import save_settings as _cs_save
 
         # Always refresh settings from the store before opening the editor.
         try:

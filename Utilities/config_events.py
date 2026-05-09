@@ -32,8 +32,8 @@ def start_watcher() -> None:
     global _observer
     if _observer is not None:
         stop_watcher()
-    from watchdog.observers import Observer
     from watchdog.events import FileSystemEventHandler
+    from watchdog.observers import Observer
 
     sentinel_path = os.environ.get("PF_SENTINEL_PATH", "/tmp/pf_settings.sentinel")
     sentinel_dir = os.path.dirname(os.path.abspath(sentinel_path))

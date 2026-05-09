@@ -1,7 +1,8 @@
-import sqlite3
 import json
 import os
+import sqlite3
 from contextlib import contextmanager
+
 
 @contextmanager
 def get_db():
@@ -130,7 +131,8 @@ def migrate_jsons_if_needed(users_json_path, metadata_json_path):
 
 def migrate_settings_if_needed(json_path: str) -> None:
     """One-time migration from photoframe_settings.json → app_settings table."""
-    import json as _json, time as _time
+    import json as _json
+    import time as _time
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM app_settings")

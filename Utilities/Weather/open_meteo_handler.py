@@ -9,9 +9,7 @@ import logging
 import threading
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional, Tuple
-
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional, Tuple
 
 import requests
 from PIL import Image  # kept because some GUIs still expect PIL.Image for legacy paths

@@ -1,10 +1,7 @@
 # auth_security.py
 import hmac
-import json
-import os
 import re
 import secrets
-import tempfile
 import time
 from dataclasses import dataclass
 from typing import Dict, Optional, Tuple
@@ -12,14 +9,14 @@ from typing import Dict, Optional, Tuple
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from WebAPI.database import (
-    get_user_by_email_or_username,
     create_user_db,
-    update_user_login,
+    get_all_users,
+    get_user_by_email_or_username,
+    get_user_by_uid,
     increment_failed_login,
     lock_user,
-    get_all_users,
     update_password_db,
-    get_user_by_uid
+    update_user_login,
 )
 
 # Optional argon2 (preferred)
