@@ -3,6 +3,7 @@ import axios from 'axios';
 
 const AuthContext = createContext();
 
+// eslint-disable-next-line react-refresh/only-export-components
 export const useAuth = () => useContext(AuthContext);
 
 export const AuthProvider = ({ children }) => {
@@ -13,7 +14,7 @@ export const AuthProvider = ({ children }) => {
     try {
       const res = await axios.get('/api/auth/me');
       setUser(res.data);
-    } catch (err) {
+    } catch {
       setUser(null);
     } finally {
       setLoading(false);
