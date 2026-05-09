@@ -3,14 +3,93 @@ from __future__ import annotations
 import ast
 import io
 import json
+import os
+from typing import Any, Dict
 
 import qrcode
 from PIL import Image, ImageSequence
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from .model import SettingsModel
 from .viewmodel import SettingsViewModel
 from .widgets import OnScreenKeyboard, Sparkline
+from Utilities.config_store import save_settings as _cs_save
+
+
+class SettingsModel:
+    """Thin model wrapper around the settings dict + helpers."""
+    def __init__(self, settings: Dict[str, Any], settings_path: str | None = None):
+        self._settings = settings
+        self._path = settings_path
+        # Ensure the new structure exists immediately on load
+        self.ensure_defaults()
+
+    # ---- basic access ----
+    @property
+    def data(self) -> Dict[str, Any]:
+        return self._settings
+
+    def save(self, path: str | None = None) -> None:
+        """Persist settings via config_store (SQLite + sentinel)."""
+        _cs_save(self._settings)
+
+    # ---- structural helpers ----
+    def ensure_defaults(self) -> None:
+        """Guarantees the new nested structure exists."""
+        # 1. System
+        sys = self._settings.setdefault("system", {})
+        sys.setdefault("service_name", "PhotoFrame_Desktop_App")
+        sys.setdefault("image_dir", "Images")
+
+        # 2. Playback
+        pb = self._settings.setdefault("playback", {})
+        pb.setdefault("animation_duration", 10)
+        pb.setdefault("delay_between_images", 30)
+        pb.setdefault("animation_fps", 30)
+
+        # 3. Effects
+        eff = self._settings.setdefault("effects", {})
+        eff.setdefault("allow_translucent_background", True)
+        eff.setdefault("background_opacity", 0.4)
+        eff.setdefault("shadow_opacity", 0.85)
+
+        # 4. UI
+        ui = self._settings.setdefault("ui", {})
+        ui.setdefault("font_name", "arial.ttf")
+        ui.setdefault("date_format", "dddd, MMM d, yyyy")
+        # Sub-objects in UI
+        ui.setdefault("margins", {"left": 50, "right": 50, "top": 50, "bottom": 50})
+        ui.setdefault("text_shadow", {"alpha": 200, "blur": 10, "offset_x": 2, "offset_y": 2})
+        # Keep compatibility with legacy spacing key location.
+        margins = ui.get("margins", {})
+        if isinstance(margins, dict) and "spacing_between" not in ui and "spacing" in margins:
+            ui["spacing_between"] = margins.get("spacing")
+
+        # 5. Screen (complex struct)
+        self.ensure_screen_struct()
+
+    def ensure_screen_struct(self) -> Dict[str, Any]:
+        scr = self._settings.setdefault("screen", {})
+        scr.setdefault("orientation", "normal")
+        scr.setdefault("brightness", 100)
+        scr.setdefault("schedule_enabled", False)
+        scr.setdefault("off_hour", 0)
+        scr.setdefault("on_hour", 7)
+        if "schedules" not in scr or not isinstance(scr["schedules"], list):
+            scr["schedules"] = [{
+                "enabled": False, "off_hour": 0, "on_hour": 7, "days": [0, 1, 2, 3, 4, 5, 6]
+            }]
+        return scr
+
+    def mirror_first_enabled_schedule_to_legacy(self) -> None:
+        scr = self.ensure_screen_struct()
+        enabled = [s for s in scr.get("schedules", []) if s.get("enabled")]
+        if enabled:
+            first = enabled[0]
+            scr["schedule_enabled"] = True
+            scr["off_hour"] = int(first.get("off_hour", 0)) % 24
+            scr["on_hour"] = int(first.get("on_hour", 7)) % 24
+        else:
+            scr["schedule_enabled"] = False
 
 
 class SettingsDialog(QtWidgets.QDialog):

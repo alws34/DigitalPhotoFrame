@@ -15,7 +15,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from iFrame import iFrame
 import copy
-from FrameGUI.SettingsFrom.model import SettingsModel
+from FrameGUI.SettingsFrom.dialog import SettingsModel
 from FrameGUI.SettingsFrom.viewmodel import SettingsViewModel
 
 # New Components
@@ -227,27 +227,20 @@ class PhotoFrameQtWidget(QtWidgets.QWidget, iFrame, metaclass=IFrameQtWidgetMeta
             pass
 
     def _open_settings(self) -> None:
-        handler = getattr(self, "settings_handler", None)
-        if not handler:
-            # Fallback for direct testing
-            from Settings import SettingsHandler
-            handler = SettingsHandler(getattr(self, "settings_path", "photoframe_settings.json"), logging)
+        from Utilities.config_store import load_settings as _cs_load, save_settings as _cs_save
 
-        # Always refresh from disk before opening the editor.
+        # Always refresh settings from the store before opening the editor.
         try:
-            handler.reload()
+            current_data = _cs_load()
         except Exception:
-            logging.exception("Failed to reload settings before opening dialog.")
-        
-        model = SettingsModel(copy.deepcopy(handler.data), handler.path)
-        # Link model save to handler save and trigger immediate live reload.
+            logging.exception("Failed to load settings before opening dialog.")
+            current_data = copy.deepcopy(self.settings) or {}
+
+        model = SettingsModel(copy.deepcopy(current_data))
+        # Link model save to config_store and trigger immediate live reload.
         def _persist_settings(_path: str | None = None) -> None:
-            handler.save(model.data)
-            latest = handler.data if isinstance(handler.data, dict) else model.data
-            self._apply_live_settings(latest)
-            backend = getattr(self, "backend", None)
-            if backend and hasattr(backend, "notify_settings_changed"):
-                backend.notify_settings_changed()
+            _cs_save(model.data)
+            self._apply_live_settings(copy.deepcopy(model.data))
 
         model.save = _persist_settings
         
