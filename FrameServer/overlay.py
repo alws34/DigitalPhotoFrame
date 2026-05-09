@@ -90,24 +90,24 @@ class OverlayRenderer:
         font_color: Tuple[int, int, int] = (255, 255, 255),
         contrast_text: bool = False,
     ) -> np.ndarray:
-        # 1. Create a small transparent overlay just for the text
-        # Instead of the whole screen, we render to a layer and stamp it.
-        overlay_rgba = self.render_overlay_rgba(self.desired_w, self.desired_h, margins, weather, font_color)
-        
-        # 2. Extract the Alpha channel as a mask
-        alpha = overlay_rgba.split()[3]
-        mask = np.array(alpha) / 255.0
-        mask = np.stack([mask] * 3, axis=-1) # Make it 3-channel for BGR blending
+        # Cache key: recompute only when the clock second or weather changes.
+        # This reduces the expensive PIL pass from 30x/sec to 1x/sec.
+        tick = time.strftime("%H:%M:%S")
+        cache_key = (tick, repr(weather), repr(margins), font_color)
+        if cache_key != getattr(self, "_overlay_cache_key", None):
+            overlay_rgba = self.render_overlay_rgba(
+                self.desired_w, self.desired_h, margins, weather, font_color
+            )
+            alpha = overlay_rgba.split()[3]
+            mask = np.array(alpha, dtype=np.float32) / 255.0
+            self._cached_mask = np.stack([mask, mask, mask], axis=-1)
+            text_rgb = np.array(overlay_rgba.convert("RGB"))
+            self._cached_text_bgr = cv2.cvtColor(text_rgb, cv2.COLOR_RGB2BGR).astype(np.float32)
+            self._overlay_cache_key = cache_key
 
-        # 3. Convert only the text pixels to BGR
-        text_rgb = np.array(overlay_rgba.convert("RGB"))
-        text_bgr = cv2.cvtColor(text_rgb, cv2.COLOR_RGB2BGR)
-
-        # 4. Fast Numpy blend: result = (text * alpha) + (original * (1-alpha))
-        # This bypasses all the slow PIL image conversions for the background image
-        out = (text_bgr * mask + frame_bgr * (1.0 - mask)).astype(np.uint8)
-        
-        return out
+        out = (self._cached_text_bgr * self._cached_mask
+               + frame_bgr.astype(np.float32) * (1.0 - self._cached_mask))
+        return out.astype(np.uint8)
         
     # overlay.py  --- add this new method inside OverlayRenderer
     def render_overlay_rgba(

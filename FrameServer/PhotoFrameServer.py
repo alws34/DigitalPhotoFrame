@@ -8,7 +8,6 @@ import os
 import os as _os
 import random as rand
 import sys
-import sys as _sys
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -21,15 +20,15 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 import cv2
 import numpy as np
-from pillow_heif import register_heif_opener
-
 from EffectHandler import EffectHandler
 from image_handler import Image_Utils
 from overlay import OverlayRenderer
-from Utilities.Weather.weather_adapter import build_weather_client
+from pillow_heif import register_heif_opener
+
 from Utilities.config_events import on_settings_changed
 from Utilities.config_store import load_settings as _load_settings
 from Utilities.observer import ImagesObserver
+from Utilities.Weather.weather_adapter import build_weather_client
 
 # endregion imports
 
@@ -246,6 +245,25 @@ class PhotoFrameServer(iFrame):
             "transition_fps", self._target_fps))
         self._transition_frame_interval = 1.0 / \
             max(1.0, float(self._transition_fps))
+
+        # Rebuild overlay so font size / panel changes take effect immediately
+        ui_cfg = new_data.get("ui", {}) or {}
+        font_path = _os.path.join(
+            _os.path.dirname(_os.path.dirname(__file__)),
+            ui_cfg.get("font_name", "arial.ttf"),
+        )
+        if not _os.path.isfile(font_path):
+            font_path = "arial.ttf"
+        try:
+            self._overlay = OverlayRenderer(
+                font_path=font_path,
+                time_font_size=int(ui_cfg.get("time_font_size", 80)),
+                date_font_size=int(ui_cfg.get("date_font_size", 60)),
+                stats_font_size=int((new_data.get("stats", {}) or {}).get("font_size", 20)),
+                desired_size=(self.screen_width, self.screen_height),
+            )
+        except Exception:
+            pass
         self.logger.info("[PhotoFrameServer] Settings hot-reloaded")
 
     def apply_settings_now(self) -> bool:
@@ -328,7 +346,7 @@ class PhotoFrameServer(iFrame):
         if self._overlay:
             try:
                 ui_cfg = self._settings.get("ui", {}) or {}
-                show_weather = ui_cfg.get("show_weather", False)
+                show_weather = ui_cfg.get("show_weather", True)
                 contrast_text = ui_cfg.get("contrast_text", False)
 
                 # Fetch settings once per refresh

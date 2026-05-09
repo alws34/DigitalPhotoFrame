@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import logging
 import os
+import socket
 import threading
+import time as _time
 from typing import Optional
 
 import cv2
@@ -22,6 +24,9 @@ try:
     import pygame
 except ImportError:
     pygame = None
+
+_TRIPLE_TAP_WINDOW = 0.8   # seconds between taps
+_INFO_DISPLAY_SEC  = 6.0   # how long the info overlay stays visible
 
 
 class PhotoFramePygame:
@@ -42,7 +47,12 @@ class PhotoFramePygame:
         self.settings = settings or {}
         self._running = True
         self._frame_lock = threading.Lock()
-        self._latest_surface = None
+        self._pending_bgr = None
+
+        # Triple-tap state
+        self._tap_times: list = []
+        self._info_until: float = 0.0
+        self._info_url: str = ""
 
         # Initialize pygame + display
         os.environ.setdefault("SDL_VIDEO_ALLOW_SCREENSAVER", "0")
@@ -50,27 +60,25 @@ class PhotoFramePygame:
 
         # Get actual screen resolution if not specified
         info = pygame.display.Info()
-        self.width = width or info.current_w
+        self.width  = width  or info.current_w
         self.height = height or info.current_h
 
-        # Fullscreen with hardware acceleration
         flags = pygame.FULLSCREEN | pygame.HWSURFACE | pygame.DOUBLEBUF
         try:
-            self.screen = pygame.display.set_mode(
-                (self.width, self.height), flags
-            )
+            self.screen = pygame.display.set_mode((self.width, self.height), flags)
         except pygame.error:
-            # Fallback without hardware surface
-            self.screen = pygame.display.set_mode(
-                (self.width, self.height), pygame.FULLSCREEN
-            )
+            self.screen = pygame.display.set_mode((self.width, self.height), pygame.FULLSCREEN)
 
         pygame.display.set_caption("Digital Photo Frame")
         pygame.mouse.set_visible(False)
 
-        # Fill black initially
         self.screen.fill((0, 0, 0))
         pygame.display.flip()
+
+        # Font for info overlay (no external file needed)
+        pygame.font.init()
+        self._info_font_big   = pygame.font.SysFont("monospace", max(28, self.height // 22))
+        self._info_font_small = pygame.font.SysFont("monospace", max(20, self.height // 32))
 
         logging.info("PhotoFramePygame: display %dx%d", self.width, self.height)
 
@@ -78,61 +86,104 @@ class PhotoFramePygame:
     # Frame display (called from compositor thread)
     # -----------------------------------------------------------------
     def set_frame(self, bgr: np.ndarray) -> None:
-        """Just store the raw array. Do not do SDL/CV2 work here."""
-        if bgr is None: return
+        if bgr is None:
+            return
         with self._frame_lock:
-            self._pending_bgr = bgr # Store the 'raw' numpy array
+            self._pending_bgr = bgr
 
     def render_pending_frame(self) -> bool:
-        """Do the heavy lifting on the Main Thread."""
         with self._frame_lock:
-            bgr = getattr(self, "_pending_bgr", None)
-            self._pending_bgr = None # Reset so we don't process it twice
+            bgr = self._pending_bgr
+            self._pending_bgr = None
 
         if bgr is None:
             return False
 
         try:
-            # 1. Convert BGR to RGB (Main Thread is safer for CV2/Pygame)
             rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-            
-            # 2. Create Surface
-            surface = pygame.surfarray.make_surface(
-                np.ascontiguousarray(rgb.swapaxes(0, 1))
-            )
-
-            # 3. Scale if necessary
-            if surface.get_width() != self.width or surface.get_height() != self.height:
+            # frombuffer avoids the swapaxes+ascontiguousarray copies used by
+            # surfarray.make_surface — roughly 2x faster on ARM.
+            h, w = rgb.shape[:2]
+            surface = pygame.image.frombuffer(rgb.tobytes(), (w, h), "RGB")
+            if w != self.width or h != self.height:
                 surface = pygame.transform.smoothscale(surface, (self.width, self.height))
-
-            # 4. Draw
             self.screen.blit(surface, (0, 0))
+            self._draw_info_overlay()
             pygame.display.flip()
             return True
         except Exception as e:
-            logging.error(f"Pygame Render Error: {e}")
+            logging.error("Pygame render error: %s", e)
             return False
+
+    def _draw_info_overlay(self) -> None:
+        if _time.monotonic() >= self._info_until:
+            return
+        port = self.settings.get("backend_configs", {}).get("server_port", 5002)
+        lines = [
+            "Digital Photo Frame",
+            f"Admin: http://{self._info_url}:{port}",
+            "Triple-tap to dismiss",
+        ]
+        pad = 18
+        line_surfs = [self._info_font_big.render(lines[0], True, (255, 255, 255))]
+        line_surfs += [self._info_font_small.render(ln, True, (200, 200, 200)) for ln in lines[1:]]
+        total_h = sum(s.get_height() + 6 for s in line_surfs) + pad * 2
+        max_w   = max(s.get_width() for s in line_surfs) + pad * 2
+        overlay = pygame.Surface((max_w, total_h), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 180))
+        y = pad
+        for s in line_surfs:
+            overlay.blit(s, ((max_w - s.get_width()) // 2, y))
+            y += s.get_height() + 6
+        x = (self.width  - max_w)  // 2
+        yo = (self.height - total_h) // 2
+        self.screen.blit(overlay, (x, yo))
+
     # -----------------------------------------------------------------
     # Event handling (call from main thread)
     # -----------------------------------------------------------------
     def process_events(self) -> bool:
-        """Process SDL events. Returns False if quit requested."""
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 return False
             if event.type == pygame.KEYDOWN:
                 if event.key in (pygame.K_ESCAPE, pygame.K_q):
                     return False
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                self._handle_tap()
         return True
+
+    def _handle_tap(self) -> None:
+        now = _time.monotonic()
+        # If info overlay already showing, dismiss it
+        if now < self._info_until:
+            self._info_until = 0.0
+            self._tap_times.clear()
+            return
+        self._tap_times = [t for t in self._tap_times if now - t < _TRIPLE_TAP_WINDOW]
+        self._tap_times.append(now)
+        if len(self._tap_times) >= 3:
+            self._tap_times.clear()
+            self._activate_info_overlay()
+
+    def _activate_info_overlay(self) -> None:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            self._info_url = s.getsockname()[0]
+            s.close()
+        except Exception:
+            self._info_url = "?.?.?.?"
+        self._info_until = _time.monotonic() + _INFO_DISPLAY_SEC
 
     # -----------------------------------------------------------------
     # iFrame-compatible stubs (overlays are baked into frames by compositor)
     # -----------------------------------------------------------------
     def set_date_time(self, dt_string: str = "") -> None:
-        pass  # Overlay rendered by compositor
+        pass
 
     def set_weather(self, weather_data: dict = None) -> None:
-        pass  # Overlay rendered by compositor
+        pass
 
     def get_is_running(self) -> bool:
         return self._running
