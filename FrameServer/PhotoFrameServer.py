@@ -1,37 +1,35 @@
 # region imports
-from Utilities.Weather.weather_adapter import build_weather_client
-from Utilities.observer import ImagesObserver
-from Utilities.config_store import load_settings as _load_settings
-from Utilities.config_events import on_settings_changed
-from overlay import OverlayRenderer
-from image_handler import Image_Utils
-from EffectHandler import EffectHandler
-from pillow_heif import register_heif_opener
-import numpy as np
-import cv2
-from enum import Enum
-from datetime import datetime, timezone
-from abc import ABC, abstractmethod
-import time
-import threading
-import sys as _sys
-import random as rand
-import os as _os
-import logging
-import json
 import hashlib
 import itertools
+import json
+import logging
 import math
 import os
+import os as _os
+import random as rand
 import sys
+import sys as _sys
+import threading
+import time
+from abc import ABC, abstractmethod
+from datetime import datetime, timezone
+from enum import Enum
 
-sys.path.append(os.path.abspath(os.path.dirname(__file__)))
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+# Ensure FrameServer's own directory is on the path for bare sibling imports
+sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+import cv2
+import numpy as np
+from pillow_heif import register_heif_opener
 
-_sys.path.insert(0, _os.path.abspath(
-    _os.path.join(_os.path.dirname(__file__), "..")))
-
+from EffectHandler import EffectHandler
+from image_handler import Image_Utils
+from overlay import OverlayRenderer
+from Utilities.Weather.weather_adapter import build_weather_client
+from Utilities.config_events import on_settings_changed
+from Utilities.config_store import load_settings as _load_settings
+from Utilities.observer import ImagesObserver
 
 # endregion imports
 
