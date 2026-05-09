@@ -59,7 +59,7 @@ COPY arial.ttf ./
 COPY --from=frontend-build /build/frontend/dist ./frontend/dist
 
 # Create default directories
-RUN mkdir -p /app/Images /data
+RUN mkdir -p /app/Images /data && chown 1000:1000 /app/Images /data
 
 # Settings and images are expected as volumes
 VOLUME ["/app/Images", "/data"]

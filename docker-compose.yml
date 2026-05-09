@@ -3,14 +3,15 @@ services:
     build: .
     container_name: photoframe
     restart: unless-stopped
-    network_mode: host  # Highly recommended for local GUI apps
+    network_mode: host
+    user: "1000:1000"                        # Run as pi user to access Wayland socket
     ports:
       - "${PHOTOFRAME_PORT:-5002}:${PHOTOFRAME_PORT:-5002}"
     volumes:
       - ./Images:/app/Images
       - ./photoframe_settings.json:/app/photoframe_settings.json
       - photoframe-data:/data
-      - /tmp/.X11-unix:/tmp/.X11-unix        # X11 Socket
+      - /tmp/.X11-unix:/tmp/.X11-unix        # X11 Socket (fallback)
       - /run/user/1000:/run/user/1000        # Wayland Socket
       - /dev/shm:/dev/shm                    # Prevents memory crashes
     environment:
@@ -18,9 +19,10 @@ services:
       - DISPLAY=:0
       - WAYLAND_DISPLAY=wayland-0
       - XDG_RUNTIME_DIR=/run/user/1000
-      - SDL_VIDEODRIVER=x11                  # Uses XWayland (most stable for Pi Desktop)
+      - SDL_VIDEODRIVER=wayland              # Pi OS Bookworm uses Wayland (labwc)
+      - PF_DB_PATH=/data/photoframe.db
     devices:
       - /dev/dri:/dev/dri                    # GPU Acceleration
-    privileged: true                         # Usually required for GPU access on Pi
+    privileged: true
 volumes:
   photoframe-data:

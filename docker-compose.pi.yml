@@ -12,7 +12,7 @@ services:
       - /sys/class/backlight:/sys/class/backlight
       - /run/user/1000:/run/user/1000
     environment:
-      - WAYLAND_DISPLAY=wayland-1
+      - WAYLAND_DISPLAY=wayland-0
       - XDG_RUNTIME_DIR=/run/user/1000
       - SDL_VIDEODRIVER=wayland
       - SDL_WAYLAND_CHECK_LIVE_RESIZE=0
