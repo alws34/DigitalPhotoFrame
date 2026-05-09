@@ -239,6 +239,9 @@ class PhotoFrameServer(iFrame):
     def _on_settings_changed(self, new_data: dict) -> None:
         with self._settings_lock:
             self._settings = new_data
+        # Keep the legacy alias in sync so run_photoframe() picks up new values
+        self.settings_handler = new_data
+
         playback = new_data.get("playback", {})
         self._target_fps = int(playback.get("animation_fps", 30))
         self._transition_fps = int(playback.get(
@@ -264,6 +267,19 @@ class PhotoFrameServer(iFrame):
             )
         except Exception:
             pass
+
+        # Update image handler so effects (opacity, blur, etc.) hot-reload
+        try:
+            self.image_handler.settings = new_data
+        except Exception:
+            pass
+
+        # Rebuild weather client so location/unit changes take effect
+        try:
+            self.weather_client = build_weather_client(self, new_data)
+        except Exception:
+            pass
+
         self.logger.info("[PhotoFrameServer] Settings hot-reloaded")
 
     def apply_settings_now(self) -> bool:
