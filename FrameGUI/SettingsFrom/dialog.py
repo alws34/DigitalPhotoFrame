@@ -56,10 +56,16 @@ class SettingsModel:
         ui.setdefault("date_format", "dddd, MMM d, yyyy")
         # Sub-objects in UI
         ui.setdefault("margins", {"left": 50, "right": 50, "top": 50, "bottom": 50})
-        ui.setdefault("text_shadow", {"alpha": 200, "blur": 10, "offset_x": 2, "offset_y": 2})
+        ui.setdefault(
+            "text_shadow", {"alpha": 200, "blur": 10, "offset_x": 2, "offset_y": 2}
+        )
         # Keep compatibility with legacy spacing key location.
         margins = ui.get("margins", {})
-        if isinstance(margins, dict) and "spacing_between" not in ui and "spacing" in margins:
+        if (
+            isinstance(margins, dict)
+            and "spacing_between" not in ui
+            and "spacing" in margins
+        ):
             ui["spacing_between"] = margins.get("spacing")
 
         # 5. Screen (complex struct)
@@ -73,9 +79,10 @@ class SettingsModel:
         scr.setdefault("off_hour", 0)
         scr.setdefault("on_hour", 7)
         if "schedules" not in scr or not isinstance(scr["schedules"], list):
-            scr["schedules"] = [{
-                "enabled": False, "off_hour": 0, "on_hour": 7, "days": [0, 1, 2, 3, 4, 5, 6]
-            }]
+            scr["schedules"] = [
+                {"enabled": False, "off_hour": 0, "on_hour": 7,
+                 "days": [0, 1, 2, 3, 4, 5, 6]}
+            ]
         return scr
 
     def mirror_first_enabled_schedule_to_legacy(self) -> None:
