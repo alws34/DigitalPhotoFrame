@@ -34,6 +34,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsdl2-image-2.0-0 \
     libsdl2-mixer-2.0-0 \
     libsdl2-ttf-2.0-0 \
+    libwayland-client0 \
+    libwayland-egl1 \
+    libwayland-cursor0 \
+    libxkbcommon0 \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
@@ -42,7 +46,9 @@ COPY requirements-docker.txt ./
 RUN pip install --no-cache-dir -r requirements-docker.txt
 
 # Copy application code
-COPY app.py config.py Settings.py iFrame.py pyproject.toml ./
+ENV PF_DB_PATH=/data/photoframe.db
+
+COPY app.py config.py pyproject.toml ./
 COPY FrameServer/ ./FrameServer/
 COPY FrameGUI/ ./FrameGUI/
 COPY WebAPI/ ./WebAPI/
@@ -59,7 +65,7 @@ RUN mkdir -p /app/Images /data
 VOLUME ["/app/Images", "/data"]
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD python -c "import json,urllib.request;p=json.load(open('/app/photoframe_settings.json')).get('backend_configs',{}).get('server_port',5002);urllib.request.urlopen(f'http://localhost:{p}/')" || exit 1
+    CMD curl -sf http://localhost:5002/ || exit 1
 
 # Default: pygame display mode (use --headless for server-only)
 ENTRYPOINT ["python", "app.py"]

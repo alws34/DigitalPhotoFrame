@@ -1,20 +1,20 @@
 # Pi overlay: docker compose -f docker-compose.yml -f docker-compose.pi.yml up -d
-# Provides GPU, display, input, and backlight access for pygame/SDL2.
+# Requires: Pi OS Bookworm desktop (Wayland/labwc). User must be in 'video' and 'render' groups.
 services:
   photoframe:
+    group_add:
+      - video
+      - render
     devices:
-      - /dev/dri:/dev/dri        # GPU / DRM-KMS
-      - /dev/input:/dev/input    # Touch / mouse / keyboard
+      - /dev/dri:/dev/dri
+      - /dev/input:/dev/input
     volumes:
       - /sys/class/backlight:/sys/class/backlight
-      # Wayland socket (Pi OS Bookworm default)
-      - ${XDG_RUNTIME_DIR:-/run/user/1000}/${WAYLAND_DISPLAY:-wayland-1}:${XDG_RUNTIME_DIR:-/run/user/1000}/${WAYLAND_DISPLAY:-wayland-1}
+      - /run/user/1000:/run/user/1000
     environment:
-      # SDL2 will try wayland -> kmsdrm -> x11 automatically.
-      # Force one with SDL_VIDEODRIVER if needed:
-      #   SDL_VIDEODRIVER=wayland  (Pi OS desktop)
-      #   SDL_VIDEODRIVER=kmsdrm   (no desktop, DRM/KMS direct)
-      - WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-wayland-1}
-      - XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/1000}
+      - WAYLAND_DISPLAY=wayland-1
+      - XDG_RUNTIME_DIR=/run/user/1000
+      - SDL_VIDEODRIVER=wayland
+      - SDL_WAYLAND_CHECK_LIVE_RESIZE=0
     # Uncomment for MQTT / mDNS:
     # network_mode: host

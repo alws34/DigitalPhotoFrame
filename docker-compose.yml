@@ -11,6 +11,7 @@ services:
       - photoframe-data:/data
     environment:
       - PHOTOFRAME_SECRET_KEY=${PHOTOFRAME_SECRET_KEY:-change-me-in-production}
+      - PF_DB_PATH=/data/photoframe.db
 
 volumes:
   photoframe-data:
