@@ -3,11 +3,18 @@ import json
 import os
 from contextlib import contextmanager
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "database.db")
+DB_PATH = os.environ.get(
+    "PF_DB_PATH",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "database.db")
+)
 
 @contextmanager
 def get_db():
-    conn = sqlite3.connect(DB_PATH)
+    path = os.environ.get(
+        "PF_DB_PATH",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "database.db")
+    )
+    conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     try:
         yield conn
@@ -54,6 +61,15 @@ def init_db():
                 last_displayed TEXT,
                 uploader TEXT,
                 views INTEGER
+            )
+        ''')
+
+        # Create app_settings table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key        TEXT PRIMARY KEY,
+                value      TEXT NOT NULL,
+                updated_at REAL
             )
         ''')
 
@@ -116,6 +132,29 @@ def migrate_jsons_if_needed(users_json_path, metadata_json_path):
                 print(f"[Database] Migrated {len(data)} image metadata records from {metadata_json_path}")
             except Exception as e:
                 print(f"[Database] Error migrating metadata.json: {e}")
+
+def migrate_settings_if_needed(json_path: str) -> None:
+    """One-time migration from photoframe_settings.json → app_settings table."""
+    import json as _json, time as _time
+    with get_db() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM app_settings")
+        if cursor.fetchone()[0] > 0:
+            return  # Already migrated
+    if not os.path.exists(json_path):
+        return
+    try:
+        with open(json_path, "r", encoding="utf-8") as f:
+            data = _json.load(f)
+        blob = _json.dumps(data, indent=2)
+        with get_db() as conn:
+            conn.cursor().execute(
+                "INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES ('main', ?, ?)",
+                (blob, _time.time())
+            )
+        print(f"[database] Migrated settings from {json_path}")
+    except Exception as e:
+        print(f"[database] Settings migration failed: {e}")
 
 # ----- Users API -----
 
