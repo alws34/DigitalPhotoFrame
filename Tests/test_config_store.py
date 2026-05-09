@@ -125,3 +125,27 @@ def test_deep_merge_preserves_defaults_for_missing_keys(tmp_path, monkeypatch):
     # Default key present even though not in saved partial
     assert "ui" in loaded
     assert loaded["playback"]["animation_fps"] == 15
+
+
+def test_notify_fires_all_callbacks(tmp_path, monkeypatch):
+    monkeypatch.setenv("PF_DB_PATH", str(tmp_path / "test.db"))
+    monkeypatch.setenv("PF_SENTINEL_PATH", str(tmp_path / "sentinel"))
+    import importlib
+    import Utilities.config_events as ce; importlib.reload(ce)
+    received = []
+    ce.on_settings_changed(lambda d: received.append(d))
+    ce.notify_settings_changed({"playback": {"animation_fps": 99}})
+    assert len(received) == 1
+    assert received[0]["playback"]["animation_fps"] == 99
+
+def test_callback_exception_does_not_stop_others(tmp_path, monkeypatch):
+    monkeypatch.setenv("PF_DB_PATH", str(tmp_path / "test.db"))
+    monkeypatch.setenv("PF_SENTINEL_PATH", str(tmp_path / "sentinel"))
+    import importlib
+    import Utilities.config_events as ce; importlib.reload(ce)
+    called = []
+    def bad_cb(d): raise RuntimeError("boom")
+    ce.on_settings_changed(bad_cb)
+    ce.on_settings_changed(lambda d: called.append(1))
+    ce.notify_settings_changed({})
+    assert called == [1]  # Second callback still ran
