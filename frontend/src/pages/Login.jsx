@@ -23,14 +23,13 @@ export default function Login() {
   };
 
   return (
-    <div style={{ 
-      display: 'flex', 
-      alignItems: 'center', 
-      justifyContent: 'center', 
-      height: '100vh',
-      background: 'linear-gradient(135deg, #121212 0%, #1e1e1e 100%)'
+    <div style={{
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      minHeight: '100vh',
     }}>
-      <div className="glass-panel fade-in" style={{ padding: '2.5rem', width: '100%', maxWidth: '400px' }}>
+      <div className="glass fade-in" style={{ padding: 40, width: 380, maxWidth: '100%' }}>
         <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
           <div style={{ 
             display: 'inline-flex', 
