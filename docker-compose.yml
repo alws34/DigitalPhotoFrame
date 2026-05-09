@@ -20,6 +20,7 @@ services:
       - WAYLAND_DISPLAY=wayland-0
       - XDG_RUNTIME_DIR=/run/user/1000
       - SDL_VIDEODRIVER=wayland              # Pi OS Bookworm uses Wayland (labwc)
+      - LIBGL_ALWAYS_SOFTWARE=1             # Mesa software fallback if GPU EGL unavailable
       - PF_DB_PATH=/data/photoframe.db
     devices:
       - /dev/dri:/dev/dri                    # GPU Acceleration

@@ -38,6 +38,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libwayland-egl1 \
     libwayland-cursor0 \
     libxkbcommon0 \
+    libegl1 \
+    libegl-mesa0 \
+    libgles2 \
+    libgbm1 \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
