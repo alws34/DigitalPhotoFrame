@@ -1,6 +1,37 @@
-from flask import Blueprint, request, jsonify, current_app
+import queue
+import threading
+
+from flask import (
+    Blueprint,
+    Response,
+    current_app,
+    jsonify,
+    request,
+    stream_with_context,
+)
 
 settings_bp = Blueprint('settings_bp', __name__, url_prefix='/api/settings')
+
+_sse_clients: list[queue.Queue] = []
+_sse_lock = threading.Lock()
+
+
+def _broadcast_settings_updated() -> None:
+    with _sse_lock:
+        clients = list(_sse_clients)
+    for q in clients:
+        try:
+            q.put_nowait("settings_updated")
+        except queue.Full:
+            pass
+
+
+def _register_sse_broadcaster() -> None:
+    from Utilities.config_events import on_settings_changed
+    on_settings_changed(lambda _: _broadcast_settings_updated())
+
+
+_register_sse_broadcaster()
 
 @settings_bp.route("/", methods=["GET"], strict_slashes=False)
 def get_settings():
@@ -34,6 +65,42 @@ def update_settings():
         return jsonify({"message": "Settings updated successfully."})
     except Exception as e:
         return jsonify({"error": f"Failed to update settings: {e}"}), 500
+
+@settings_bp.route("/events", methods=["GET"])
+def settings_events():
+    """Server-Sent Events stream. Pushes 'settings_updated' when settings change."""
+    backend = current_app.config.get('backend')
+    if backend and not backend.is_authenticated():
+        return jsonify({"error": "unauthorized"}), 401
+
+    def event_stream():
+        q: queue.Queue = queue.Queue(maxsize=10)
+        with _sse_lock:
+            _sse_clients.append(q)
+        try:
+            yield "data: connected\n\n"
+            while True:
+                try:
+                    msg = q.get(timeout=30)
+                    yield f"data: {msg}\n\n"
+                except queue.Empty:
+                    yield ": keepalive\n\n"
+        finally:
+            with _sse_lock:
+                try:
+                    _sse_clients.remove(q)
+                except ValueError:
+                    pass
+
+    return Response(
+        stream_with_context(event_stream()),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
 
 @settings_bp.route("/system_stats", methods=["GET"])
 def system_stats():
