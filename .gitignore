@@ -46,3 +46,5 @@ PhotoFrame.log
 !.claude/rules/
 !.claude/rules/**/*.md
 .claude/worktrees/
+foss_env/
+users.json
