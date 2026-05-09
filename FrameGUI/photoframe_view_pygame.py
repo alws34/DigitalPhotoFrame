@@ -75,10 +75,11 @@ class PhotoFramePygame:
         self.screen.fill((0, 0, 0))
         pygame.display.flip()
 
-        # Font for info overlay (no external file needed)
         pygame.font.init()
-        self._info_font_big   = pygame.font.SysFont("monospace", max(28, self.height // 22))
-        self._info_font_small = pygame.font.SysFont("monospace", max(20, self.height // 32))
+        self._info_font_title  = pygame.font.SysFont("sans",     max(32, self.height // 18), bold=True)
+        self._info_font_url    = pygame.font.SysFont("monospace", max(22, self.height // 28))
+        self._info_font_small  = pygame.font.SysFont("sans",     max(18, self.height // 36))
+        self._qr_surface: Optional[pygame.Surface] = None
 
         logging.info("PhotoFramePygame: display %dx%d", self.width, self.height)
 
@@ -118,32 +119,64 @@ class PhotoFramePygame:
     def _draw_info_overlay(self) -> None:
         if _time.monotonic() >= self._info_until:
             return
+
         port = self.settings.get("backend_configs", {}).get("server_port", 5002)
         url  = f"http://{self._info_url}:{port}"
-        lines_big   = ["Settings & Admin UI"]
-        lines_small = [
-            f"Open in browser:  {url}",
-            "",
-            "Settings  •  Gallery  •  Upload photos",
-            "",
-            "Tap again to dismiss",
-        ]
-        pad = 24
-        surfs = [self._info_font_big.render(l, True, (255, 230, 80)) for l in lines_big]
-        surfs += [self._info_font_small.render(l, True, (220, 220, 220)) for l in lines_small]
-        total_h = sum(s.get_height() + 6 for s in surfs) + pad * 2
-        max_w   = max(s.get_width() for s in surfs) + pad * 2
-        overlay = pygame.Surface((max_w, total_h), pygame.SRCALPHA)
-        overlay.fill((10, 10, 30, 210))
-        # top accent bar
-        pygame.draw.rect(overlay, (80, 130, 255, 200), (0, 0, max_w, 4))
-        y = pad
-        for s in surfs:
-            overlay.blit(s, ((max_w - s.get_width()) // 2, y))
-            y += s.get_height() + 6
-        x  = (self.width  - max_w)  // 2
-        yo = (self.height - total_h) // 2
-        self.screen.blit(overlay, (x, yo))
+
+        W, H  = self.width, self.height
+        pad   = max(20, H // 32)
+        panel = pygame.Surface((W, H), pygame.SRCALPHA)
+
+        # ── glass background ──────────────────────────────────────────
+        panel.fill((8, 12, 28, 220))
+        pygame.draw.rect(panel, (60, 110, 255, 180), (0, 0, W, 5))       # top bar
+        pygame.draw.rect(panel, (30, 40, 80, 120),   (0, H - 5, W, 5))   # bottom bar
+
+        # ── header ────────────────────────────────────────────────────
+        title_surf = self._info_font_title.render("⚙  Settings & Admin", True, (255, 255, 255))
+        panel.blit(title_surf, ((W - title_surf.get_width()) // 2, pad))
+        ty = pad + title_surf.get_height() + 8
+        pygame.draw.line(panel, (60, 110, 255, 160), (pad * 2, ty), (W - pad * 2, ty), 1)
+        ty += 14
+
+        # ── QR code ───────────────────────────────────────────────────
+        qr_size = min(W, H) // 2
+        if self._qr_surface is not None:
+            qr_scaled = pygame.transform.smoothscale(self._qr_surface, (qr_size, qr_size))
+            # White rounded-ish border
+            border = 8
+            qr_bg = pygame.Surface((qr_size + border * 2, qr_size + border * 2))
+            qr_bg.fill((255, 255, 255))
+            qr_bg.blit(qr_scaled, (border, border))
+            qx = (W - qr_bg.get_width()) // 2
+            panel.blit(qr_bg, (qx, ty))
+            qr_bottom = ty + qr_bg.get_height() + pad // 2
+        else:
+            qr_bottom = ty + pad
+
+        # ── URL pill ──────────────────────────────────────────────────
+        url_surf  = self._info_font_url.render(url, True, (140, 200, 255))
+        uw, uh    = url_surf.get_width(), url_surf.get_height()
+        pill_pad  = 10
+        pill_rect = pygame.Rect((W - uw - pill_pad * 2) // 2, qr_bottom, uw + pill_pad * 2, uh + pill_pad * 2)
+        pill_surf = pygame.Surface((pill_rect.w, pill_rect.h), pygame.SRCALPHA)
+        pill_surf.fill((20, 30, 70, 180))
+        pygame.draw.rect(pill_surf, (60, 110, 255, 120), pill_surf.get_rect(), 1)
+        pill_surf.blit(url_surf, (pill_pad, pill_pad))
+        panel.blit(pill_surf, pill_rect.topleft)
+
+        # ── sub-labels ────────────────────────────────────────────────
+        sub_y = pill_rect.bottom + pad // 2
+        for txt, col in [
+            ("Scan QR or open URL in any browser on your network", (180, 180, 200)),
+            ("Settings  •  Gallery  •  Upload photos", (130, 160, 220)),
+            ("Tap anywhere to dismiss", (100, 100, 130)),
+        ]:
+            s = self._info_font_small.render(txt, True, col)
+            panel.blit(s, ((W - s.get_width()) // 2, sub_y))
+            sub_y += s.get_height() + 6
+
+        self.screen.blit(panel, (0, 0))
 
     # -----------------------------------------------------------------
     # Event handling (call from main thread)
@@ -180,7 +213,31 @@ class PhotoFramePygame:
             s.close()
         except Exception:
             self._info_url = "?.?.?.?"
+
+        port = self.settings.get("backend_configs", {}).get("server_port", 5002)
+        url  = f"http://{self._info_url}:{port}"
+        self._qr_surface = self._make_qr_surface(url)
         self._info_until = _time.monotonic() + _INFO_DISPLAY_SEC
+
+    @staticmethod
+    def _make_qr_surface(url: str) -> Optional[pygame.Surface]:
+        try:
+            import qrcode  # type: ignore[import]
+            qr = qrcode.QRCode(
+                version=None,
+                error_correction=qrcode.constants.ERROR_CORRECT_M,
+                box_size=10,
+                border=2,
+            )
+            qr.add_data(url)
+            qr.make(fit=True)
+            img = qr.make_image(fill_color=(20, 20, 40), back_color=(255, 255, 255))
+            rgb = img.convert("RGB")
+            w, h = rgb.size
+            return pygame.image.frombuffer(rgb.tobytes(), (w, h), "RGB")
+        except Exception as e:
+            logging.warning("QR code generation failed: %s", e)
+            return None
 
     # -----------------------------------------------------------------
     # iFrame-compatible stubs (overlays are baked into frames by compositor)

@@ -155,7 +155,7 @@ class OverlayRenderer:
             cond_text = (weather.get('description') or '').strip() or None
 
         if temp_text:
-            temp_bb = draw.textbbox((0, 0), temp_text, font=self.date_font)
+            temp_bb = draw.textbbox((0, 0), temp_text, font=self.time_font)
             temp_w = temp_bb[2] - temp_bb[0]
             temp_h = temp_bb[3] - temp_bb[1]
 
@@ -174,17 +174,17 @@ class OverlayRenderer:
 
             x_temp = x_block_left + (block_w - temp_w) // 2
             y_temp = y_block_top
-            right_positions.append((temp_text, x_temp, y_temp))
+            right_positions.append((temp_text, x_temp, y_temp, self.time_font))
             if cond_text:
                 x_cond = x_block_left + (block_w - cond_w) // 2
                 y_cond = y_temp + temp_h + 6
-                right_positions.append((cond_text, x_cond, y_cond))
+                right_positions.append((cond_text, x_cond, y_cond, self.date_font))
 
         rgba_fill = (font_color[0], font_color[1], font_color[2], 255)
         draw.text((x_time, y_time), current_time, font=self.time_font, fill=rgba_fill)
         draw.text((x_date, y_date), current_date, font=self.date_font, fill=rgba_fill)
-        for ln, x, y in right_positions:
-            draw.text((x, y), ln, font=self.date_font, fill=rgba_fill)
+        for ln, x, y, fnt in right_positions:
+            draw.text((x, y), ln, font=fnt, fill=rgba_fill)
 
         return overlay
 
