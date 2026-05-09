@@ -119,23 +119,29 @@ class PhotoFramePygame:
         if _time.monotonic() >= self._info_until:
             return
         port = self.settings.get("backend_configs", {}).get("server_port", 5002)
-        lines = [
-            "Digital Photo Frame",
-            f"Admin: http://{self._info_url}:{port}",
-            "Triple-tap to dismiss",
+        url  = f"http://{self._info_url}:{port}"
+        lines_big   = ["Settings & Admin UI"]
+        lines_small = [
+            f"Open in browser:  {url}",
+            "",
+            "Settings  •  Gallery  •  Upload photos",
+            "",
+            "Tap again to dismiss",
         ]
-        pad = 18
-        line_surfs = [self._info_font_big.render(lines[0], True, (255, 255, 255))]
-        line_surfs += [self._info_font_small.render(ln, True, (200, 200, 200)) for ln in lines[1:]]
-        total_h = sum(s.get_height() + 6 for s in line_surfs) + pad * 2
-        max_w   = max(s.get_width() for s in line_surfs) + pad * 2
+        pad = 24
+        surfs = [self._info_font_big.render(l, True, (255, 230, 80)) for l in lines_big]
+        surfs += [self._info_font_small.render(l, True, (220, 220, 220)) for l in lines_small]
+        total_h = sum(s.get_height() + 6 for s in surfs) + pad * 2
+        max_w   = max(s.get_width() for s in surfs) + pad * 2
         overlay = pygame.Surface((max_w, total_h), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 180))
+        overlay.fill((10, 10, 30, 210))
+        # top accent bar
+        pygame.draw.rect(overlay, (80, 130, 255, 200), (0, 0, max_w, 4))
         y = pad
-        for s in line_surfs:
+        for s in surfs:
             overlay.blit(s, ((max_w - s.get_width()) // 2, y))
             y += s.get_height() + 6
-        x = (self.width  - max_w)  // 2
+        x  = (self.width  - max_w)  // 2
         yo = (self.height - total_h) // 2
         self.screen.blit(overlay, (x, yo))
 
