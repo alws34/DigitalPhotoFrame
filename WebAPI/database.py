@@ -69,37 +69,7 @@ def init_db():
             )
         ''')
 
-def migrate_jsons_if_needed(users_json_path, metadata_json_path):
-    # Only migrate if DB doesn't have any users and users.json exists
-    with get_db() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM users")
-        user_count = cursor.fetchone()[0]
-        
-    if user_count == 0 and os.path.exists(users_json_path):
-        with open(users_json_path, 'r', encoding='utf-8') as f:
-            try:
-                data = json.load(f)
-                users = data.get('users', {})
-                with get_db() as conn:
-                    cursor = conn.cursor()
-                    for uid, u in users.items():
-                        cursor.execute('''
-                            INSERT OR IGNORE INTO users (
-                                uid, username, email, pw_hash, role, algo, 
-                                created_at, last_login, failed_count, is_active, 
-                                lock_until, password_changed_at
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        ''', (
-                            u.get('uid', uid), u.get('username'), u.get('email'), u.get('pw_hash'),
-                            u.get('role', 'user'), u.get('algo', 'pbkdf2'), u.get('created_at', 0.0),
-                            u.get('last_login', 0.0), u.get('failed_count', 0), u.get('is_active', True),
-                            u.get('lock_until', 0.0), u.get('password_changed_at', 0.0)
-                        ))
-                print(f"[Database] Migrated {len(users)} users from {users_json_path}")
-            except Exception as e:
-                print(f"[Database] Error migrating users.json: {e}")
-
+def migrate_jsons_if_needed(metadata_json_path):
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM images_metadata")

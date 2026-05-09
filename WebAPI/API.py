@@ -179,12 +179,11 @@ class APIServer:
             PERMANENT_SESSION_LIFETIME=3600,
         )
 
-        self.USER_DATA_FILE = self.set_absolute_paths("users.json")
         self.METADATA_FILE = self.set_absolute_paths("metadata.json")
         self.LOG_FILE_PATH = self.set_absolute_paths("PhotoFrame.log")
         self.WEATHER_CACHE = self.set_absolute_paths("weather_cache.json")
 
-        self._users = UserStore(self.USER_DATA_FILE)
+        self._users = UserStore()
 
         self._rl_login = RateLimiter(limit=10, window_sec=60)
         self._rl_signup = RateLimiter(limit=5, window_sec=300)
@@ -243,10 +242,10 @@ class APIServer:
         self._metadata_lock = threading.Lock()
         self._ensure_storage_files()
         
-        # Initialize SQLite DB and migrate old JSONs if needed
+        # Initialize SQLite DB and migrate metadata.json if needed
         from WebAPI.database import init_db, migrate_jsons_if_needed
         init_db()
-        migrate_jsons_if_needed(self.USER_DATA_FILE, self.METADATA_FILE)
+        migrate_jsons_if_needed(self.METADATA_FILE)
 
         self._normalize_existing_heic_images()
 
@@ -338,7 +337,6 @@ class APIServer:
         os.makedirs(self.IMAGE_DIR, exist_ok=True)
 
         for path, default in [
-            (self.USER_DATA_FILE, {}),
             (self.METADATA_FILE, {}),
             (self.LOG_FILE_PATH, ""),
         ]:
@@ -464,19 +462,6 @@ class APIServer:
             for entry in Path(self.IMAGE_DIR).iterdir()
             if entry.is_file() and self.allowed_file(entry.name)
         ]
-
-    def load_users(self):
-        try:
-            with open(self.USER_DATA_FILE, "r") as f:
-                return json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError):
-            users = {}
-            self.save_users(users)
-            return users
-
-    def save_users(self, users):
-        with open(self.USER_DATA_FILE, "w") as file:
-            json.dump(users, file, indent=4)
 
     def is_authenticated(self) -> bool:
         return "uid" in session and "user" in session

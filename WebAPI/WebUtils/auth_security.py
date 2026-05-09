@@ -63,13 +63,7 @@ class UserRecord:
     password_changed_at: Optional[float] = None
 
 class UserStore:
-    def __init__(self, path: str = ""):
-        self.path = path
-
-    def _load(self) -> None:
-        pass
-
-    def _atomic_save(self) -> None:
+    def __init__(self):
         pass
 
     def _new_uid(self) -> str:
