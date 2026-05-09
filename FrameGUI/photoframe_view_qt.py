@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from iFrame import iFrame
+from FrameServer.PhotoFrameServer import iFrame
 import copy
 from FrameGUI.SettingsFrom.dialog import SettingsModel
 from FrameGUI.SettingsFrom.viewmodel import SettingsViewModel
@@ -21,7 +21,6 @@ from FrameGUI.SettingsFrom.viewmodel import SettingsViewModel
 # New Components
 from FrameGUI.widgets.image_canvas import ImageCanvas
 from FrameGUI.widgets.overlay_panel import OverlayPanel
-from iFrame import iFrame
 from Utilities.autoupdate_utils import AutoUpdater
 from Utilities.brightness import set_brightness_percent
 from Utilities.screen_scheduler import ScreenScheduler

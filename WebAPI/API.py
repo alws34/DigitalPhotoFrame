@@ -35,7 +35,7 @@ from PIL import Image, ImageOps
 from flask_cors import CORS
 from tqdm import tqdm
 
-from iFrame import iFrame
+from FrameServer.PhotoFrameServer import iFrame
 from WebAPI.WebUtils.auth_security import (
     RateLimiter,
     UserStore,

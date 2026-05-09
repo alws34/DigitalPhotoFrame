@@ -13,6 +13,7 @@ import logging
 import random as rand
 import threading
 import time
+from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from enum import Enum
 
@@ -30,12 +31,49 @@ from Utilities.config_events import on_settings_changed
 
 from EffectHandler import EffectHandler
 from image_handler import Image_Utils
-from iFrame import iFrame
 from overlay import OverlayRenderer
 from Utilities.observer import ImagesObserver
 from Utilities.Weather.weather_adapter import build_weather_client
 
 # endregion imports
+
+
+class iFrame(ABC):
+    @abstractmethod
+    def __init__(self):
+        pass
+
+    @abstractmethod
+    def send_log_message(self, msg, logger: logging):
+        pass
+
+    @abstractmethod
+    def get_live_frame(self):
+        pass
+
+    @abstractmethod
+    def get_is_running(self):
+        pass
+
+    @abstractmethod
+    def update_images_list(self):
+        pass
+
+    @abstractmethod
+    def set_frame(self):
+        pass
+
+    @abstractmethod
+    def update_frame_to_stream(self):
+        pass
+
+    @abstractmethod
+    def set_date_time(self):
+        pass
+
+    @abstractmethod
+    def set_weather(self):
+        pass
 
 # region Logging Setup
 log_file_path = os.path.join(os.path.dirname(__file__), "PhotoFrame.log")

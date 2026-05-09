@@ -5,10 +5,13 @@ import threading
 import time
 from abc import ABC, abstractmethod
 
+from typing import TYPE_CHECKING
+
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
-from iFrame import iFrame
+if TYPE_CHECKING:
+    from FrameServer.PhotoFrameServer import iFrame
 
 
 class iBoserver(ABC):
@@ -29,7 +32,7 @@ class ImageChangeHandler(FileSystemEventHandler):
         self.observer._notify_fs_event()
 
 class ImagesObserver(iBoserver):
-    def __init__(self, frame: iFrame, images_dir: str = "Images"):
+    def __init__(self, frame: "iFrame", images_dir: str = "Images"):
         self.frame = frame
         self.images_dir = images_dir
         self._observer = None

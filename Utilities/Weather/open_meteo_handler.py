@@ -11,10 +11,13 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Tuple
 
+from typing import TYPE_CHECKING
+
 import requests
 from PIL import Image  # kept because some GUIs still expect PIL.Image for legacy paths
 
-from iFrame import iFrame
+if TYPE_CHECKING:
+    from FrameServer.PhotoFrameServer import iFrame
 
 # Local icon resolver
 from Utilities.Weather.weather_icons import WeatherIconResolver
@@ -40,7 +43,7 @@ class OpenMeteoWeatherHandler:
       cache_ttl_minutes    int (default 60)
     """
 
-    def __init__(self, frame: iFrame, settings):
+    def __init__(self, frame: "iFrame", settings):
         self.Frame = frame
         self.weather_data = {}
         self._icon_image = None  # lazily loaded from icon_path when get_weather_icon() is called

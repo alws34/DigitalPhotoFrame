@@ -6,10 +6,13 @@ import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from typing import TYPE_CHECKING
+
 import requests
 from PIL import Image
 
-from iFrame import iFrame
+if TYPE_CHECKING:
+    from FrameServer.PhotoFrameServer import iFrame
 from Utilities.Weather.weather_icons import WeatherIconResolver
 
 # Basic day/night mapping for a few common AccuWeather ids; extend as needed.
@@ -25,7 +28,7 @@ ACCU_TO_KEY = {
 }
 
 class accuweather_handler:
-    def __init__(self, frame: iFrame, settings: dict):
+    def __init__(self, frame: "iFrame", settings: dict):
         self.Frame = frame
         self.weather_data = {}
         self._icon_image = None
