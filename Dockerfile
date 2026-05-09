@@ -48,7 +48,7 @@ RUN pip install --no-cache-dir -r requirements-docker.txt
 # Copy application code
 ENV PF_DB_PATH=/data/photoframe.db
 
-COPY app.py config.py pyproject.toml ./
+COPY app.py app_modes.py config.py pyproject.toml ./
 COPY FrameServer/ ./FrameServer/
 COPY FrameGUI/ ./FrameGUI/
 COPY WebAPI/ ./WebAPI/
