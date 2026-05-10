@@ -638,6 +638,7 @@ class PhotoFramePygame:
             try:
                 self._osk_proc = subprocess.Popen(
                     [osk_bin],
+                    stdin=subprocess.DEVNULL,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
@@ -654,6 +655,11 @@ class PhotoFramePygame:
         if self._osk_proc is not None:
             try:
                 self._osk_proc.terminate()
+                try:
+                    self._osk_proc.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    self._osk_proc.kill()
+                    self._osk_proc.wait()
             except Exception:
                 pass
             self._osk_proc = None
@@ -680,7 +686,14 @@ class PhotoFramePygame:
         field_label = (self._osk_field_path or "").split(".")[-1].replace("_", " ").title()
         buf_text = f"{field_label}: {display or '_'}"
         buf_surf = self._font_value.render(buf_text[:60], True, (220, 230, 255))
-        panel.blit(buf_surf, ((W - buf_surf.get_width()) // 2, H // 2 - 220))
+
+        key_w = max(40, W // 12)
+        key_h = max(40, H // 14)
+        label_h = self._font_value.get_height()
+        grid_h = 3 * (key_h + 6) + (key_h + 6)  # 3 letter rows + 1 special row
+        start_y = max(label_h + 30, (H - grid_h) // 2)
+
+        panel.blit(buf_surf, ((W - buf_surf.get_width()) // 2, start_y - label_h - 10))
 
         if self._osk_use_subprocess:
             hint = self._font_label.render(
@@ -702,10 +715,6 @@ class PhotoFramePygame:
             return
 
         # Fallback QWERTY grid
-        key_w = max(40, W // 12)
-        key_h = max(40, H // 14)
-        start_y = H // 2 - 100
-
         for row_i, row in enumerate(self._QWERTY_ROWS):
             chars = list(row if self._osk_shift else row.lower())
             row_x = (W - (len(chars) * (key_w + 4))) // 2
@@ -1011,6 +1020,8 @@ class PhotoFramePygame:
                 for p in parts[:-1]:
                     target = target.setdefault(p, {})
                 target[parts[-1]] = self._osk_buffer
+            elif self._osk_buffer:
+                logging.warning("[OSK] confirm with no field path — discarding buffer")
             self._close_osk()
 
         elif action == "osk_cancel":
