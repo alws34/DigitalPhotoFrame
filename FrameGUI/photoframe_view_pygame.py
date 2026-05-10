@@ -1455,13 +1455,7 @@ class PhotoFramePygame:
                 panel.blit(bg, row_r.topleft)
                 pygame.draw.rect(panel, (60, 90, 180, 100), row_r, 1)
 
-                bars = ("▂▄▆█" if signal >= 75 else
-                        "▂▄▆ " if signal >= 50 else
-                        "▂▄  " if signal >= 25 else "▂   ")
-                lock = "🔒 " if secured else "    "
-                ls = self._font_label.render(f"{bars} {lock}{ssid}", True, (210, 225, 245))
-                panel.blit(ls, (pad + 10, row_y + (ROW_H - ls.get_height()) // 2))
-
+                # Draw Connect button first so we know its x position
                 conn_w = max(110, W // 6)
                 conn_r = pygame.Rect(W - pad - conn_w,
                                      row_y + (ROW_H - BTN_H) // 2, conn_w, BTN_H)
@@ -1469,6 +1463,20 @@ class PhotoFramePygame:
                 cs = self._font_label.render("Connect", True, (255, 255, 255))
                 panel.blit(cs, (conn_r.centerx - cs.get_width() // 2,
                                 conn_r.centery - cs.get_height() // 2))
+
+                # Label clipped to the space left of the button
+                bars = ("▂▄▆█" if signal >= 75 else
+                        "▂▄▆ " if signal >= 50 else
+                        "▂▄  " if signal >= 25 else "▂   ")
+                lock = "🔒 " if secured else "    "
+                ls = self._font_label.render(f"{bars} {lock}{ssid}", True, (210, 225, 245))
+                label_x = pad + 10
+                label_y = row_y + (ROW_H - ls.get_height()) // 2
+                max_label_w = conn_r.left - label_x - pad
+                if ls.get_width() > max_label_w:
+                    ls = ls.subsurface((0, 0, max_label_w, ls.get_height()))
+                panel.blit(ls, (label_x, label_y))
+
                 self._ui_rects.append((conn_r, "wifi_connect", ssid))
                 self._ui_rects.append((row_r, "wifi_connect", ssid))
 
