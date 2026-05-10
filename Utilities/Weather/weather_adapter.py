@@ -1,5 +1,8 @@
 import logging
+import os
 from typing import Any, Dict
+
+from Utilities.config_events import on_settings_changed as _on_sc
 
 # Wrap your existing handlers behind a tiny adapter for a common interface.
 from Utilities.Weather.accuweather_handler import accuweather_handler
@@ -9,6 +12,29 @@ from Utilities.Weather.open_meteo_handler import OpenMeteoWeatherHandler
 class WeatherClient:
     def __init__(self, impl: Any) -> None:
         self._impl = impl
+        _on_sc(self._on_settings_changed)
+
+    def _on_settings_changed(self, new_data: dict) -> None:
+        try:
+            if hasattr(self._impl, "settings") and isinstance(self._impl.settings, dict):
+                om = new_data.get("open_meteo", {}) or {}
+                # Merge the full new_data so both AccuWeather and Open-Meteo
+                # keys are available, then overlay the open_meteo sub-section.
+                self._impl.settings.update(new_data)
+                if om:
+                    self._impl.settings["open_meteo"] = om
+            # Delete the on-disk cache so the next fetch uses the new settings.
+            cache_file = getattr(self._impl, "cache_file", None)
+            if cache_file and os.path.exists(cache_file):
+                try:
+                    os.remove(cache_file)
+                except OSError:
+                    pass
+            # Re-enable fetching in case a previous error set the no_weather flag.
+            if hasattr(self._impl, "no_weather"):
+                self._impl.no_weather = False
+        except Exception as e:
+            print(f"[Weather] Hot-reload error: {e}")
 
     def fetch(self) -> None:
         self._impl.fetch_weather_data()
