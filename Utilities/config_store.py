@@ -133,13 +133,15 @@ SETTINGS_SCHEMA: dict = {
         "shallow_ok": {"type": "bool", "label": "Allow Shallow Clone",   "restart_required": False},
     },
     "backend_configs": {
-        "host":           {"type": "str",      "label": "Bind Host",      "restart_required": True},
-        "idle_fps":       {"type": "int",      "label": "Idle FPS",       "min": 1,   "max": 30,    "step": 1,  "restart_required": True},
+        # Network-critical settings first
         "server_port":    {"type": "int",      "label": "Server Port",    "min": 1,   "max": 65535, "step": 1,  "restart_required": True},
+        "host":           {"type": "str",      "label": "Bind Host",      "restart_required": True},
+        "supersecretkey": {"type": "password", "label": "Secret Key",     "restart_required": True},
+        # Stream / performance settings below
         "stream_fps":     {"type": "int",      "label": "Stream FPS",     "min": 1,   "max": 60,    "step": 1,  "restart_required": False},
         "stream_height":  {"type": "int",      "label": "Stream Height",  "min": 100, "max": 4320,  "step": 10, "restart_required": True},
         "stream_width":   {"type": "int",      "label": "Stream Width",   "min": 100, "max": 7680,  "step": 10, "restart_required": True},
-        "supersecretkey": {"type": "password", "label": "Secret Key",     "restart_required": True},
+        "idle_fps":       {"type": "int",      "label": "Idle FPS",       "min": 1,   "max": 30,    "step": 1,  "restart_required": True},
     },
     "effects": {
         "allow_translucent_background": {"type": "bool",  "label": "Translucent Background", "restart_required": False},

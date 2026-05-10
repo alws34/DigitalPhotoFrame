@@ -194,6 +194,12 @@ class PhotoFramePygame:
 
         # Restart prompt overlay
         self._restart_prompt: bool = False
+        self._stop_prompt: bool = False
+
+        # Touch drag-to-scroll tracking
+        self._drag_origin: "tuple[int, int] | None" = None  # original press position
+        self._drag_start: "tuple[int, int] | None" = None   # last position (for delta)
+        self._drag_scrolled: bool = False  # True if total displacement > tap threshold
 
         # Numpad overlay
         self._numpad_active: bool = False
@@ -336,6 +342,9 @@ class PhotoFramePygame:
 
         if self._restart_prompt:
             self._draw_restart_prompt(panel)
+
+        if self._stop_prompt:
+            self._draw_stop_prompt(panel)
 
         self.screen.blit(panel, (0, 0))
 
@@ -520,32 +529,53 @@ class PhotoFramePygame:
 
         panel.set_clip(None)
 
-        # Scroll indicators / buttons
+        # Scroll arrows — full-width tappable bars
+        ARR_H = max(36, self.height // 18)
+        ARR_COLOR = (50, 80, 180, 200)
         if scroll > 0:
-            up = self._font_value.render("^", True, (160, 180, 255))
-            ux, uy = W - pad - up.get_width(), content_top + 4
-            panel.blit(up, (ux, uy))
-            self._ui_rects.append((
-                pygame.Rect(ux - 6, uy, up.get_width() + 12, up.get_height() + 6),
-                "scroll_up", tab_idx,
-            ))
+            up_r = pygame.Rect(pad, content_top, W - pad * 2, ARR_H)
+            pygame.draw.rect(panel, ARR_COLOR, up_r, border_radius=6)
+            up_s = self._font_label.render("▲  scroll up", True, (200, 220, 255))
+            panel.blit(up_s, (up_r.centerx - up_s.get_width() // 2,
+                               up_r.centery - up_s.get_height() // 2))
+            self._ui_rects.append((up_r, "scroll_up", tab_idx))
         if scroll < max_scroll:
-            dn = self._font_value.render("v", True, (160, 180, 255))
-            dx, dy = W - pad - dn.get_width(), content_bottom - dn.get_height() - 4
-            panel.blit(dn, (dx, dy))
-            self._ui_rects.append((
-                pygame.Rect(dx - 6, dy, dn.get_width() + 12, dn.get_height() + 6),
-                "scroll_down", tab_idx,
-            ))
+            dn_r = pygame.Rect(pad, content_bottom - ARR_H, W - pad * 2, ARR_H)
+            pygame.draw.rect(panel, ARR_COLOR, dn_r, border_radius=6)
+            dn_s = self._font_label.render("▼  scroll down", True, (200, 220, 255))
+            panel.blit(dn_s, (dn_r.centerx - dn_s.get_width() // 2,
+                               dn_r.centery - dn_s.get_height() // 2))
+            self._ui_rects.append((dn_r, "scroll_down", tab_idx))
 
-        # Save button
-        save_w    = max(160, W // 5)
-        save_rect = pygame.Rect((W - save_w) // 2, bottom - SAVE_H, save_w, SAVE_H)
-        pygame.draw.rect(panel, (30, 160, 80, 220), save_rect, border_radius=8)
-        sv = self._font_label.render("Save", True, (255, 255, 255))
-        panel.blit(sv, (save_rect.centerx - sv.get_width() // 2,
-                        save_rect.centery  - sv.get_height() // 2))
-        self._ui_rects.append((save_rect, "save", None))
+        # Bottom action bar — System tab gets Save + Restart + Stop; others get Save only
+        btn_y = bottom - SAVE_H
+        is_system_tab = (tab_idx == len(_TABS) - 1)  # System is last tab
+        if is_system_tab:
+            action_w = max(140, W // 6)
+            gap = max(10, W // 40)
+            total_w = action_w * 3 + gap * 2
+            bx = (W - total_w) // 2
+            save_rect    = pygame.Rect(bx,                        btn_y, action_w, SAVE_H)
+            restart_rect = pygame.Rect(bx + action_w + gap,       btn_y, action_w, SAVE_H)
+            stop_rect    = pygame.Rect(bx + (action_w + gap) * 2, btn_y, action_w, SAVE_H)
+            for r, txt, col, act in [
+                (save_rect,    "Save",    (30, 160, 80, 220),   "save"),
+                (restart_rect, "Restart", (200, 120, 30, 220),  "system_restart"),
+                (stop_rect,    "Stop",    (180, 35, 35, 220),   "system_stop"),
+            ]:
+                pygame.draw.rect(panel, col, r, border_radius=8)
+                s = self._font_label.render(txt, True, (255, 255, 255))
+                panel.blit(s, (r.centerx - s.get_width() // 2,
+                               r.centery - s.get_height() // 2))
+                self._ui_rects.append((r, act, None))
+        else:
+            save_w    = max(160, W // 5)
+            save_rect = pygame.Rect((W - save_w) // 2, btn_y, save_w, SAVE_H)
+            pygame.draw.rect(panel, (30, 160, 80, 220), save_rect, border_radius=8)
+            sv = self._font_label.render("Save", True, (255, 255, 255))
+            panel.blit(sv, (save_rect.centerx - sv.get_width() // 2,
+                            save_rect.centery  - sv.get_height() // 2))
+            self._ui_rects.append((save_rect, "save", None))
 
         if _time.monotonic() < self._save_msg_until and self._save_msg:
             col = (100, 255, 150) if "!" in self._save_msg else (255, 140, 100)
@@ -775,6 +805,31 @@ class PhotoFramePygame:
         self._ui_rects.append((restart_r, "restart_confirm", None))
         self._ui_rects.append((later_r,   "restart_later",   None))
 
+    def _draw_stop_prompt(self, panel: "pygame.Surface") -> None:
+        W, H = self.width, self.height
+        overlay = pygame.Surface((W, H), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 180))
+        panel.blit(overlay, (0, 0))
+
+        box_w, box_h = min(600, W - 80), 200
+        box = pygame.Rect((W - box_w) // 2, (H - box_h) // 2, box_w, box_h)
+        pygame.draw.rect(panel, (40, 15, 15, 245), box, border_radius=12)
+        pygame.draw.rect(panel, (220, 60, 60, 180), box, 2, border_radius=12)
+
+        msg = self._font_label.render("Stop the container?", True, (255, 180, 180))
+        panel.blit(msg, (box.centerx - msg.get_width() // 2, box.y + 28))
+
+        btn_w = box_w // 3
+        yes_r = pygame.Rect(box.x + 20,             box.y + 120, btn_w, 52)
+        no_r  = pygame.Rect(box.right - btn_w - 20, box.y + 120, btn_w, 52)
+        for r, txt, col in [(yes_r, "Stop Now", (180, 35, 35, 220)),
+                            (no_r,  "Cancel",   (80, 80, 120, 220))]:
+            pygame.draw.rect(panel, col, r, border_radius=8)
+            s = self._font_label.render(txt, True, (255, 255, 255))
+            panel.blit(s, (r.centerx - s.get_width() // 2, r.centery - s.get_height() // 2))
+        self._ui_rects.append((yes_r, "stop_confirm", None))
+        self._ui_rects.append((no_r,  "stop_cancel",  None))
+
     # ------------------------------------------------------------------
     # Event handling (main thread)
     # ------------------------------------------------------------------
@@ -802,9 +857,32 @@ class PhotoFramePygame:
                     return False
             if event.type == pygame.MOUSEBUTTONDOWN:
                 if self._panel_visible:
-                    self._handle_panel_tap(event.pos)
+                    self._drag_origin = event.pos
+                    self._drag_start = event.pos
+                    self._drag_scrolled = False
                 else:
                     self._handle_triple_tap()
+            if event.type == pygame.MOUSEMOTION and self._panel_visible and self._drag_start is not None:
+                dy = event.pos[1] - self._drag_start[1]
+                if abs(dy) > 3 and self._active_tab > 0:
+                    # Apply incremental scroll for any motion
+                    tab = self._active_tab
+                    self._scroll_offsets[tab] = max(
+                        0, self._scroll_offsets.get(tab, 0) - dy
+                    )
+                    self._drag_start = event.pos
+                    # Only flag as scroll if total displacement from press is large
+                    if self._drag_origin is not None:
+                        total_dy = abs(event.pos[1] - self._drag_origin[1])
+                        if total_dy > 20:
+                            self._drag_scrolled = True
+            if event.type == pygame.MOUSEBUTTONUP:
+                if self._panel_visible and self._drag_origin is not None:
+                    if not self._drag_scrolled:
+                        self._handle_panel_tap(self._drag_origin)
+                    self._drag_origin = None
+                    self._drag_start = None
+                    self._drag_scrolled = False
             if event.type == pygame.MOUSEWHEEL and self._panel_visible:
                 tab = self._active_tab
                 if tab > 0:
@@ -854,10 +932,14 @@ class PhotoFramePygame:
         self._panel_visible   = False
         self._pending_changes = {}
         self._restart_prompt  = False
+        self._stop_prompt     = False
         self._numpad_active   = False
         self._numpad_field_path = None
         self._numpad_buffer   = ""
         self._close_osk()
+        self._drag_origin = None
+        self._drag_start = None
+        self._drag_scrolled = False
 
     # ------------------------------------------------------------------
     # Panel tap dispatch
@@ -868,6 +950,8 @@ class PhotoFramePygame:
             if not rect.collidepoint(px, py):
                 continue
             if self._restart_prompt and action not in ("restart_confirm", "restart_later"):
+                continue
+            if self._stop_prompt and action not in ("stop_confirm", "stop_cancel"):
                 continue
             if self._numpad_active and action not in (
                 "numpad_key", "numpad_back", "numpad_confirm", "numpad_cancel"
@@ -947,6 +1031,21 @@ class PhotoFramePygame:
 
         elif action == "restart_later":
             self._restart_prompt = False
+
+        elif action == "system_restart":
+            import sys
+            python = sys.executable
+            os.execl(python, python, *sys.argv)
+
+        elif action == "system_stop":
+            self._stop_prompt = True
+
+        elif action == "stop_confirm":
+            import sys
+            sys.exit(0)
+
+        elif action == "stop_cancel":
+            self._stop_prompt = False
 
         elif action == "edit_numeric_string":
             path = data
