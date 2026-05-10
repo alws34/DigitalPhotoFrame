@@ -15,14 +15,16 @@ class WeatherClient:
         _on_sc(self._on_settings_changed)
 
     def _on_settings_changed(self, new_data: dict) -> None:
+        if not isinstance(new_data, dict):
+            return
         try:
             if hasattr(self._impl, "settings") and isinstance(self._impl.settings, dict):
                 om = new_data.get("open_meteo", {}) or {}
-                # Merge the full new_data so both AccuWeather and Open-Meteo
-                # keys are available, then overlay the open_meteo sub-section.
-                self._impl.settings.update(new_data)
+                # Atomic replacement avoids torn-state reads from the weather thread.
+                merged = {**self._impl.settings, **new_data}
                 if om:
-                    self._impl.settings["open_meteo"] = om
+                    merged["open_meteo"] = om
+                self._impl.settings = merged
             # Delete the on-disk cache so the next fetch uses the new settings.
             cache_file = getattr(self._impl, "cache_file", None)
             if cache_file and os.path.exists(cache_file):
@@ -30,11 +32,11 @@ class WeatherClient:
                     os.remove(cache_file)
                 except OSError:
                     pass
-            # Re-enable fetching in case a previous error set the no_weather flag.
+            # Re-enable fetching — user changed settings intentionally, so retry.
             if hasattr(self._impl, "no_weather"):
                 self._impl.no_weather = False
         except Exception as e:
-            print(f"[Weather] Hot-reload error: {e}")
+            logging.error("[Weather] Hot-reload error: %s", e, exc_info=True)
 
     def fetch(self) -> None:
         self._impl.fetch_weather_data()

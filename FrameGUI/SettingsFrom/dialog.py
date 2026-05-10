@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json as _json
+import logging
 from typing import Any, Dict
 
 import qrcode
@@ -489,6 +490,12 @@ class SettingsDialog(QtWidgets.QDialog):
 
     def _prompt_restart(self) -> None:
         try:
+            platform_name = (QtWidgets.QApplication.platformName() or "").lower()
+        except Exception:
+            platform_name = ""
+        if platform_name in {"offscreen", "minimal", "linuxfb", "eglfs"}:
+            return
+        try:
             msg = QtWidgets.QMessageBox(self)
             msg.setWindowTitle("Restart Required")
             msg.setText("Some changes require a restart to take effect.\nRestart now?")
@@ -498,8 +505,8 @@ class SettingsDialog(QtWidgets.QDialog):
             msg.exec()
             if msg.clickedButton() is yes:
                 self.vm.restart_service()
-        except Exception as e:
-            print(f"[Settings] Restart prompt error: {e}")
+        except Exception:
+            logging.exception("[Settings] Restart prompt failed")
 
     def _on_hot_reload(self, new_data: dict) -> None:
         self._hot_reload_signal.emit(new_data)
