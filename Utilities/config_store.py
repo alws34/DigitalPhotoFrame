@@ -134,7 +134,7 @@ SETTINGS_SCHEMA: dict = {
     },
     "backend_configs": {
         "host":           {"type": "str",      "label": "Bind Host",      "restart_required": True},
-        "idle_fps":       {"type": "int",      "label": "Idle FPS",       "min": 1,   "max": 30,    "step": 1,  "restart_required": False},
+        "idle_fps":       {"type": "int",      "label": "Idle FPS",       "min": 1,   "max": 30,    "step": 1,  "restart_required": True},
         "server_port":    {"type": "int",      "label": "Server Port",    "min": 1,   "max": 65535, "step": 1,  "restart_required": True},
         "stream_fps":     {"type": "int",      "label": "Stream FPS",     "min": 1,   "max": 60,    "step": 1,  "restart_required": False},
         "stream_height":  {"type": "int",      "label": "Stream Height",  "min": 100, "max": 4320,  "step": 10, "restart_required": True},
@@ -184,6 +184,7 @@ SETTINGS_SCHEMA: dict = {
         "on_hour":          {"type": "int",  "label": "Screen On Hour",  "min": 0, "max": 23,  "step": 1,  "restart_required": False},
         "orientation":      {"type": "int",  "label": "Orientation (°)", "min": 0, "max": 270, "step": 90, "restart_required": False},
         "schedule_enabled": {"type": "bool", "label": "Enable Schedule",                                   "restart_required": False},
+        # "schedules" is a list of per-schedule objects — managed via web UI only, intentionally absent
     },
     "stats": {
         "font_color": {"type": "color", "label": "Font Color", "choices": ["yellow", "white", "red", "green", "blue"], "restart_required": False},
