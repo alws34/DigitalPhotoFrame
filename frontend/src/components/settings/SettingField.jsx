@@ -1,58 +1,114 @@
-import React from "react";
+import React, { useState } from "react";
 
-export default function SettingField({ fieldKey, value, onChange, depth = 0 }) {
-  const label = fieldKey
+export default function SettingField({ fieldKey, fieldPath, value, schema, onChange, depth = 0 }) {
+  const [showPassword, setShowPassword] = useState(false);
+  const ftype = schema?.type ?? null;
+
+  const rawLabel = (schema?.label ?? fieldKey)
     .replace(/_/g, " ")
     .replace(/\b\w/g, (c) => c.toUpperCase());
+  const label = schema?.restart_required ? `${rawLabel} ⚠` : rawLabel;
 
   const labelEl = (
-    <span style={{ color: "var(--text-secondary)", fontSize: "0.85em", minWidth: 160 }}>
+    <span style={{
+      color: "var(--text-secondary)", fontSize: "0.85em", minWidth: 180,
+      display: "flex", alignItems: "center", gap: 4,
+    }}>
       {label}
     </span>
   );
 
   const row = (input) => (
-    <div
-      key={fieldKey}
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 12,
-        padding: "6px 0",
-        paddingLeft: depth * 16,
-      }}
-    >
+    <div style={{
+      display: "flex", alignItems: "center", gap: 12,
+      padding: "6px 0", paddingLeft: depth * 16,
+    }}>
       {labelEl}
       <div style={{ flex: 1 }}>{input}</div>
     </div>
   );
 
-  if (typeof value === "boolean") {
+  if (ftype === "password") {
+    return row(
+      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+        <input
+          type={showPassword ? "text" : "password"}
+          value={value ?? ""}
+          onChange={(e) => onChange(fieldPath, e.target.value)}
+          style={{ flex: 1 }}
+        />
+        <button onClick={() => setShowPassword((p) => !p)} style={{ padding: "2px 8px", fontSize: "0.8em" }}>
+          {showPassword ? "Hide" : "Show"}
+        </button>
+      </div>
+    );
+  }
+
+  if (ftype === "enum" || ftype === "color") {
+    const choices = schema?.choices ?? [];
+    return row(
+      <select value={value ?? ""} onChange={(e) => onChange(fieldPath, e.target.value)}>
+        {choices.map((c) => <option key={c} value={c}>{c}</option>)}
+        {!choices.includes(String(value)) && <option value={value}>{value}</option>}
+      </select>
+    );
+  }
+
+  if (ftype === "numeric_string") {
+    return row(
+      <input
+        type="number"
+        value={value ?? ""}
+        onChange={(e) => onChange(fieldPath, e.target.value)}
+        style={{ maxWidth: 160 }}
+      />
+    );
+  }
+
+  if (typeof value === "boolean" || ftype === "bool") {
     return row(
       <label className="toggle">
         <input
           type="checkbox"
-          checked={value}
-          onChange={(e) => onChange(fieldKey, e.target.checked)}
+          checked={!!value}
+          onChange={(e) => onChange(fieldPath, e.target.checked)}
         />
         <span className="toggle-track" />
       </label>
     );
   }
 
-  if (typeof value === "number") {
-    const isFloat = !Number.isInteger(value);
+  if (typeof value === "number" || ftype === "int" || ftype === "float") {
+    const isFloat = ftype === "float" || (!Number.isInteger(value) && ftype !== "int");
+    const step = schema?.step ?? (isFloat ? 0.01 : 1);
+    const min = schema?.min;
+    const max = schema?.max;
     return row(
-      <input
-        type="number"
-        value={value}
-        step={isFloat ? 0.01 : 1}
-        onChange={(e) => {
-          const v = isFloat ? parseFloat(e.target.value) : parseInt(e.target.value, 10);
-          if (!isNaN(v)) onChange(fieldKey, v);
-        }}
-        style={{ maxWidth: 160 }}
-      />
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        {min !== undefined && max !== undefined && (
+          <input
+            type="range"
+            min={min} max={max} step={step}
+            value={value ?? 0}
+            onChange={(e) => {
+              const v = isFloat ? parseFloat(e.target.value) : parseInt(e.target.value, 10);
+              if (!isNaN(v)) onChange(fieldPath, v);
+            }}
+            style={{ flex: 1 }}
+          />
+        )}
+        <input
+          type="number"
+          value={value ?? 0}
+          step={step}
+          min={min} max={max}
+          onChange={(e) => {
+            const v = isFloat ? parseFloat(e.target.value) : parseInt(e.target.value, 10);
+            if (!isNaN(v)) onChange(fieldPath, v);
+          }}
+          style={{ maxWidth: 100 }}
+        />
+      </div>
     );
   }
 
@@ -61,7 +117,7 @@ export default function SettingField({ fieldKey, value, onChange, depth = 0 }) {
       <input
         type="text"
         value={value}
-        onChange={(e) => onChange(fieldKey, e.target.value)}
+        onChange={(e) => onChange(fieldPath, e.target.value)}
       />
     );
   }
@@ -74,29 +130,16 @@ export default function SettingField({ fieldKey, value, onChange, depth = 0 }) {
           type="text"
           value={value.join(", ")}
           onChange={(e) =>
-            onChange(
-              fieldKey,
-              e.target.value
-                .split(",")
-                .map((s) => s.trim())
-                .filter(Boolean)
-                .map((s) => (isNaN(Number(s)) ? s : Number(s)))
-            )
+            onChange(fieldPath, e.target.value.split(",").map((s) => s.trim()).filter(Boolean)
+              .map((s) => (isNaN(Number(s)) ? s : Number(s))))
           }
         />
       );
     }
     return row(
-      <textarea
-        rows={3}
+      <textarea rows={3}
         value={JSON.stringify(value, null, 2)}
-        onChange={(e) => {
-          try {
-            onChange(fieldKey, JSON.parse(e.target.value));
-          } catch {
-            // ignore invalid JSON while user is typing
-          }
-        }}
+        onChange={(e) => { try { onChange(fieldPath, JSON.parse(e.target.value)); } catch { /* ignore invalid JSON while user is typing */ } }}
         style={{ fontFamily: "monospace", fontSize: "0.8em" }}
       />
     );
