@@ -39,61 +39,6 @@ _TAB_SECTIONS: Dict[int, List[str]] = {
     5: ["system", "autoupdate"],
 }
 
-# Keys never shown (complex, sensitive, read-only strings, or needs keyboard)
-_SKIP_KEYS = frozenset({
-    "supersecretkey", "password", "schedules", "days",
-    "repo_path", "image_path", "log_file_path", "service_name", "image_dir",
-    "host", "text", "version", "client_id", "base_topic", "discovery_prefix",
-    "username", "branch", "remote", "timeformat", "timezone", "date_format",
-    "font_name", "latitude", "longitude",
-})
-
-# String fields that can be cycled through a fixed set of options
-_STRING_CYCLES: Dict[str, List[str]] = {
-    "stats.font_color":             ["yellow", "white", "red", "green", "blue"],
-    "open_meteo.temperature_unit":  ["celsius", "fahrenheit"],
-    "open_meteo.units":             ["metric", "imperial"],
-    "open_meteo.wind_speed_unit":   ["kmh", "mph", "ms", "kn"],
-    "open_meteo.precipitation_unit":["mm", "inch"],
-}
-
-# (step, min, max) overrides; None → skip the field entirely
-_FIELD_CONFIG: Dict[str, Optional[Tuple]] = {
-    "screen.brightness":              (5,    0,   100),
-    "screen.orientation":             (90,   0,   270),  # stored as int (0/90/180/270)
-    "screen.off_hour":                (1,    0,    23),
-    "screen.on_hour":                 (1,    0,    23),
-    "screen.schedule_enabled":        None,   # managed via web UI
-    "playback.animation_duration":    (1,    1,   120),
-    "playback.delay_between_images":  (5,    1,   600),
-    "playback.animation_fps":         (1,    1,    60),
-    "ui.time_font_size":              (5,   10,   300),
-    "ui.date_font_size":              (5,   10,   200),
-    "ui.spacing_between":             (5,    0,   300),
-    "ui.margins.bottom":              (5,    0,   300),
-    "ui.margins.left":                (5,    0,   300),
-    "ui.margins.right":               (5,    0,   300),
-    "ui.text_shadow.alpha":           (5,    0,   255),
-    "ui.text_shadow.blur":            (1,    0,    50),
-    "ui.text_shadow.offset_x":       (1,  -50,    50),
-    "ui.text_shadow.offset_y":       (1,  -50,    50),
-    "stats.font_size":                (2,    8,   100),
-    "effects.background_opacity":     (0.05, 0.0,  1.0),
-    "effects.shadow_opacity":         (0.05, 0.0,  1.0),
-    "effects.background_blur_radius": (2,    0,   200),
-    "effects.shadow_blur_radius":     (2,    0,   200),
-    "open_meteo.cache_ttl_minutes":   (5,    1,  1440),
-    "backend_configs.server_port":    (1,    1, 65535),
-    "backend_configs.stream_fps":     (1,    1,    60),
-    "backend_configs.idle_fps":       (1,    1,    30),
-    "backend_configs.stream_width":   (10,  100,  7680),
-    "backend_configs.stream_height":  (10,  100,  4320),
-    "mqtt.port":                      (1,    1, 65535),
-    "mqtt.interval_seconds":          (1,    1,  3600),
-    "autoupdate.hour":                (1,    0,    23),
-    "autoupdate.minute":              (1,    0,    59),
-    "system.image_quality_encoding":  (5,    1,   100),
-}
 
 
 # ---------------------------------------------------------------------------
@@ -126,53 +71,67 @@ def _deep_update(base: dict, updates: dict) -> None:
             base[key] = val
 
 
+def _collect_dotted_keys(d: dict, prefix: str = "") -> list:
+    keys = []
+    for k, v in d.items():
+        path = f"{prefix}.{k}" if prefix else k
+        if isinstance(v, dict):
+            keys.extend(_collect_dotted_keys(v, path))
+        else:
+            keys.append(path)
+    return keys
+
+
 def _build_fields(settings: dict, sections: List[str]) -> List[tuple]:
     """
-    Return a flat list of field descriptors for the given section keys.
+    Return flat list of field descriptors for the given section keys.
     Each entry is one of:
-      ("header", label_text)                          — non-interactive divider
-      (path, label, ftype, step, fmin, fmax)          — interactive field
+      ("header", label_text)
+      (path, label, ftype, meta)
+        where meta is:
+          for bool:                   None
+          for int/float:              (step, fmin, fmax)
+          for enum/color:             choices_list
+          for str/password/numeric_string: None
     """
+    from Utilities.config_store import get_field_schema
     result: List[tuple] = []
     show_headers = len(sections) > 1
 
     def _recurse(data: dict, prefix: str, depth: int) -> None:
         for key, val in data.items():
-            if key in _SKIP_KEYS:
-                continue
             path = f"{prefix}.{key}"
-
-            # Explicitly skipped paths
-            if path in _FIELD_CONFIG and _FIELD_CONFIG[path] is None:
-                continue
+            schema = get_field_schema(path)
 
             label = "  " * depth + key.replace("_", " ").title()
+            if schema and schema.get("restart_required"):
+                label += " ⚠"
 
-            if isinstance(val, bool):
-                result.append((path, label, bool, None, None, None))
+            if schema is None:
+                # No schema = container node or unregistered field
+                if isinstance(val, dict):
+                    result.append(("header", label))
+                    _recurse(val, path, depth + 1)
+                # skip lists and unregistered leaf values
+                continue
 
-            elif isinstance(val, int):
-                cfg = _FIELD_CONFIG.get(path, (1, -999999, 999999))
-                if cfg is None:
-                    continue
-                result.append((path, label, int, *cfg))
+            ftype = schema["type"]
 
-            elif isinstance(val, float):
-                cfg = _FIELD_CONFIG.get(path, (0.05, -9999.0, 9999.0))
-                if cfg is None:
-                    continue
-                result.append((path, label, float, *cfg))
+            if ftype == "bool":
+                result.append((path, label, "bool", None))
 
-            elif isinstance(val, str):
-                if path in _STRING_CYCLES:
-                    result.append((path, label, "cycle", _STRING_CYCLES[path], None, None))
-                # plain strings skipped (no on-screen keyboard)
+            elif ftype in ("int", "float"):
+                py_type = int if ftype == "int" else float
+                step = schema.get("step", 1 if ftype == "int" else 0.05)
+                fmin = schema.get("min", -999999)
+                fmax = schema.get("max",  999999)
+                result.append((path, label, py_type, (step, fmin, fmax)))
 
-            elif isinstance(val, dict):
-                result.append(("header", label))
-                _recurse(val, path, depth + 1)
+            elif ftype in ("enum", "color"):
+                result.append((path, label, "cycle", schema.get("choices", [])))
 
-            # lists skipped
+            elif ftype in ("str", "password", "numeric_string"):
+                result.append((path, label, ftype, None))
 
     for section_key in sections:
         section_data = settings.get(section_key)
@@ -230,6 +189,9 @@ class PhotoFramePygame:
 
         # Interactive element hit rects: (pygame.Rect, action, data)
         self._ui_rects: List[Tuple[pygame.Rect, str, Any]] = []
+
+        # Restart prompt overlay
+        self._restart_prompt: bool = False
 
         # pygame init
         os.environ.setdefault("SDL_VIDEO_ALLOW_SCREENSAVER", "0")
@@ -350,6 +312,9 @@ class PhotoFramePygame:
         else:
             self._draw_settings_tab(panel, content_top, content_bottom, pad)
 
+        if self._restart_prompt:
+            self._draw_restart_prompt(panel)
+
         self.screen.blit(panel, (0, 0))
 
     # ------------------------------------------------------------------
@@ -443,7 +408,7 @@ class PhotoFramePygame:
                                  (pad, ry + HDR_H), (W - pad, ry + HDR_H), 1)
                 continue
 
-            path, label, ftype, step, fmin, fmax = field
+            path, label, ftype, meta = field
             row_h  = ROW_H + 4
             row_y  = y_cursor
             y_cursor += row_h
@@ -464,8 +429,8 @@ class PhotoFramePygame:
             btn_y   = row_y + (ROW_H - btn_h) // 2
             right_x = W - pad
 
-            if ftype is bool:
-                cur   = bool(val) if val is not None else False
+            if ftype == "bool":
+                cur = bool(_get_nested(merged, path, False))
                 tgl_w = max(72, self.height // 14)
                 tgl   = pygame.Rect(right_x - tgl_w, btn_y, tgl_w, btn_h)
                 pygame.draw.rect(panel,
@@ -477,7 +442,7 @@ class PhotoFramePygame:
                 self._ui_rects.append((tgl, "toggle", path))
 
             elif ftype == "cycle":
-                choices = step
+                choices = meta
                 cur_str = str(val) if val is not None else (choices[0] if choices else "")
                 next_r  = pygame.Rect(right_x - BTN_W, btn_y, BTN_W, btn_h)
                 vw      = VAL_W + 16
@@ -497,11 +462,24 @@ class PhotoFramePygame:
                 panel.blit(vs, (val_r.centerx - vs.get_width() // 2,
                                 val_r.centery  - vs.get_height() // 2))
 
+            elif ftype in ("str", "password", "numeric_string"):
+                cur_str = str(_get_nested(merged, path, ""))
+                display = ("*" * min(len(cur_str), 16)) if ftype == "password" else cur_str
+                val_surf = self._font_value.render(display[:24] or "(tap to edit)", True, (200, 230, 255))
+                tap_w = max(200, W // 4)
+                tap_r = pygame.Rect(right_x - tap_w, btn_y, tap_w, btn_h)
+                pygame.draw.rect(panel, (40, 60, 140, 220), tap_r, border_radius=6)
+                panel.blit(val_surf, (tap_r.centerx - val_surf.get_width() // 2,
+                                      tap_r.centery - val_surf.get_height() // 2))
+                self._ui_rects.append((tap_r, f"edit_{ftype}", path))
+
             else:  # int or float — +/- buttons
+                step, fmin, fmax = meta
+                py_type = ftype  # already int or float class
                 try:
-                    cur_num = ftype(val) if val is not None else ftype(0)
+                    cur_num = py_type(_get_nested(merged, path, 0))
                 except Exception:
-                    cur_num = ftype(0)
+                    cur_num = py_type(0)
                 plus_r  = pygame.Rect(right_x - BTN_W, btn_y, BTN_W, btn_h)
                 val_r   = pygame.Rect(plus_r.left - VAL_W - 4, btn_y, VAL_W, btn_h)
                 minus_r = pygame.Rect(val_r.left  - BTN_W - 4, btn_y, BTN_W, btn_h)
@@ -511,12 +489,12 @@ class PhotoFramePygame:
                     panel.blit(s, (r.centerx - s.get_width() // 2,
                                    r.centery  - s.get_height() // 2))
                 pygame.draw.rect(panel, (15, 22, 50, 200), val_r)
-                v_text = f"{cur_num:.2f}" if ftype is float else str(int(cur_num))
+                v_text = f"{cur_num:.2f}" if py_type is float else str(int(cur_num))
                 vs = self._font_value.render(v_text, True, (200, 230, 255))
                 panel.blit(vs, (val_r.centerx - vs.get_width() // 2,
                                 val_r.centery  - vs.get_height() // 2))
-                self._ui_rects.append((minus_r, "dec", (path, ftype, step, fmin, fmax)))
-                self._ui_rects.append((plus_r,  "inc", (path, ftype, step, fmin, fmax)))
+                self._ui_rects.append((minus_r, "dec", (path, py_type, step, fmin, fmax)))
+                self._ui_rects.append((plus_r,  "inc", (path, py_type, step, fmin, fmax)))
 
         panel.set_clip(None)
 
@@ -552,6 +530,34 @@ class PhotoFramePygame:
             msg = self._font_label.render(self._save_msg, True, col)
             panel.blit(msg, (save_rect.right + 8,
                              save_rect.centery - msg.get_height() // 2))
+
+    # ------------------------------------------------------------------
+    # Restart prompt overlay
+    # ------------------------------------------------------------------
+    def _draw_restart_prompt(self, panel: "pygame.Surface") -> None:
+        W, H = self.width, self.height
+        overlay = pygame.Surface((W, H), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 180))
+        panel.blit(overlay, (0, 0))
+
+        box_w, box_h = min(600, W - 80), 200
+        box = pygame.Rect((W - box_w) // 2, (H - box_h) // 2, box_w, box_h)
+        pygame.draw.rect(panel, (20, 28, 60, 245), box, border_radius=12)
+        pygame.draw.rect(panel, (60, 110, 255, 180), box, 2, border_radius=12)
+
+        msg = self._font_label.render("Some changes need a restart.", True, (220, 225, 255))
+        panel.blit(msg, (box.centerx - msg.get_width() // 2, box.y + 28))
+
+        btn_w = box_w // 3
+        restart_r = pygame.Rect(box.x + 20,             box.y + 120, btn_w, 52)
+        later_r   = pygame.Rect(box.right - btn_w - 20, box.y + 120, btn_w, 52)
+        for r, txt, col in [(restart_r, "Restart Now", (30, 160, 80, 220)),
+                            (later_r,   "Later",        (80, 80, 120, 220))]:
+            pygame.draw.rect(panel, col, r, border_radius=8)
+            s = self._font_label.render(txt, True, (255, 255, 255))
+            panel.blit(s, (r.centerx - s.get_width() // 2, r.centery - s.get_height() // 2))
+        self._ui_rects.append((restart_r, "restart_confirm", None))
+        self._ui_rects.append((later_r,   "restart_later",   None))
 
     # ------------------------------------------------------------------
     # Event handling (main thread)
@@ -690,16 +696,32 @@ class PhotoFramePygame:
             ROW_H = max(46, self.height // 16)
             self._scroll_offsets[tab] = self._scroll_offsets.get(tab, 0) + ROW_H
 
+        elif action == "restart_confirm":
+            self._restart_prompt = False
+            import sys
+            python = sys.executable
+            os.execl(python, python, *sys.argv)
+
+        elif action == "restart_later":
+            self._restart_prompt = False
+
+        elif action in ("edit_str", "edit_password", "edit_numeric_string"):
+            pass  # OSK/numpad implemented in Tasks 6-7
+
     def _save_settings(self) -> None:
         try:
-            from Utilities.config_store import load_settings, save_settings
             from Utilities.config_events import notify_settings_changed
+            from Utilities.config_store import load_settings, save_settings
             current = load_settings()
             _deep_update(current, self._pending_changes)
             save_settings(current)
             # Fire callbacks immediately — don't wait for watchdog
             notify_settings_changed(current)
-            self._live_settings   = current
+            self._live_settings = current
+            from Utilities.config_store import get_restart_required_paths
+            changed = set(_collect_dotted_keys(self._pending_changes))
+            if changed & get_restart_required_paths():
+                self._restart_prompt = True
             self._pending_changes = {}
             # Rebuild field lists to reflect saved values
             for tab_idx, sections in _TAB_SECTIONS.items():
