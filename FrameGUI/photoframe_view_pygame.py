@@ -193,6 +193,11 @@ class PhotoFramePygame:
         # Restart prompt overlay
         self._restart_prompt: bool = False
 
+        # Numpad overlay
+        self._numpad_active: bool = False
+        self._numpad_field_path: "str | None" = None
+        self._numpad_buffer: str = ""
+
         # pygame init
         os.environ.setdefault("SDL_VIDEO_ALLOW_SCREENSAVER", "0")
         pygame.init()
@@ -311,6 +316,9 @@ class PhotoFramePygame:
             self._draw_qr_tab(panel, content_top, content_bottom, pad)
         else:
             self._draw_settings_tab(panel, content_top, content_bottom, pad)
+
+        if self._numpad_active:
+            self._draw_numpad(panel)
 
         if self._restart_prompt:
             self._draw_restart_prompt(panel)
@@ -532,6 +540,67 @@ class PhotoFramePygame:
                              save_rect.centery - msg.get_height() // 2))
 
     # ------------------------------------------------------------------
+    # Numpad overlay
+    # ------------------------------------------------------------------
+    def _draw_numpad(self, panel: "pygame.Surface") -> None:
+        W, H = self.width, self.height
+        pad = 16
+
+        dim = pygame.Surface((W, H), pygame.SRCALPHA)
+        dim.fill((0, 0, 0, 190))
+        panel.blit(dim, (0, 0))
+
+        keys = [
+            ["7", "8", "9"],
+            ["4", "5", "6"],
+            ["1", "2", "3"],
+            [".", "0", "-"],
+        ]
+        action_row_labels = ["←", "✓", "✗"]
+        action_row_acts   = ["numpad_back", "numpad_confirm", "numpad_cancel"]
+        action_row_colors = [(80, 60, 60, 230), (30, 140, 70, 230), (140, 40, 40, 230)]
+
+        btn_size = max(80, min(H // 8, W // 6))
+        h_gap, v_gap = pad // 2, pad // 2
+        grid_w = btn_size * 3 + h_gap * 2
+        grid_h = btn_size * 5 + v_gap * 4
+        gx = (W - grid_w) // 2
+        gy = (H - grid_h) // 2
+
+        field_label = (self._numpad_field_path or "").split(".")[-1].replace("_", " ").title()
+        buf_surf = self._font_value.render(
+            f"{field_label}: {self._numpad_buffer or '_'}", True, (220, 230, 255)
+        )
+        panel.blit(buf_surf, (gx, gy - buf_surf.get_height() - pad))
+
+        for row_i, row in enumerate(keys):
+            for col_i, key_label in enumerate(row):
+                r = pygame.Rect(
+                    gx + col_i * (btn_size + h_gap),
+                    gy + row_i * (btn_size + v_gap),
+                    btn_size, btn_size,
+                )
+                pygame.draw.rect(panel, (40, 60, 150, 230), r, border_radius=10)
+                pygame.draw.rect(panel, (80, 120, 255, 150), r, 2, border_radius=10)
+                s = self._font_value.render(key_label, True, (255, 255, 255))
+                panel.blit(s, (r.centerx - s.get_width() // 2, r.centery - s.get_height() // 2))
+                self._ui_rects.append((r, "numpad_key", key_label))
+
+        action_y = gy + 4 * (btn_size + v_gap)
+        for col_i, (act_label, act, color) in enumerate(
+            zip(action_row_labels, action_row_acts, action_row_colors)
+        ):
+            r = pygame.Rect(
+                gx + col_i * (btn_size + h_gap),
+                action_y,
+                btn_size, btn_size,
+            )
+            pygame.draw.rect(panel, color, r, border_radius=10)
+            s = self._font_value.render(act_label, True, (255, 255, 255))
+            panel.blit(s, (r.centerx - s.get_width() // 2, r.centery - s.get_height() // 2))
+            self._ui_rects.append((r, act, None))
+
+    # ------------------------------------------------------------------
     # Restart prompt overlay
     # ------------------------------------------------------------------
     def _draw_restart_prompt(self, panel: "pygame.Surface") -> None:
@@ -628,6 +697,9 @@ class PhotoFramePygame:
         self._panel_visible   = False
         self._pending_changes = {}
         self._restart_prompt  = False
+        self._numpad_active   = False
+        self._numpad_field_path = None
+        self._numpad_buffer   = ""
 
     # ------------------------------------------------------------------
     # Panel tap dispatch
@@ -638,6 +710,10 @@ class PhotoFramePygame:
             if not rect.collidepoint(px, py):
                 continue
             if self._restart_prompt and action not in ("restart_confirm", "restart_later"):
+                continue
+            if self._numpad_active and action not in (
+                "numpad_key", "numpad_back", "numpad_confirm", "numpad_cancel"
+            ):
                 continue
             self._dispatch(action, data)
             return
@@ -709,8 +785,39 @@ class PhotoFramePygame:
         elif action == "restart_later":
             self._restart_prompt = False
 
-        elif action in ("edit_str", "edit_password", "edit_numeric_string"):
-            pass  # OSK/numpad implemented in Tasks 6-7
+        elif action == "edit_numeric_string":
+            path = data
+            merged: dict = {}
+            _deep_update(merged, self._live_settings)
+            _deep_update(merged, self._pending_changes)
+            self._numpad_field_path = path
+            self._numpad_buffer = str(_get_nested(merged, path, ""))
+            self._numpad_active = True
+
+        elif action == "numpad_key":
+            self._numpad_buffer += data  # data is the key label ("0"-"9", ".", "-")
+
+        elif action == "numpad_back":
+            self._numpad_buffer = self._numpad_buffer[:-1]
+
+        elif action == "numpad_confirm":
+            if self._numpad_field_path:
+                parts = self._numpad_field_path.split(".")
+                target = self._pending_changes
+                for p in parts[:-1]:
+                    target = target.setdefault(p, {})
+                target[parts[-1]] = self._numpad_buffer
+            self._numpad_active = False
+            self._numpad_field_path = None
+            self._numpad_buffer = ""
+
+        elif action == "numpad_cancel":
+            self._numpad_active = False
+            self._numpad_field_path = None
+            self._numpad_buffer = ""
+
+        elif action in ("edit_str", "edit_password"):
+            pass  # OSK implemented in Task 7
 
     def _save_settings(self) -> None:
         try:
