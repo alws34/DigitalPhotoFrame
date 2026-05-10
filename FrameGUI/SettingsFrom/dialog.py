@@ -13,6 +13,27 @@ from .viewmodel import SettingsViewModel
 from .widgets import Sparkline
 
 
+def _apply_pending(base: dict, changes: dict) -> None:
+    """Recursively merge changes into base in-place."""
+    for k, v in changes.items():
+        if isinstance(v, dict) and isinstance(base.get(k), dict):
+            _apply_pending(base[k], v)
+        else:
+            base[k] = v
+
+
+def _collect_paths(d: dict, prefix: str = "") -> set:
+    """Return set of all dotted leaf paths in a nested dict."""
+    paths = set()
+    for k, v in d.items():
+        path = f"{prefix}.{k}" if prefix else k
+        if isinstance(v, dict):
+            paths |= _collect_paths(v, path)
+        else:
+            paths.add(path)
+    return paths
+
+
 class SettingsModel:
     """Thin model wrapper around the settings dict + helpers."""
     def __init__(self, settings: Dict[str, Any], settings_path: str | None = None):
@@ -366,28 +387,51 @@ class SettingsDialog(QtWidgets.QDialog):
             self._tabs.addTab(self._wrap_scroll(widget), tab_label)
 
     def _build_section_widget(self, section: dict, parent_key: str) -> QtWidgets.QWidget:
+        from Utilities.config_store import get_field_schema
         widget = QtWidgets.QWidget()
         form = QtWidgets.QFormLayout(widget)
         form.setRowWrapPolicy(QtWidgets.QFormLayout.WrapLongRows)
         for key, value in section.items():
+            schema = get_field_schema(f"{parent_key}.{key}")
             label = key.replace("_", " ").title()
+            if schema and schema.get("restart_required"):
+                label += " ⚠"
             input_widget = self._make_input_widget(key, value, parent_key)
             if input_widget:
                 form.addRow(label, input_widget)
         return widget
 
     def _make_input_widget(self, key: str, value, parent_key: str) -> QtWidgets.QWidget | None:
-        def on_bool(state, k=key, pk=parent_key):
-            self._pending_changes.setdefault(pk, {})[k] = bool(state)
+        from Utilities.config_store import get_field_schema
+        schema = get_field_schema(f"{parent_key}.{key}")
+        ftype = schema["type"] if schema else None
 
-        def on_int(val, k=key, pk=parent_key):
-            self._pending_changes.setdefault(pk, {})[k] = int(val)
+        def _set_change(key, value, parent_key=parent_key):
+            parts = parent_key.split(".")
+            target = self._pending_changes
+            for p in parts:
+                target = target.setdefault(p, {})
+            target[key] = value
 
-        def on_float(val, k=key, pk=parent_key):
-            self._pending_changes.setdefault(pk, {})[k] = float(val)
+        def on_bool(state, k=key):   _set_change(k, bool(state))
+        def on_int(val,   k=key):    _set_change(k, int(val))
+        def on_float(val, k=key):    _set_change(k, float(val))
+        def on_str(text,  k=key):    _set_change(k, text)
 
-        def on_str(text, k=key, pk=parent_key):
-            self._pending_changes.setdefault(pk, {})[k] = text
+        if ftype == "password":
+            w = QtWidgets.QLineEdit(str(value))
+            w.setEchoMode(QtWidgets.QLineEdit.Password)
+            w.textChanged.connect(on_str)
+            return w
+
+        if ftype in ("enum", "color"):
+            choices = schema.get("choices", [str(value)])
+            w = QtWidgets.QComboBox()
+            w.addItems(choices)
+            if str(value) in choices:
+                w.setCurrentText(str(value))
+            w.currentTextChanged.connect(on_str)
+            return w
 
         if isinstance(value, bool):
             w = QtWidgets.QCheckBox()
@@ -427,22 +471,35 @@ class SettingsDialog(QtWidgets.QDialog):
         return w
 
     def _save_settings(self) -> None:
-        from Utilities.config_store import load_settings, save_settings
+        from Utilities.config_store import (
+            get_restart_required_paths,
+            load_settings,
+            save_settings,
+        )
         current = load_settings()
-        for section_key, changes in self._pending_changes.items():
-            if "." in section_key:
-                parts = section_key.split(".")
-                target = current
-                for part in parts[:-1]:
-                    target = target.setdefault(part, {})
-                target[parts[-1]] = changes
-            else:
-                if isinstance(current.get(section_key), dict):
-                    current[section_key].update(changes)
-                else:
-                    current[section_key] = changes
+        _apply_pending(current, self._pending_changes)
         save_settings(current)
+
+        changed_paths = _collect_paths(self._pending_changes)
         self._pending_changes.clear()
+
+        rr = get_restart_required_paths()
+        if changed_paths & rr:
+            self._prompt_restart()
+
+    def _prompt_restart(self) -> None:
+        try:
+            msg = QtWidgets.QMessageBox(self)
+            msg.setWindowTitle("Restart Required")
+            msg.setText("Some changes require a restart to take effect.\nRestart now?")
+            msg.setIcon(QtWidgets.QMessageBox.Question)
+            yes = msg.addButton("Restart Now", QtWidgets.QMessageBox.AcceptRole)
+            msg.addButton("Later", QtWidgets.QMessageBox.RejectRole)
+            msg.exec()
+            if msg.clickedButton() is yes:
+                self.vm.restart_service()
+        except Exception as e:
+            print(f"[Settings] Restart prompt error: {e}")
 
     def _on_hot_reload(self, new_data: dict) -> None:
         self._hot_reload_signal.emit(new_data)
