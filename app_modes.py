@@ -51,6 +51,7 @@ def _run_headless(settings: Dict[str, Any], settings_path: str,
                            images_dir=images_dir, settings_path=settings_path)
 
     backend = APIServer(frame=srv, image_dir=images_dir)
+    backend.set_restart_fn(_restart_program)
     backend.updater = updater
 
     threading.Thread(target=backend.start, daemon=True).start()
@@ -92,6 +93,7 @@ def _run_pygame(settings: Dict[str, Any], settings_path: str) -> None:
 
     # Start Flask backend
     backend = APIServer(frame=srv, image_dir=images_dir)
+    backend.set_restart_fn(_restart_program)
     threading.Thread(target=backend.start, daemon=True).start()
     srv.m_api = backend
 
@@ -235,6 +237,7 @@ def _run_gui(settings: Dict[str, Any], settings_path: str) -> None:
                            images_dir=images_dir, settings_path=settings_path)
 
     backend = APIServer(frame=srv, image_dir=images_dir)
+    backend.set_restart_fn(_restart_program)
     threading.Thread(target=backend.start, daemon=True).start()
     srv.m_api = backend
 

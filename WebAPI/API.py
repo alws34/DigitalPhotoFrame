@@ -614,8 +614,12 @@ class APIServer:
     # Routes
     # -----------------------------------------------------------------
 
+    def set_restart_fn(self, fn) -> None:
+        self.app.config["restart_fn"] = fn
+
     def setup_routes(self):
         self.app.config['backend'] = self
+        self.app.config['restart_fn'] = None
         
         # --- RFC 9457 Error Handlers ---
         @self.app.errorhandler(HTTPException)
@@ -646,13 +650,15 @@ class APIServer:
 
         from WebAPI.routes.auth import auth_bp
         from WebAPI.routes.images import images_bp
+        from WebAPI.routes.maintenance import maintenance_bp
         from WebAPI.routes.settings import settings_bp
         from WebAPI.routes.stream import stream_bp
-        
+
         self.app.register_blueprint(auth_bp)
         self.app.register_blueprint(settings_bp)
         self.app.register_blueprint(images_bp)
         self.app.register_blueprint(stream_bp)
+        self.app.register_blueprint(maintenance_bp)
         
         @self.app.route('/', defaults={'path': ''})
         @self.app.route('/<path:path>')

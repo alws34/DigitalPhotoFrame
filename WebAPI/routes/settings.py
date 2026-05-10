@@ -10,6 +10,8 @@ from flask import (
     stream_with_context,
 )
 
+from Utilities.config_store import SETTINGS_SCHEMA
+
 settings_bp = Blueprint('settings_bp', __name__, url_prefix='/api/settings')
 
 _sse_clients: list[queue.Queue] = []
@@ -47,6 +49,11 @@ def get_settings():
         return jsonify(data)
     except Exception as e:
         return jsonify({"error": "Failed to read settings", "details": str(e)}), 500
+
+@settings_bp.route("/schema", methods=["GET"], strict_slashes=False)
+def get_schema():
+    return jsonify(SETTINGS_SCHEMA)
+
 
 @settings_bp.route("/", methods=["POST"], strict_slashes=False)
 def update_settings():
