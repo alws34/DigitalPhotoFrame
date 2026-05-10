@@ -627,6 +627,7 @@ class PhotoFramePygame:
     def _close_panel(self) -> None:
         self._panel_visible   = False
         self._pending_changes = {}
+        self._restart_prompt  = False
 
     # ------------------------------------------------------------------
     # Panel tap dispatch
@@ -634,9 +635,12 @@ class PhotoFramePygame:
     def _handle_panel_tap(self, pos: Tuple[int, int]) -> None:
         px, py = pos
         for rect, action, data in self._ui_rects:
-            if rect.collidepoint(px, py):
-                self._dispatch(action, data)
-                return
+            if not rect.collidepoint(px, py):
+                continue
+            if self._restart_prompt and action not in ("restart_confirm", "restart_later"):
+                continue
+            self._dispatch(action, data)
+            return
 
     def _dispatch(self, action: str, data: Any) -> None:
         if action == "close":
