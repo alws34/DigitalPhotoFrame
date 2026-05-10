@@ -560,12 +560,14 @@ class PhotoFramePygame:
         action_row_acts   = ["numpad_back", "numpad_confirm", "numpad_cancel"]
         action_row_colors = [(80, 60, 60, 230), (30, 140, 70, 230), (140, 40, 40, 230)]
 
-        btn_size = max(80, min(H // 8, W // 6))
+        btn_size = max(50, min(H // 8, W // 6))
         h_gap, v_gap = pad // 2, pad // 2
         grid_w = btn_size * 3 + h_gap * 2
         grid_h = btn_size * 5 + v_gap * 4
         gx = (W - grid_w) // 2
-        gy = (H - grid_h) // 2
+        # Reserve space for the buffer label above the grid
+        label_h = self._font_value.get_height() + pad
+        gy = max(label_h, (H - grid_h) // 2)
 
         field_label = (self._numpad_field_path or "").split(".")[-1].replace("_", " ").title()
         buf_surf = self._font_value.render(
@@ -795,21 +797,35 @@ class PhotoFramePygame:
             self._numpad_active = True
 
         elif action == "numpad_key":
-            self._numpad_buffer += data  # data is the key label ("0"-"9", ".", "-")
+            ch = data
+            buf = self._numpad_buffer
+            if ch == ".":
+                if "." not in buf:  # only one decimal point
+                    self._numpad_buffer += ch
+            elif ch == "-":
+                if not buf:  # minus only at position 0
+                    self._numpad_buffer += ch
+            else:
+                self._numpad_buffer += ch
 
         elif action == "numpad_back":
             self._numpad_buffer = self._numpad_buffer[:-1]
 
         elif action == "numpad_confirm":
-            if self._numpad_field_path:
-                parts = self._numpad_field_path.split(".")
-                target = self._pending_changes
-                for p in parts[:-1]:
-                    target = target.setdefault(p, {})
-                target[parts[-1]] = self._numpad_buffer
-            self._numpad_active = False
-            self._numpad_field_path = None
-            self._numpad_buffer = ""
+            try:
+                float(self._numpad_buffer)  # raises if empty or invalid
+            except ValueError:
+                pass  # stay open, don't commit
+            else:
+                if self._numpad_field_path:
+                    parts = self._numpad_field_path.split(".")
+                    target = self._pending_changes
+                    for p in parts[:-1]:
+                        target = target.setdefault(p, {})
+                    target[parts[-1]] = self._numpad_buffer
+                self._numpad_active = False
+                self._numpad_field_path = None
+                self._numpad_buffer = ""
 
         elif action == "numpad_cancel":
             self._numpad_active = False
