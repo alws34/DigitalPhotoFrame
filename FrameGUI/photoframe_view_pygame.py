@@ -217,6 +217,7 @@ class PhotoFramePygame:
         self._osk_proc: "subprocess.Popen | None" = None
         self._osk_use_subprocess: bool = False
         self._osk_shift: bool = False
+        self._osk_sym_mode: bool = False
         self._osk_label: str = ""
         self._osk_target: str = "field"  # "field" or "wifi"
 
@@ -780,87 +781,134 @@ class PhotoFramePygame:
         self._osk_buffer = ""
         self._osk_masked = False
         self._osk_shift = False
+        self._osk_sym_mode = False
         self._osk_label = ""
         self._osk_target = "field"
 
     # ------------------------------------------------------------------
     # OSK overlay
     # ------------------------------------------------------------------
-    _QWERTY_ROWS = ["QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM"]
+    _QWERTY_ROWS  = ["QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM"]
+    _OSK_NUM_ROW  = "1234567890"
+    _OSK_SYM_NUM  = "!@#$%^&*()"   # shift variant of number row
+    _OSK_SYM_ROWS = [               # symbols page — 10 chars per row
+        "-_=+[]{}|\\",
+        ";:'\",./~`^",
+        "<>()@#$%&*",
+    ]
 
     def _draw_osk_overlay(self, panel: "pygame.Surface") -> None:
         W, H = self.width, self.height
+        panel.set_clip(None)  # clear any stale clip from settings tab
 
-        dim = pygame.Surface((W, H), pygame.SRCALPHA)
-        dim.fill((0, 0, 0, 200))
-        panel.blit(dim, (0, 0))
+        GAP   = 4
+        # Scale key sizes with screen; keep them usable on small and large displays
+        key_h = max(40, min(H // 8, 88))
+        key_w = max(44, min(W // 11, 100))
+        label_h = self._font_value.get_height()
 
-        display = ("*" * len(self._osk_buffer)) if self._osk_masked else self._osk_buffer
+        n_rows = 4 if not self._osk_sym_mode else 3   # content rows
+        ctrl_h = key_h                                  # control row
+        grid_h = n_rows * (key_h + GAP) + ctrl_h + GAP * 2
+
+        # Keyboard box anchored to the bottom; input label sits above it
+        box_top = H - grid_h - 8
+        input_y = box_top - label_h - 12
+
+        # Solid keyboard background (covers any settings content underneath)
+        pygame.draw.rect(panel, (8, 12, 32, 255),
+                         pygame.Rect(0, input_y - 8, W, H - input_y + 8))
+        pygame.draw.line(panel, (60, 100, 255, 200),
+                         (0, input_y - 8), (W, input_y - 8), 2)
+
+        # Input display
+        display    = ("*" * len(self._osk_buffer)) if self._osk_masked else self._osk_buffer
         field_label = self._osk_label or (
             (self._osk_field_path or "").split(".")[-1].replace("_", " ").title()
         )
-        buf_text = f"{field_label}: {display or '_'}"
-        buf_surf = self._font_value.render(buf_text[:60], True, (220, 230, 255))
-
-        key_w = max(40, W // 12)
-        key_h = max(40, H // 14)
-        label_h = self._font_value.get_height()
-        grid_h = 3 * (key_h + 6) + (key_h + 6)  # 3 letter rows + 1 special row
-        start_y = max(label_h + 30, (H - grid_h) // 2)
-
-        panel.blit(buf_surf, ((W - buf_surf.get_width()) // 2, start_y - label_h - 10))
+        buf_surf = self._font_value.render(
+            f"{field_label}: {display or '_'}"[:60], True, (220, 230, 255)
+        )
+        panel.blit(buf_surf, ((W - buf_surf.get_width()) // 2, input_y))
 
         if self._osk_use_subprocess:
             hint = self._font_label.render(
                 "Type on keyboard  •  Enter = confirm  •  Esc = cancel",
                 True, (160, 180, 220),
             )
-            panel.blit(hint, ((W - hint.get_width()) // 2, H // 2 - 160))
+            panel.blit(hint, ((W - hint.get_width()) // 2, box_top + 20))
             btn_w = 160
-            for bx, label, act in [
+            for bx, lbl, act in [
                 (W // 2 - btn_w - 10, "Confirm", "osk_confirm"),
                 (W // 2 + 10,          "Cancel",  "osk_cancel"),
             ]:
-                r = pygame.Rect(bx, H // 2 - 100, btn_w, 52)
+                r = pygame.Rect(bx, box_top + 80, btn_w, key_h)
                 col = (30, 140, 70, 230) if act == "osk_confirm" else (140, 40, 40, 230)
                 pygame.draw.rect(panel, col, r, border_radius=8)
-                s = self._font_label.render(label, True, (255, 255, 255))
+                s = self._font_label.render(lbl, True, (255, 255, 255))
                 panel.blit(s, (r.centerx - s.get_width() // 2, r.centery - s.get_height() // 2))
                 self._ui_rects.append((r, act, None))
             return
 
-        # Fallback QWERTY grid
-        for row_i, row in enumerate(self._QWERTY_ROWS):
-            chars = list(row if self._osk_shift else row.lower())
-            row_x = (W - (len(chars) * (key_w + 4))) // 2
-            for col_i, ch in enumerate(chars):
-                r = pygame.Rect(row_x + col_i * (key_w + 4), start_y + row_i * (key_h + 6), key_w, key_h)
-                pygame.draw.rect(panel, (40, 60, 150, 230), r, border_radius=7)
+        def _draw_row(chars: list, y: int, bg: tuple) -> None:
+            row_w = len(chars) * (key_w + GAP) - GAP
+            rx    = (W - row_w) // 2
+            for i, ch in enumerate(chars):
+                r = pygame.Rect(rx + i * (key_w + GAP), y, key_w, key_h)
+                pygame.draw.rect(panel, bg, r, border_radius=6)
                 s = self._font_label.render(ch, True, (255, 255, 255))
-                panel.blit(s, (r.centerx - s.get_width() // 2, r.centery - s.get_height() // 2))
+                panel.blit(s, (r.centerx - s.get_width() // 2,
+                               r.centery - s.get_height() // 2))
                 self._ui_rects.append((r, "osk_char", ch))
 
-        bottom_y = start_y + 3 * (key_h + 6)
-        specials = [
-            ("Shift", key_w * 2, "osk_shift"),
-            ("Space", key_w * 4, "osk_space"),
-            ("<-",    key_w,     "osk_back"),
-            ("OK",    key_w,     "osk_confirm"),
-            ("X",     key_w,     "osk_cancel"),
-        ]
-        bx = (W - sum(w + 6 for _, w, _ in specials)) // 2
-        for label, btn_w_sp, act in specials:
-            r = pygame.Rect(bx, bottom_y, btn_w_sp, key_h)
+        y = box_top + GAP
+        if self._osk_sym_mode:
+            for sym_row in self._OSK_SYM_ROWS:
+                _draw_row(list(sym_row), y, (30, 50, 120, 255))
+                y += key_h + GAP
+        else:
+            num_chars = list(self._OSK_SYM_NUM if self._osk_shift else self._OSK_NUM_ROW)
+            _draw_row(num_chars, y, (20, 35, 90, 255))   # darker tint = numbers
+            y += key_h + GAP
+            for row in self._QWERTY_ROWS:
+                chars = list(row if self._osk_shift else row.lower())
+                _draw_row(chars, y, (40, 60, 150, 255))
+                y += key_h + GAP
+
+        # Control row — sized to fit the screen width exactly
+        if self._osk_sym_mode:
+            specials = [
+                ("ABC",   key_w * 2, "osk_sym_toggle"),
+                ("Space", key_w * 4, "osk_space"),
+                ("←", key_w,    "osk_back"),
+                ("OK",    key_w,     "osk_confirm"),
+                ("X",     key_w,     "osk_cancel"),
+            ]
+        else:
+            specials = [
+                ("Shift", key_w * 2, "osk_shift"),
+                ("?123",  key_w * 2, "osk_sym_toggle"),
+                ("Space", key_w * 3, "osk_space"),
+                ("←", key_w,    "osk_back"),
+                ("OK",    key_w,     "osk_confirm"),
+                ("X",     key_w,     "osk_cancel"),
+            ]
+        total_w = sum(w for _, w, _ in specials) + GAP * (len(specials) - 1)
+        bx = (W - total_w) // 2
+        for lbl, btn_w_sp, act in specials:
+            r = pygame.Rect(bx, y, btn_w_sp, key_h)
             colors = {
-                "osk_confirm": (30, 140, 70, 230),
-                "osk_cancel":  (140, 40, 40, 230),
-                "osk_shift":   (80, 100, 180, 230) if self._osk_shift else (40, 60, 130, 230),
+                "osk_confirm":    (30, 140, 70, 255),
+                "osk_cancel":     (140, 40, 40, 255),
+                "osk_shift":      (80, 100, 200, 255) if self._osk_shift else (40, 60, 130, 255),
+                "osk_sym_toggle": (55, 75, 145, 255),
             }
-            pygame.draw.rect(panel, colors.get(act, (50, 70, 160, 230)), r, border_radius=7)
-            s = self._font_label.render(label, True, (255, 255, 255))
-            panel.blit(s, (r.centerx - s.get_width() // 2, r.centery - s.get_height() // 2))
+            pygame.draw.rect(panel, colors.get(act, (50, 70, 160, 255)), r, border_radius=7)
+            s = self._font_label.render(lbl, True, (255, 255, 255))
+            panel.blit(s, (r.centerx - s.get_width() // 2,
+                           r.centery - s.get_height() // 2))
             self._ui_rects.append((r, act, None))
-            bx += btn_w_sp + 6
+            bx += btn_w_sp + GAP
 
     # ------------------------------------------------------------------
     # Restart prompt overlay
@@ -1045,7 +1093,7 @@ class PhotoFramePygame:
                 continue
             if self._osk_active and action not in (
                 "osk_char", "osk_back", "osk_space", "osk_shift",
-                "osk_confirm", "osk_cancel",
+                "osk_confirm", "osk_cancel", "osk_sym_toggle",
             ):
                 continue
             self._dispatch(action, data)
@@ -1246,6 +1294,10 @@ class PhotoFramePygame:
         elif action == "osk_shift":
             self._osk_shift = not self._osk_shift
 
+        elif action == "osk_sym_toggle":
+            self._osk_sym_mode = not self._osk_sym_mode
+            self._osk_shift = False
+
         elif action == "osk_confirm":
             if self._osk_target == "wifi" and self._wifi_selected_ssid:
                 self._start_wifi_connect(self._wifi_selected_ssid, self._osk_buffer)
@@ -1265,6 +1317,9 @@ class PhotoFramePygame:
 
         elif action == "wifi_scan":
             self._start_wifi_scan()
+
+        elif action == "wifi_select":
+            self._wifi_selected_ssid = data
 
         elif action == "wifi_connect":
             ssid = data
@@ -1426,12 +1481,11 @@ class PhotoFramePygame:
             self._wifi_msg_until = _time.monotonic() + 5.0
 
     def _draw_wifi_tab(self, panel: "pygame.Surface", top: int, bottom: int, pad: int) -> None:
-        """Full-content-area WiFi tab with scan, network list, and connect."""
-        W     = self.width
-        ROW_H = max(46, self.height // 16)
-        HDR_H = max(26, self.height // 28)
-        BTN_H = max(40, self.height // 18)
+        """Full-content-area WiFi tab: scan button top, list middle, connect button bottom."""
+        W      = self.width
+        ROW_H  = max(46, self.height // 16)
         SCAN_H = max(44, self.height // 14)
+        CONN_H = max(48, self.height // 13)
 
         # Scan button row (fixed at top, not scrollable)
         scan_txt = "Scanning..." if self._wifi_scanning else "Scan for Networks"
@@ -1453,22 +1507,32 @@ class PhotoFramePygame:
             panel.blit(ms, ((W - ms.get_width()) // 2, fixed_top + 4))
             fixed_top += ms.get_height() + 8
 
-        # Scrollable network list
-        content_top    = fixed_top
-        content_bottom = bottom
-        avail_h        = content_bottom - content_top
+        # ── Connect button (fixed, bottom) ────────────────────────────────
+        conn_bottom = bottom - pad // 2
+        conn_top    = conn_bottom - CONN_H
+        conn_r      = pygame.Rect(pad, conn_top, W - pad * 2, CONN_H)
+        has_sel     = bool(self._wifi_selected_ssid)
+        conn_col    = (35, 140, 60, 255) if has_sel else (30, 40, 60, 180)
+        pygame.draw.rect(panel, conn_col, conn_r, border_radius=10)
+        conn_label  = (f"Connect to  {self._wifi_selected_ssid}"
+                       if has_sel else "Select a network above")
+        cl = self._font_label.render(conn_label[:50], True,
+                                     (255, 255, 255) if has_sel else (100, 110, 140))
+        panel.blit(cl, (conn_r.centerx - cl.get_width() // 2,
+                        conn_r.centery - cl.get_height() // 2))
+        if has_sel:
+            self._ui_rects.append((conn_r, "wifi_connect", self._wifi_selected_ssid))
 
-        ARR_H = max(36, self.height // 18)
+        # ── Scrollable network list ───────────────────────────────────────
+        content_top    = fixed_top
+        content_bottom = conn_top - pad // 2
+        avail_h        = max(1, content_bottom - content_top)
+
+        ARR_H     = max(36, self.height // 18)
         ARR_COLOR = (50, 80, 180, 200)
 
-        # Build virtual rows: header + one row per network (or empty-state row)
-        nets = self._wifi_networks
-        if not nets and not self._wifi_scanning:
-            rows = [("empty",)]
-        else:
-            rows = [("net", n) for n in nets]
-
-        total_h    = len(rows) * (ROW_H + 4) + (HDR_H + 4 if not nets else 0)
+        nets       = self._wifi_networks
+        total_h    = len(nets) * (ROW_H + 4) if nets else ROW_H
         max_scroll = max(0, total_h - avail_h + ARR_H * 2)
         scroll     = max(0, min(self._scroll_offsets.get(1, 0), max_scroll))
         self._scroll_offsets[1] = scroll
@@ -1477,9 +1541,9 @@ class PhotoFramePygame:
         y = content_top - scroll
 
         if not nets and not self._wifi_scanning:
-            row_r = pygame.Rect(pad, y, W - pad * 2, ROW_H)
-            es = self._font_label.render("Tap 'Scan for Networks' to discover WiFi", True, (130, 140, 170))
-            panel.blit(es, (pad + 8, y + (ROW_H - es.get_height()) // 2))
+            es = self._font_label.render(
+                "Tap 'Scan for Networks' to discover WiFi", True, (130, 140, 170))
+            panel.blit(es, (pad + 8, content_top + (ROW_H - es.get_height()) // 2))
         else:
             for net in nets:
                 ssid    = net["ssid"]
@@ -1491,37 +1555,26 @@ class PhotoFramePygame:
                 if row_y + ROW_H <= content_top or row_y >= content_bottom:
                     continue
 
-                row_r = pygame.Rect(pad, row_y, W - pad * 2, ROW_H)
+                row_r  = pygame.Rect(pad, row_y, W - pad * 2, ROW_H)
                 is_sel = (ssid == self._wifi_selected_ssid)
-                bg = pygame.Surface((row_r.w, row_r.h), pygame.SRCALPHA)
+                bg     = pygame.Surface((row_r.w, row_r.h), pygame.SRCALPHA)
                 bg.fill((20, 70, 20, 200) if is_sel else (20, 28, 55, 200))
                 panel.blit(bg, row_r.topleft)
-                pygame.draw.rect(panel, (60, 90, 180, 100), row_r, 1)
+                pygame.draw.rect(panel,
+                                 (80, 130, 220, 150) if is_sel else (60, 90, 180, 80),
+                                 row_r, 2 if is_sel else 1)
 
-                # Draw Connect button first so we know its x position
-                conn_w = max(110, W // 6)
-                conn_r = pygame.Rect(W - pad - conn_w,
-                                     row_y + (ROW_H - BTN_H) // 2, conn_w, BTN_H)
-                pygame.draw.rect(panel, (35, 100, 210, 255), conn_r, border_radius=8)
-                cs = self._font_label.render("Connect", True, (255, 255, 255))
-                panel.blit(cs, (conn_r.centerx - cs.get_width() // 2,
-                                conn_r.centery - cs.get_height() // 2))
-
-                # Label clipped to the space left of the button
                 bars = ("▂▄▆█" if signal >= 75 else
                         "▂▄▆ " if signal >= 50 else
                         "▂▄  " if signal >= 25 else "▂   ")
-                lock = "🔒 " if secured else "    "
-                ls = self._font_label.render(f"{bars} {lock}{ssid}", True, (210, 225, 245))
-                label_x = pad + 10
-                label_y = row_y + (ROW_H - ls.get_height()) // 2
-                max_label_w = conn_r.left - label_x - pad
+                lock = "\U0001f512 " if secured else "   "
+                ls   = self._font_label.render(f"{bars} {lock}{ssid}", True, (210, 225, 245))
+                max_label_w = row_r.w - pad
                 if ls.get_width() > max_label_w:
                     ls = ls.subsurface((0, 0, max_label_w, ls.get_height()))
-                panel.blit(ls, (label_x, label_y))
+                panel.blit(ls, (pad + 10, row_y + (ROW_H - ls.get_height()) // 2))
 
-                self._ui_rects.append((conn_r, "wifi_connect", ssid))
-                self._ui_rects.append((row_r, "wifi_connect", ssid))
+                self._ui_rects.append((row_r, "wifi_select", ssid))
 
         panel.set_clip(None)
 
@@ -1539,6 +1592,7 @@ class PhotoFramePygame:
             dn_s = self._font_label.render("▼  scroll down", True, (200, 220, 255))
             panel.blit(dn_s, (dn_r.centerx - dn_s.get_width() // 2,
                                dn_r.centery - dn_s.get_height() // 2))
+            self._ui_rects.append((dn_r, "scroll_down", 1))
 
     def _save_settings(self) -> None:
         try:
