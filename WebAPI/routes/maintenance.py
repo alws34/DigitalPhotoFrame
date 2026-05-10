@@ -1,4 +1,6 @@
+import logging
 import threading
+import time
 
 from flask import Blueprint, current_app, jsonify
 
@@ -16,12 +18,11 @@ def restart_service():
         return jsonify({"error": "restart not configured"}), 501
 
     def _do_restart():
-        import time
-        time.sleep(0.3)
+        time.sleep(0.3)  # Allow HTTP response to reach client before restart
         try:
             restart_fn()
         except Exception as e:
-            print(f"[Maintenance] Restart failed: {e}")
+            logging.error("[Maintenance] Restart failed: %s", e, exc_info=True)
 
     threading.Thread(target=_do_restart, daemon=True).start()
-    return jsonify({"message": "Restarting…"})
+    return jsonify({"message": "Restarting…"}), 202

@@ -52,6 +52,9 @@ def get_settings():
 
 @settings_bp.route("/schema", methods=["GET"], strict_slashes=False)
 def get_schema():
+    backend = current_app.config.get("backend")
+    if backend and not backend.is_authenticated():
+        return jsonify({"error": "unauthorized"}), 401
     return jsonify(SETTINGS_SCHEMA)
 
 
