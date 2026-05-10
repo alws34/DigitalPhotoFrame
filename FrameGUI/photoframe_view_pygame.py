@@ -214,6 +214,17 @@ class PhotoFramePygame:
         self._osk_proc: "subprocess.Popen | None" = None
         self._osk_use_subprocess: bool = False
         self._osk_shift: bool = False
+        self._osk_label: str = ""
+        self._osk_target: str = "field"  # "field" or "wifi"
+
+        # WiFi state (Network tab)
+        import shutil as _shutil
+        self._wifi_available: bool = bool(_shutil.which("nmcli"))
+        self._wifi_networks: list = []
+        self._wifi_scanning: bool = False
+        self._wifi_selected_ssid: "str | None" = None
+        self._wifi_msg: str = ""
+        self._wifi_msg_until: float = 0.0
 
         # pygame init
         os.environ.setdefault("SDL_VIDEO_ALLOW_SCREENSAVER", "0")
@@ -405,7 +416,12 @@ class PhotoFramePygame:
         VAL_W   = max(72, self.height // 10)
         SAVE_H  = max(44, self.height // 16)
 
-        content_top    = top
+        # WiFi section is drawn (unclipped) above scrollable fields on the Network tab
+        wifi_offset = 0
+        if tab_idx == _TABS.index("Network") and self._wifi_available:
+            wifi_offset = self._draw_wifi_section(panel, top, pad, W)
+
+        content_top    = top + wifi_offset
         content_bottom = bottom - SAVE_H - pad
         avail_h        = content_bottom - content_top
 
@@ -657,11 +673,14 @@ class PhotoFramePygame:
                 return path
         return None
 
-    def _open_osk(self, path: str, masked: bool, current_value: str) -> None:
+    def _open_osk(self, path: "str | None", masked: bool, current_value: str,
+                  label: str = "", target: str = "field") -> None:
         self._osk_field_path = path
         self._osk_buffer = current_value
         self._osk_masked = masked
         self._osk_shift = False
+        self._osk_label = label
+        self._osk_target = target
 
         osk_bin = self._find_osk_binary()
         if osk_bin:
@@ -699,6 +718,8 @@ class PhotoFramePygame:
         self._osk_buffer = ""
         self._osk_masked = False
         self._osk_shift = False
+        self._osk_label = ""
+        self._osk_target = "field"
 
     # ------------------------------------------------------------------
     # OSK overlay
@@ -713,7 +734,9 @@ class PhotoFramePygame:
         panel.blit(dim, (0, 0))
 
         display = ("*" * len(self._osk_buffer)) if self._osk_masked else self._osk_buffer
-        field_label = (self._osk_field_path or "").split(".")[-1].replace("_", " ").title()
+        field_label = self._osk_label or (
+            (self._osk_field_path or "").split(".")[-1].replace("_", " ").title()
+        )
         buf_text = f"{field_label}: {display or '_'}"
         buf_surf = self._font_value.render(buf_text[:60], True, (220, 230, 255))
 
@@ -879,7 +902,7 @@ class PhotoFramePygame:
             if event.type == pygame.MOUSEBUTTONUP:
                 if self._panel_visible and self._drag_origin is not None:
                     if not self._drag_scrolled:
-                        self._handle_panel_tap(self._drag_origin)
+                        self._handle_panel_tap(event.pos)
                     self._drag_origin = None
                     self._drag_start = None
                     self._drag_scrolled = False
@@ -1113,18 +1136,172 @@ class PhotoFramePygame:
             self._osk_shift = not self._osk_shift
 
         elif action == "osk_confirm":
-            if self._osk_field_path:
+            if self._osk_target == "wifi" and self._wifi_selected_ssid:
+                self._start_wifi_connect(self._wifi_selected_ssid, self._osk_buffer)
+                self._close_osk()
+            elif self._osk_field_path:
                 parts = self._osk_field_path.split(".")
                 target = self._pending_changes
                 for p in parts[:-1]:
                     target = target.setdefault(p, {})
                 target[parts[-1]] = self._osk_buffer
-            elif self._osk_buffer:
-                logging.warning("[OSK] confirm with no field path — discarding buffer")
-            self._close_osk()
+                self._close_osk()
+            else:
+                self._close_osk()
 
         elif action == "osk_cancel":
             self._close_osk()
+
+        elif action == "wifi_scan":
+            self._start_wifi_scan()
+
+        elif action == "wifi_connect":
+            ssid = data
+            self._wifi_selected_ssid = ssid
+            net = next((n for n in self._wifi_networks if n["ssid"] == ssid), {})
+            if net.get("security"):
+                self._open_osk(
+                    path=None, masked=True, current_value="",
+                    label=f"Password for {ssid}", target="wifi",
+                )
+            else:
+                self._start_wifi_connect(ssid, "")
+
+    # ------------------------------------------------------------------
+    # WiFi management
+    # ------------------------------------------------------------------
+    def _start_wifi_scan(self) -> None:
+        if self._wifi_scanning:
+            return
+        self._wifi_scanning = True
+        self._wifi_networks = []
+        import threading
+        threading.Thread(target=self._do_wifi_scan, daemon=True).start()
+
+    def _do_wifi_scan(self) -> None:
+        try:
+            result = subprocess.run(
+                ["nmcli", "--terse", "-f", "SSID,SIGNAL,SECURITY",
+                 "device", "wifi", "list", "--rescan", "yes"],
+                capture_output=True, text=True, timeout=20,
+            )
+            networks: list = []
+            seen: set = set()
+            for line in result.stdout.strip().splitlines():
+                parts = line.split(":")
+                ssid = parts[0].strip() if parts else ""
+                if not ssid or ssid in seen:
+                    continue
+                seen.add(ssid)
+                signal = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+                security = parts[2].strip() if len(parts) > 2 else ""
+                networks.append({"ssid": ssid, "signal": signal, "security": security})
+            networks.sort(key=lambda n: -n["signal"])
+            self._wifi_networks = networks
+            if not networks:
+                self._wifi_msg = "No networks found"
+                self._wifi_msg_until = _time.monotonic() + 4.0
+        except Exception as exc:
+            logging.error("WiFi scan failed: %s", exc)
+            self._wifi_msg = "Scan failed"
+            self._wifi_msg_until = _time.monotonic() + 4.0
+        finally:
+            self._wifi_scanning = False
+
+    def _start_wifi_connect(self, ssid: str, password: str) -> None:
+        self._wifi_msg = f"Connecting to {ssid}..."
+        self._wifi_msg_until = _time.monotonic() + 30.0
+        import threading
+        threading.Thread(
+            target=self._do_wifi_connect, args=(ssid, password), daemon=True
+        ).start()
+
+    def _do_wifi_connect(self, ssid: str, password: str) -> None:
+        try:
+            cmd = ["nmcli", "device", "wifi", "connect", ssid]
+            if password:
+                cmd += ["password", password]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            if result.returncode == 0:
+                self._wifi_msg = f"Connected to {ssid}"
+            else:
+                err = (result.stderr or result.stdout).strip()
+                self._wifi_msg = err[:80] if err else "Connection failed"
+            self._wifi_msg_until = _time.monotonic() + 8.0
+        except Exception as exc:
+            self._wifi_msg = f"Error: {exc}"
+            self._wifi_msg_until = _time.monotonic() + 5.0
+
+    def _draw_wifi_section(self, panel: "pygame.Surface", top: int, pad: int, W: int) -> int:
+        """Draw WiFi scan/connect UI above schema fields. Returns height consumed."""
+        HDR_H = max(26, self.height // 28)
+        ROW_H = max(46, self.height // 16)
+        y = top
+
+        # Header row + Scan button
+        hs = self._font_section.render("▶ WiFi Networks", True, (100, 150, 255))
+        panel.blit(hs, (pad + 4, y + (HDR_H - hs.get_height()) // 2))
+
+        scan_txt = "Scanning..." if self._wifi_scanning else "Scan"
+        scan_w = max(100, W // 6)
+        scan_r = pygame.Rect(W - pad - scan_w, y, scan_w, HDR_H)
+        scan_col = (40, 55, 90, 180) if self._wifi_scanning else (40, 80, 180, 220)
+        pygame.draw.rect(panel, scan_col, scan_r, border_radius=6)
+        ss = self._font_label.render(scan_txt, True, (200, 220, 255))
+        panel.blit(ss, (scan_r.centerx - ss.get_width() // 2, scan_r.centery - ss.get_height() // 2))
+        if not self._wifi_scanning:
+            self._ui_rects.append((scan_r, "wifi_scan", None))
+
+        pygame.draw.line(panel, (60, 90, 180, 120), (pad, y + HDR_H), (W - pad, y + HDR_H), 1)
+        y += HDR_H + 4
+
+        # Status message
+        if self._wifi_msg and _time.monotonic() < self._wifi_msg_until:
+            msg_col = (100, 255, 150) if "Connected" in self._wifi_msg else (255, 180, 100)
+            ms = self._font_label.render(self._wifi_msg[:70], True, msg_col)
+            panel.blit(ms, (pad + 8, y + 4))
+            y += ms.get_height() + 8
+
+        # Network rows (max 5 shown)
+        nets = self._wifi_networks[:5]
+        if not nets:
+            if not self._wifi_scanning:
+                es = self._font_label.render("Tap Scan to search for networks", True, (120, 130, 160))
+                panel.blit(es, (pad + 8, y + (ROW_H - es.get_height()) // 2))
+                y += ROW_H + 4
+        else:
+            for net in nets:
+                ssid = net["ssid"]
+                signal = net["signal"]
+                secured = bool(net.get("security"))
+
+                row_r = pygame.Rect(pad, y, W - pad * 2, ROW_H)
+                is_sel = (ssid == self._wifi_selected_ssid)
+                bg = pygame.Surface((row_r.w, row_r.h), pygame.SRCALPHA)
+                bg.fill((30, 80, 30, 180) if is_sel else (20, 28, 55, 150))
+                panel.blit(bg, row_r.topleft)
+                pygame.draw.rect(panel, (60, 90, 180, 70), row_r, 1)
+
+                bars = "▂▄▆█" if signal >= 75 else ("▂▄▆" if signal >= 50 else ("▂▄" if signal >= 25 else "▂"))
+                lock = "🔒 " if secured else ""
+                ls = self._font_label.render(f"{bars}  {lock}{ssid}", True, (200, 220, 240))
+                panel.blit(ls, (pad + 8, y + (ROW_H - ls.get_height()) // 2))
+
+                conn_w = max(100, W // 6)
+                conn_r = pygame.Rect(W - pad - conn_w, y + (ROW_H - 36) // 2, conn_w, 36)
+                pygame.draw.rect(panel, (40, 80, 180, 220), conn_r, border_radius=6)
+                cs = self._font_label.render("Connect", True, (255, 255, 255))
+                panel.blit(cs, (conn_r.centerx - cs.get_width() // 2, conn_r.centery - cs.get_height() // 2))
+                self._ui_rects.append((conn_r, "wifi_connect", ssid))
+                self._ui_rects.append((row_r, "wifi_connect", ssid))
+
+                y += ROW_H + 4
+
+        # Separator
+        pygame.draw.line(panel, (60, 90, 180, 80), (pad, y), (W - pad, y), 1)
+        y += 6
+
+        return y - top
 
     def _save_settings(self) -> None:
         try:
