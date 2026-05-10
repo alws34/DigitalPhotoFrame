@@ -1,5 +1,4 @@
 import importlib
-import pytest
 
 
 def _get_cs():
