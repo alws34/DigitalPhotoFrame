@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import socket
+import subprocess
 import threading
 import time as _time
 from typing import Any, Dict, List, Optional, Tuple
@@ -198,6 +200,15 @@ class PhotoFramePygame:
         self._numpad_field_path: "str | None" = None
         self._numpad_buffer: str = ""
 
+        # OSK state
+        self._osk_active: bool = False
+        self._osk_field_path: "str | None" = None
+        self._osk_buffer: str = ""
+        self._osk_masked: bool = False
+        self._osk_proc: "subprocess.Popen | None" = None
+        self._osk_use_subprocess: bool = False
+        self._osk_shift: bool = False
+
         # pygame init
         os.environ.setdefault("SDL_VIDEO_ALLOW_SCREENSAVER", "0")
         pygame.init()
@@ -319,6 +330,9 @@ class PhotoFramePygame:
 
         if self._numpad_active:
             self._draw_numpad(panel)
+
+        if self._osk_active:
+            self._draw_osk_overlay(panel)
 
         if self._restart_prompt:
             self._draw_restart_prompt(panel)
@@ -603,6 +617,128 @@ class PhotoFramePygame:
             self._ui_rects.append((r, act, None))
 
     # ------------------------------------------------------------------
+    # OSK helpers
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _find_osk_binary() -> "str | None":
+        for name in ("matchbox-keyboard", "onboard", "wvkbd-mobintl", "wvkbd"):
+            path = shutil.which(name)
+            if path:
+                return path
+        return None
+
+    def _open_osk(self, path: str, masked: bool, current_value: str) -> None:
+        self._osk_field_path = path
+        self._osk_buffer = current_value
+        self._osk_masked = masked
+        self._osk_shift = False
+
+        osk_bin = self._find_osk_binary()
+        if osk_bin:
+            try:
+                self._osk_proc = subprocess.Popen(
+                    [osk_bin],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                self._osk_use_subprocess = True
+            except Exception:
+                logging.warning("OSK launch failed (%s) — using fallback", osk_bin)
+                self._osk_use_subprocess = False
+        else:
+            self._osk_use_subprocess = False
+
+        self._osk_active = True
+
+    def _close_osk(self) -> None:
+        if self._osk_proc is not None:
+            try:
+                self._osk_proc.terminate()
+            except Exception:
+                pass
+            self._osk_proc = None
+        self._osk_active = False
+        self._osk_use_subprocess = False
+        self._osk_field_path = None
+        self._osk_buffer = ""
+        self._osk_masked = False
+        self._osk_shift = False
+
+    # ------------------------------------------------------------------
+    # OSK overlay
+    # ------------------------------------------------------------------
+    _QWERTY_ROWS = ["QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM"]
+
+    def _draw_osk_overlay(self, panel: "pygame.Surface") -> None:
+        W, H = self.width, self.height
+
+        dim = pygame.Surface((W, H), pygame.SRCALPHA)
+        dim.fill((0, 0, 0, 200))
+        panel.blit(dim, (0, 0))
+
+        display = ("*" * len(self._osk_buffer)) if self._osk_masked else self._osk_buffer
+        field_label = (self._osk_field_path or "").split(".")[-1].replace("_", " ").title()
+        buf_text = f"{field_label}: {display or '_'}"
+        buf_surf = self._font_value.render(buf_text[:60], True, (220, 230, 255))
+        panel.blit(buf_surf, ((W - buf_surf.get_width()) // 2, H // 2 - 220))
+
+        if self._osk_use_subprocess:
+            hint = self._font_label.render(
+                "Type on keyboard  •  Enter = confirm  •  Esc = cancel",
+                True, (160, 180, 220),
+            )
+            panel.blit(hint, ((W - hint.get_width()) // 2, H // 2 - 160))
+            btn_w = 160
+            for bx, label, act in [
+                (W // 2 - btn_w - 10, "Confirm", "osk_confirm"),
+                (W // 2 + 10,          "Cancel",  "osk_cancel"),
+            ]:
+                r = pygame.Rect(bx, H // 2 - 100, btn_w, 52)
+                col = (30, 140, 70, 230) if act == "osk_confirm" else (140, 40, 40, 230)
+                pygame.draw.rect(panel, col, r, border_radius=8)
+                s = self._font_label.render(label, True, (255, 255, 255))
+                panel.blit(s, (r.centerx - s.get_width() // 2, r.centery - s.get_height() // 2))
+                self._ui_rects.append((r, act, None))
+            return
+
+        # Fallback QWERTY grid
+        key_w = max(40, W // 12)
+        key_h = max(40, H // 14)
+        start_y = H // 2 - 100
+
+        for row_i, row in enumerate(self._QWERTY_ROWS):
+            chars = list(row if self._osk_shift else row.lower())
+            row_x = (W - (len(chars) * (key_w + 4))) // 2
+            for col_i, ch in enumerate(chars):
+                r = pygame.Rect(row_x + col_i * (key_w + 4), start_y + row_i * (key_h + 6), key_w, key_h)
+                pygame.draw.rect(panel, (40, 60, 150, 230), r, border_radius=7)
+                s = self._font_label.render(ch, True, (255, 255, 255))
+                panel.blit(s, (r.centerx - s.get_width() // 2, r.centery - s.get_height() // 2))
+                self._ui_rects.append((r, "osk_char", ch))
+
+        bottom_y = start_y + 3 * (key_h + 6)
+        specials = [
+            ("Shift", key_w * 2, "osk_shift"),
+            ("Space", key_w * 4, "osk_space"),
+            ("<-",    key_w,     "osk_back"),
+            ("OK",    key_w,     "osk_confirm"),
+            ("X",     key_w,     "osk_cancel"),
+        ]
+        bx = (W - sum(w + 6 for _, w, _ in specials)) // 2
+        for label, btn_w_sp, act in specials:
+            r = pygame.Rect(bx, bottom_y, btn_w_sp, key_h)
+            colors = {
+                "osk_confirm": (30, 140, 70, 230),
+                "osk_cancel":  (140, 40, 40, 230),
+                "osk_shift":   (80, 100, 180, 230) if self._osk_shift else (40, 60, 130, 230),
+            }
+            pygame.draw.rect(panel, colors.get(act, (50, 70, 160, 230)), r, border_radius=7)
+            s = self._font_label.render(label, True, (255, 255, 255))
+            panel.blit(s, (r.centerx - s.get_width() // 2, r.centery - s.get_height() // 2))
+            self._ui_rects.append((r, act, None))
+            bx += btn_w_sp + 6
+
+    # ------------------------------------------------------------------
     # Restart prompt overlay
     # ------------------------------------------------------------------
     def _draw_restart_prompt(self, panel: "pygame.Surface") -> None:
@@ -638,6 +774,16 @@ class PhotoFramePygame:
             if event.type == pygame.QUIT:
                 return False
             if event.type == pygame.KEYDOWN:
+                if self._osk_active:
+                    if event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                        self._dispatch("osk_confirm", None)
+                    elif event.key == pygame.K_ESCAPE:
+                        self._dispatch("osk_cancel", None)
+                    elif event.key == pygame.K_BACKSPACE:
+                        self._dispatch("osk_back", None)
+                    elif event.unicode and event.unicode.isprintable():
+                        self._dispatch("osk_char", event.unicode)
+                    continue  # swallow all other keys while OSK is open
                 if event.key == pygame.K_ESCAPE:
                     if self._panel_visible:
                         self._close_panel()
@@ -702,6 +848,7 @@ class PhotoFramePygame:
         self._numpad_active   = False
         self._numpad_field_path = None
         self._numpad_buffer   = ""
+        self._close_osk()
 
     # ------------------------------------------------------------------
     # Panel tap dispatch
@@ -715,6 +862,11 @@ class PhotoFramePygame:
                 continue
             if self._numpad_active and action not in (
                 "numpad_key", "numpad_back", "numpad_confirm", "numpad_cancel"
+            ):
+                continue
+            if self._osk_active and action not in (
+                "osk_char", "osk_back", "osk_space", "osk_shift",
+                "osk_confirm", "osk_cancel",
             ):
                 continue
             self._dispatch(action, data)
@@ -833,7 +985,36 @@ class PhotoFramePygame:
             self._numpad_buffer = ""
 
         elif action in ("edit_str", "edit_password"):
-            pass  # OSK implemented in Task 7
+            path = data
+            merged: dict = {}
+            _deep_update(merged, self._live_settings)
+            _deep_update(merged, self._pending_changes)
+            current_val = str(_get_nested(merged, path, ""))
+            self._open_osk(path, masked=(action == "edit_password"), current_value=current_val)
+
+        elif action == "osk_char":
+            self._osk_buffer += data
+
+        elif action == "osk_back":
+            self._osk_buffer = self._osk_buffer[:-1]
+
+        elif action == "osk_space":
+            self._osk_buffer += " "
+
+        elif action == "osk_shift":
+            self._osk_shift = not self._osk_shift
+
+        elif action == "osk_confirm":
+            if self._osk_field_path:
+                parts = self._osk_field_path.split(".")
+                target = self._pending_changes
+                for p in parts[:-1]:
+                    target = target.setdefault(p, {})
+                target[parts[-1]] = self._osk_buffer
+            self._close_osk()
+
+        elif action == "osk_cancel":
+            self._close_osk()
 
     def _save_settings(self) -> None:
         try:
