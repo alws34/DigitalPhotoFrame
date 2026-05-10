@@ -122,6 +122,135 @@ def get_default_settings() -> dict[str, Any]:
     }
 
 
+SETTINGS_SCHEMA: dict = {
+    "autoupdate": {
+        "branch":     {"type": "str",  "label": "Branch",               "restart_required": False},
+        "enabled":    {"type": "bool", "label": "Enable Auto-Update",    "restart_required": False},
+        "hour":       {"type": "int",  "label": "Update Hour",   "min": 0,  "max": 23,  "step": 1, "restart_required": False},
+        "minute":     {"type": "int",  "label": "Update Minute", "min": 0,  "max": 59,  "step": 1, "restart_required": False},
+        "remote":     {"type": "str",  "label": "Git Remote",            "restart_required": False},
+        "repo_path":  {"type": "str",  "label": "Repo Path",             "restart_required": False},
+        "shallow_ok": {"type": "bool", "label": "Allow Shallow Clone",   "restart_required": False},
+    },
+    "backend_configs": {
+        "host":           {"type": "str",      "label": "Bind Host",      "restart_required": True},
+        "idle_fps":       {"type": "int",      "label": "Idle FPS",       "min": 1,   "max": 30,    "step": 1,  "restart_required": False},
+        "server_port":    {"type": "int",      "label": "Server Port",    "min": 1,   "max": 65535, "step": 1,  "restart_required": True},
+        "stream_fps":     {"type": "int",      "label": "Stream FPS",     "min": 1,   "max": 60,    "step": 1,  "restart_required": False},
+        "stream_height":  {"type": "int",      "label": "Stream Height",  "min": 100, "max": 4320,  "step": 10, "restart_required": True},
+        "stream_width":   {"type": "int",      "label": "Stream Width",   "min": 100, "max": 7680,  "step": 10, "restart_required": True},
+        "supersecretkey": {"type": "password", "label": "Secret Key",     "restart_required": True},
+    },
+    "effects": {
+        "allow_translucent_background": {"type": "bool",  "label": "Translucent Background", "restart_required": False},
+        "background_blur_radius":       {"type": "int",   "label": "Background Blur",  "min": 0, "max": 200, "step": 2,    "restart_required": False},
+        "background_opacity":           {"type": "float", "label": "Background Opacity","min": 0.0,"max": 1.0,"step": 0.05, "restart_required": False},
+        "shadow_blur_radius":           {"type": "int",   "label": "Shadow Blur",      "min": 0, "max": 200, "step": 2,    "restart_required": False},
+        "shadow_opacity":               {"type": "float", "label": "Shadow Opacity",   "min": 0.0,"max": 1.0,"step": 0.05, "restart_required": False},
+    },
+    "mqtt": {
+        "base_topic":       {"type": "str",      "label": "Base Topic",           "restart_required": False},
+        "client_id":        {"type": "str",      "label": "Client ID",            "restart_required": False},
+        "discovery":        {"type": "bool",     "label": "HA Discovery",         "restart_required": False},
+        "discovery_prefix": {"type": "str",      "label": "Discovery Prefix",     "restart_required": False},
+        "enabled":          {"type": "bool",     "label": "Enable MQTT",          "restart_required": False},
+        "host":             {"type": "str",      "label": "Broker Host",          "restart_required": False},
+        "interval_seconds": {"type": "int",      "label": "Publish Interval (s)", "min": 1, "max": 3600, "step": 1, "restart_required": False},
+        "password":         {"type": "password", "label": "Password",             "restart_required": False},
+        "port":             {"type": "int",      "label": "Broker Port",          "min": 1, "max": 65535, "step": 1, "restart_required": False},
+        "retain_config":    {"type": "bool",     "label": "Retain Config",        "restart_required": False},
+        "tls":              {"type": "bool",     "label": "Use TLS",              "restart_required": False},
+        "username":         {"type": "str",      "label": "Username",             "restart_required": False},
+    },
+    "open_meteo": {
+        "cache_ttl_minutes":  {"type": "int",            "label": "Cache TTL (min)",    "min": 1, "max": 1440, "step": 5, "restart_required": False},
+        "latitude":           {"type": "numeric_string", "label": "Latitude",           "restart_required": False},
+        "longitude":          {"type": "numeric_string", "label": "Longitude",          "restart_required": False},
+        "precipitation_unit": {"type": "enum",           "label": "Precipitation Unit", "choices": ["mm", "inch"],               "restart_required": False},
+        "temperature_unit":   {"type": "enum",           "label": "Temperature Unit",   "choices": ["celsius", "fahrenheit"],    "restart_required": False},
+        "timeformat":         {"type": "str",            "label": "Time Format",        "restart_required": False},
+        "timezone":           {"type": "str",            "label": "Timezone",           "restart_required": False},
+        "units":              {"type": "enum",           "label": "Units",              "choices": ["metric", "imperial"],       "restart_required": False},
+        "wind_speed_unit":    {"type": "enum",           "label": "Wind Speed Unit",    "choices": ["kmh", "mph", "ms", "kn"],  "restart_required": False},
+    },
+    "playback": {
+        "animation_duration":   {"type": "int", "label": "Animation Duration (s)",  "min": 1,  "max": 120, "step": 1, "restart_required": False},
+        "animation_fps":        {"type": "int", "label": "Animation FPS",           "min": 1,  "max": 60,  "step": 1, "restart_required": False},
+        "delay_between_images": {"type": "int", "label": "Delay Between Images (s)","min": 1,  "max": 600, "step": 5, "restart_required": False},
+    },
+    "screen": {
+        "brightness":       {"type": "int",  "label": "Brightness (%)",  "min": 0, "max": 100, "step": 5,  "restart_required": False},
+        "off_hour":         {"type": "int",  "label": "Screen Off Hour", "min": 0, "max": 23,  "step": 1,  "restart_required": False},
+        "on_hour":          {"type": "int",  "label": "Screen On Hour",  "min": 0, "max": 23,  "step": 1,  "restart_required": False},
+        "orientation":      {"type": "int",  "label": "Orientation (°)", "min": 0, "max": 270, "step": 90, "restart_required": False},
+        "schedule_enabled": {"type": "bool", "label": "Enable Schedule",                                   "restart_required": False},
+    },
+    "stats": {
+        "font_color": {"type": "color", "label": "Font Color", "choices": ["yellow", "white", "red", "green", "blue"], "restart_required": False},
+        "font_size":  {"type": "int",   "label": "Font Size",  "min": 8, "max": 100, "step": 2,                        "restart_required": False},
+        "show":       {"type": "bool",  "label": "Show Stats",                                                          "restart_required": False},
+    },
+    "system": {
+        "image_dir":              {"type": "str", "label": "Image Directory",    "restart_required": False},
+        "image_quality_encoding": {"type": "int", "label": "Image Quality (%)", "min": 1, "max": 100, "step": 5, "restart_required": False},
+        "log_file_path":          {"type": "str", "label": "Log File Path",     "restart_required": False},
+        "service_name":           {"type": "str", "label": "Service Name",      "restart_required": False},
+    },
+    "ui": {
+        "contrast_text":   {"type": "bool", "label": "Contrast Text",  "restart_required": False},
+        "date_font_size":  {"type": "int",  "label": "Date Font Size", "min": 10, "max": 200, "step": 5, "restart_required": False},
+        "date_format":     {"type": "str",  "label": "Date Format",    "restart_required": False},
+        "font_name":       {"type": "str",  "label": "Font File Name", "restart_required": False},
+        "is_24h":          {"type": "bool", "label": "24-Hour Clock",  "restart_required": False},
+        "margins": {
+            "bottom": {"type": "int", "label": "Bottom Margin", "min": 0, "max": 300, "step": 5, "restart_required": False},
+            "left":   {"type": "int", "label": "Left Margin",   "min": 0, "max": 300, "step": 5, "restart_required": False},
+            "right":  {"type": "int", "label": "Right Margin",  "min": 0, "max": 300, "step": 5, "restart_required": False},
+        },
+        "show_weather":    {"type": "bool", "label": "Show Weather",    "restart_required": False},
+        "spacing_between": {"type": "int",  "label": "Spacing Between", "min": 0, "max": 300, "step": 5, "restart_required": False},
+        "text_shadow": {
+            "alpha":    {"type": "int", "label": "Shadow Alpha",    "min": 0,   "max": 255, "step": 5,  "restart_required": False},
+            "blur":     {"type": "int", "label": "Shadow Blur",     "min": 0,   "max": 50,  "step": 1,  "restart_required": False},
+            "offset_x": {"type": "int", "label": "Shadow Offset X", "min": -50, "max": 50,  "step": 1, "restart_required": False},
+            "offset_y": {"type": "int", "label": "Shadow Offset Y", "min": -50, "max": 50,  "step": 1, "restart_required": False},
+        },
+        "time_font_size": {"type": "int", "label": "Time Font Size", "min": 10, "max": 300, "step": 5, "restart_required": False},
+    },
+}
+
+
+def get_field_schema(path: str) -> "dict | None":
+    """Resolve a dotted path like 'ui.margins.left' to its leaf descriptor, or None."""
+    parts = path.split(".")
+    node = SETTINGS_SCHEMA
+    for p in parts:
+        if not isinstance(node, dict) or p not in node:
+            return None
+        node = node[p]
+    if isinstance(node, dict) and "type" in node:
+        return node
+    return None
+
+
+def get_restart_required_paths() -> frozenset:
+    """Return frozenset of every dotted path whose schema has restart_required=True."""
+    result: set = set()
+
+    def _walk(node: dict, prefix: str) -> None:
+        for k, v in node.items():
+            path = f"{prefix}.{k}" if prefix else k
+            if isinstance(v, dict):
+                if "type" in v:
+                    if v.get("restart_required"):
+                        result.add(path)
+                else:
+                    _walk(v, path)
+
+    _walk(SETTINGS_SCHEMA, "")
+    return frozenset(result)
+
+
 def _deep_merge(base: dict, override: dict) -> dict:
     result = dict(base)
     for k, v in override.items():
