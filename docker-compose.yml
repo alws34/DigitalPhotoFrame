@@ -9,7 +9,7 @@ services:
       - "${PHOTOFRAME_PORT:-5002}:${PHOTOFRAME_PORT:-5002}"
     volumes:
       - ./Images:/app/Images
-      - ./photoframe_settings.json:/app/photoframe_settings.json
+      - ./photoframe_settings.json:/app/photoframe_settings.json:ro  # seed for one-time migration; settings are stored in /data DB after first run
       - photoframe-data:/data
       - /tmp/.X11-unix:/tmp/.X11-unix        # X11 Socket (fallback)
       - /run/user/1000:/run/user/1000        # Wayland Socket

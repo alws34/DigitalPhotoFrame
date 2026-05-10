@@ -38,6 +38,9 @@ CLAUDE.local.md
 PhotoFrame.log
 *.log
 
+# Runtime cache files
+openmeteo_weather_cache.json
+
 # Claude Code
 .claude/*
 !.claude/settings.json

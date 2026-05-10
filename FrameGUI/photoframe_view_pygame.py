@@ -207,6 +207,7 @@ class PhotoFramePygame:
         self._numpad_active: bool = False
         self._numpad_field_path: "str | None" = None
         self._numpad_buffer: str = ""
+        self._numpad_field_meta: "tuple | None" = None  # (py_type, fmin, fmax) for int/float
 
         # OSK state
         self._osk_active: bool = False
@@ -257,6 +258,18 @@ class PhotoFramePygame:
         self._font_section = pygame.font.SysFont("sans",      max(14, H // 48), bold=True)
 
         logging.info("PhotoFramePygame: display %dx%d", self.width, self.height)
+
+        from Utilities.config_events import on_settings_changed as _on_sc
+        _on_sc(self._on_settings_changed_pygame)
+
+    def _on_settings_changed_pygame(self, new_settings: dict) -> None:
+        try:
+            brightness = new_settings.get("screen", {}).get("brightness")
+            if brightness is not None:
+                from Utilities.brightness import set_brightness_percent
+                set_brightness_percent(int(brightness))
+        except Exception as exc:
+            logging.error("PhotoFramePygame: failed to apply brightness: %s", exc)
 
     # ------------------------------------------------------------------
     # Frame display
@@ -583,12 +596,14 @@ class PhotoFramePygame:
                     panel.blit(s, (r.centerx - s.get_width() // 2,
                                    r.centery  - s.get_height() // 2))
                 pygame.draw.rect(panel, (15, 22, 50, 200), val_r)
+                pygame.draw.rect(panel, (60, 100, 200, 180), val_r, 1)  # tappable hint
                 v_text = f"{cur_num:.2f}" if py_type is float else str(int(cur_num))
                 vs = self._font_value.render(v_text, True, (200, 230, 255))
                 panel.blit(vs, (val_r.centerx - vs.get_width() // 2,
                                 val_r.centery  - vs.get_height() // 2))
                 self._ui_rects.append((minus_r, "dec", (path, py_type, step, fmin, fmax)))
                 self._ui_rects.append((plus_r,  "inc", (path, py_type, step, fmin, fmax)))
+                self._ui_rects.append((val_r, "edit_number", (path, py_type, fmin, fmax)))
 
         panel.set_clip(None)
 
@@ -1006,6 +1021,7 @@ class PhotoFramePygame:
         self._numpad_active   = False
         self._numpad_field_path = None
         self._numpad_buffer   = ""
+        self._numpad_field_meta = None
         self._close_osk()
         self._drag_origin = None
         self._drag_start = None
@@ -1145,6 +1161,21 @@ class PhotoFramePygame:
             _deep_update(merged, self._pending_changes)
             self._numpad_field_path = path
             self._numpad_buffer = str(_get_nested(merged, path, ""))
+            self._numpad_field_meta = None
+            self._numpad_active = True
+
+        elif action == "edit_number":
+            path, py_type, fmin, fmax = data
+            merged: dict = {}
+            _deep_update(merged, self._live_settings)
+            _deep_update(merged, self._pending_changes)
+            try:
+                cur = py_type(_get_nested(merged, path, 0))
+            except Exception:
+                cur = py_type(0)
+            self._numpad_field_path = path
+            self._numpad_buffer = f"{cur:.2f}" if py_type is float else str(int(cur))
+            self._numpad_field_meta = (py_type, fmin, fmax)
             self._numpad_active = True
 
         elif action == "numpad_key":
@@ -1164,24 +1195,36 @@ class PhotoFramePygame:
 
         elif action == "numpad_confirm":
             try:
-                float(self._numpad_buffer)  # raises if empty or invalid
+                raw = float(self._numpad_buffer)  # raises if empty or invalid
             except ValueError:
                 pass  # stay open, don't commit
             else:
                 if self._numpad_field_path:
+                    if self._numpad_field_meta is not None:
+                        py_type, fmin, fmax = self._numpad_field_meta
+                        new_val = py_type(raw)
+                        if fmin is not None:
+                            new_val = max(py_type(fmin), new_val)
+                        if fmax is not None:
+                            new_val = min(py_type(fmax), new_val)
+                        commit_val: Any = new_val
+                    else:
+                        commit_val = self._numpad_buffer  # numeric_string: keep as str
                     parts = self._numpad_field_path.split(".")
                     target = self._pending_changes
                     for p in parts[:-1]:
                         target = target.setdefault(p, {})
-                    target[parts[-1]] = self._numpad_buffer
+                    target[parts[-1]] = commit_val
                 self._numpad_active = False
                 self._numpad_field_path = None
                 self._numpad_buffer = ""
+                self._numpad_field_meta = None
 
         elif action == "numpad_cancel":
             self._numpad_active = False
             self._numpad_field_path = None
             self._numpad_buffer = ""
+            self._numpad_field_meta = None
 
         elif action in ("edit_str", "edit_password"):
             path = data
