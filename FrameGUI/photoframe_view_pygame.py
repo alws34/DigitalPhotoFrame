@@ -30,15 +30,16 @@ except ImportError:
 _TRIPLE_TAP_WINDOW = 0.8   # seconds between taps
 
 # Tab bar: index 0 is always QR, 1+ are settings tabs
-_TABS = ["QR", "Playback", "Display", "Weather", "Network", "System"]
+_TABS = ["QR", "WiFi", "Playback", "Display", "Weather", "Network", "System"]
 
 # Which top-level settings sections go in each tab (tab index → list of section keys)
+# Tab 0 (QR) and Tab 1 (WiFi) are custom-drawn; settings tabs start at 2.
 _TAB_SECTIONS: Dict[int, List[str]] = {
-    1: ["playback"],
-    2: ["ui", "screen", "stats", "effects"],
-    3: ["open_meteo"],
-    4: ["backend_configs", "mqtt"],
-    5: ["system", "autoupdate"],
+    2: ["playback"],
+    3: ["ui", "screen", "stats", "effects"],
+    4: ["open_meteo"],
+    5: ["backend_configs", "mqtt"],
+    6: ["system", "autoupdate"],
 }
 
 
@@ -182,6 +183,7 @@ class PhotoFramePygame:
         self._save_msg: str = ""
         self._save_msg_until: float = 0.0
         self._scroll_offsets: Dict[int, int] = {i: 0 for i in range(len(_TABS))}
+        self._tab_scroll_x: int = 0   # horizontal scroll offset for the tab bar
         # Cached field lists per tab (rebuilt when panel opens)
         self._tab_fields: Dict[int, List[tuple]] = {}
 
@@ -307,29 +309,77 @@ class PhotoFramePygame:
         pad = max(14, H // 45)
 
         panel = pygame.Surface((W, H), pygame.SRCALPHA)
-        panel.fill((8, 12, 28, 235))
+        panel.fill((8, 12, 28, 255))  # fully opaque
 
         self._ui_rects = []
 
         # ── Tab bar ────────────────────────────────────────────────
         TAB_H  = max(48, H // 14)
         n_tabs = len(_TABS)
-        avail  = W - TAB_H - 4           # leave room for X button
-        tab_w  = avail // n_tabs
+        # X button is fixed at the far right
+        x_btn_w = TAB_H
+        avail_w = W - x_btn_w - 4       # pixels available for the tab strip
 
+        # Minimum tab width; decide whether scrolling is needed
+        TAB_MIN_W = max(70, H // 11)
+        total_tab_w = n_tabs * TAB_MIN_W
+        needs_scroll = total_tab_w > avail_w
+        tab_w = TAB_MIN_W if needs_scroll else (avail_w // n_tabs)
+
+        ARR_W = TAB_H  # arrow buttons are the same height as the tab bar (square)
+
+        if needs_scroll:
+            max_tab_scroll = max(0, total_tab_w - avail_w + ARR_W * 2)
+            self._tab_scroll_x = max(0, min(self._tab_scroll_x, max_tab_scroll))
+            can_left  = self._tab_scroll_x > 0
+            can_right = self._tab_scroll_x < max_tab_scroll
+        else:
+            can_left = can_right = False
+            self._tab_scroll_x = 0
+
+        # Viewport for the tab strip (between optional arrow buttons)
+        vp_x = ARR_W if can_left else 0
+        vp_right = avail_w - (ARR_W if can_right else 0)
+        vp_w = vp_right - vp_x
+
+        # Clip so scrolling tabs don't bleed into arrow / X areas
+        panel.set_clip(pygame.Rect(vp_x, 0, vp_w, TAB_H))
         for i, name in enumerate(_TABS):
-            tr = pygame.Rect(i * tab_w + 3, 3, tab_w - 6, TAB_H - 6)
+            tx = vp_x + i * tab_w - self._tab_scroll_x
+            tr = pygame.Rect(tx + 2, 3, tab_w - 4, TAB_H - 6)
             active = (i == self._active_tab)
             pygame.draw.rect(panel,
-                             (60, 110, 255, 220) if active else (30, 40, 80, 180),
+                             (60, 110, 255, 255) if active else (30, 40, 80, 220),
                              tr, border_radius=8)
             t = self._font_tab.render(name, True, (255, 255, 255))
             panel.blit(t, (tr.centerx - t.get_width() // 2,
                            tr.centery - t.get_height() // 2))
-            self._ui_rects.append((tr, "tab", i))
+            # Only register tap if the tab center is within the viewport
+            if vp_x <= tr.centerx < vp_right:
+                self._ui_rects.append((tr, "tab", i))
+        panel.set_clip(None)
 
-        xr = pygame.Rect(W - TAB_H + 3, 3, TAB_H - 6, TAB_H - 6)
-        pygame.draw.rect(panel, (160, 40, 40, 220), xr, border_radius=8)
+        # Left scroll arrow
+        if can_left:
+            la = pygame.Rect(2, 3, ARR_W - 4, TAB_H - 6)
+            pygame.draw.rect(panel, (50, 80, 160, 230), la, border_radius=8)
+            lt = self._font_tab.render("◀", True, (255, 255, 255))
+            panel.blit(lt, (la.centerx - lt.get_width() // 2,
+                            la.centery - lt.get_height() // 2))
+            self._ui_rects.insert(0, (la, "tab_scroll_left", None))
+
+        # Right scroll arrow
+        if can_right:
+            ra = pygame.Rect(avail_w - ARR_W + 2, 3, ARR_W - 4, TAB_H - 6)
+            pygame.draw.rect(panel, (50, 80, 160, 230), ra, border_radius=8)
+            rt = self._font_tab.render("▶", True, (255, 255, 255))
+            panel.blit(rt, (ra.centerx - rt.get_width() // 2,
+                            ra.centery - rt.get_height() // 2))
+            self._ui_rects.insert(0, (ra, "tab_scroll_right", None))
+
+        # X button (always fixed at the right)
+        xr = pygame.Rect(W - x_btn_w + 3, 3, x_btn_w - 6, TAB_H - 6)
+        pygame.draw.rect(panel, (160, 40, 40, 255), xr, border_radius=8)
         xt = self._font_tab.render("X", True, (255, 255, 255))
         panel.blit(xt, (xr.centerx - xt.get_width() // 2,
                         xr.centery - xt.get_height() // 2))
@@ -342,6 +392,8 @@ class PhotoFramePygame:
 
         if self._active_tab == 0:
             self._draw_qr_tab(panel, content_top, content_bottom, pad)
+        elif self._active_tab == 1:  # WiFi tab
+            self._draw_wifi_tab(panel, content_top, content_bottom, pad)
         else:
             self._draw_settings_tab(panel, content_top, content_bottom, pad)
 
@@ -416,12 +468,7 @@ class PhotoFramePygame:
         VAL_W   = max(72, self.height // 10)
         SAVE_H  = max(44, self.height // 16)
 
-        # WiFi section is drawn (unclipped) above scrollable fields on the Network tab
-        wifi_offset = 0
-        if tab_idx == _TABS.index("Network") and self._wifi_available:
-            wifi_offset = self._draw_wifi_section(panel, top, pad, W)
-
-        content_top    = top + wifi_offset
+        content_top    = top
         content_bottom = bottom - SAVE_H - pad
         avail_h        = content_bottom - content_top
 
@@ -994,6 +1041,27 @@ class PhotoFramePygame:
 
         elif action == "tab":
             self._active_tab = int(data)
+            # Auto-scroll tab bar so the newly active tab is visible
+            TAB_MIN_W = max(70, self.height // 11)
+            ARR_W = max(48, self.height // 14)
+            avail_w = self.width - ARR_W - 4
+            total_tab_w = len(_TABS) * TAB_MIN_W
+            if total_tab_w > avail_w:
+                vp_w = avail_w - ARR_W * 2
+                tab_left = self._active_tab * TAB_MIN_W
+                tab_right = tab_left + TAB_MIN_W
+                if tab_left < self._tab_scroll_x:
+                    self._tab_scroll_x = tab_left
+                elif tab_right > self._tab_scroll_x + vp_w:
+                    self._tab_scroll_x = tab_right - vp_w
+
+        elif action == "tab_scroll_left":
+            TAB_MIN_W = max(70, self.height // 11)
+            self._tab_scroll_x = max(0, self._tab_scroll_x - TAB_MIN_W)
+
+        elif action == "tab_scroll_right":
+            TAB_MIN_W = max(70, self.height // 11)
+            self._tab_scroll_x += TAB_MIN_W  # clamped during drawing
 
         elif action == "toggle":
             path = data
@@ -1232,76 +1300,112 @@ class PhotoFramePygame:
             self._wifi_msg = f"Error: {exc}"
             self._wifi_msg_until = _time.monotonic() + 5.0
 
-    def _draw_wifi_section(self, panel: "pygame.Surface", top: int, pad: int, W: int) -> int:
-        """Draw WiFi scan/connect UI above schema fields. Returns height consumed."""
-        HDR_H = max(26, self.height // 28)
+    def _draw_wifi_tab(self, panel: "pygame.Surface", top: int, bottom: int, pad: int) -> None:
+        """Full-content-area WiFi tab with scan, network list, and connect."""
+        W     = self.width
         ROW_H = max(46, self.height // 16)
-        y = top
+        HDR_H = max(26, self.height // 28)
+        BTN_H = max(40, self.height // 18)
+        SCAN_H = max(44, self.height // 14)
 
-        # Header row + Scan button
-        hs = self._font_section.render("▶ WiFi Networks", True, (100, 150, 255))
-        panel.blit(hs, (pad + 4, y + (HDR_H - hs.get_height()) // 2))
-
-        scan_txt = "Scanning..." if self._wifi_scanning else "Scan"
-        scan_w = max(100, W // 6)
-        scan_r = pygame.Rect(W - pad - scan_w, y, scan_w, HDR_H)
-        scan_col = (40, 55, 90, 180) if self._wifi_scanning else (40, 80, 180, 220)
-        pygame.draw.rect(panel, scan_col, scan_r, border_radius=6)
-        ss = self._font_label.render(scan_txt, True, (200, 220, 255))
-        panel.blit(ss, (scan_r.centerx - ss.get_width() // 2, scan_r.centery - ss.get_height() // 2))
+        # Scan button row (fixed at top, not scrollable)
+        scan_txt = "Scanning..." if self._wifi_scanning else "Scan for Networks"
+        scan_col = (40, 55, 90, 255) if self._wifi_scanning else (40, 100, 220, 255)
+        scan_w   = max(220, W // 3)
+        scan_r   = pygame.Rect((W - scan_w) // 2, top + pad // 2, scan_w, SCAN_H)
+        pygame.draw.rect(panel, scan_col, scan_r, border_radius=10)
+        ss = self._font_label.render(scan_txt, True, (255, 255, 255))
+        panel.blit(ss, (scan_r.centerx - ss.get_width() // 2,
+                        scan_r.centery - ss.get_height() // 2))
         if not self._wifi_scanning:
             self._ui_rects.append((scan_r, "wifi_scan", None))
 
-        pygame.draw.line(panel, (60, 90, 180, 120), (pad, y + HDR_H), (W - pad, y + HDR_H), 1)
-        y += HDR_H + 4
-
-        # Status message
+        # Status message below scan button
+        fixed_top = top + SCAN_H + pad
         if self._wifi_msg and _time.monotonic() < self._wifi_msg_until:
-            msg_col = (100, 255, 150) if "Connected" in self._wifi_msg else (255, 180, 100)
-            ms = self._font_label.render(self._wifi_msg[:70], True, msg_col)
-            panel.blit(ms, (pad + 8, y + 4))
-            y += ms.get_height() + 8
+            msg_col = (80, 240, 130) if "Connected" in self._wifi_msg else (255, 185, 80)
+            ms = self._font_label.render(self._wifi_msg[:80], True, msg_col)
+            panel.blit(ms, ((W - ms.get_width()) // 2, fixed_top + 4))
+            fixed_top += ms.get_height() + 8
 
-        # Network rows (max 5 shown)
-        nets = self._wifi_networks[:5]
-        if not nets:
-            if not self._wifi_scanning:
-                es = self._font_label.render("Tap Scan to search for networks", True, (120, 130, 160))
-                panel.blit(es, (pad + 8, y + (ROW_H - es.get_height()) // 2))
-                y += ROW_H + 4
+        # Scrollable network list
+        content_top    = fixed_top
+        content_bottom = bottom
+        avail_h        = content_bottom - content_top
+
+        ARR_H = max(36, self.height // 18)
+        ARR_COLOR = (50, 80, 180, 200)
+
+        # Build virtual rows: header + one row per network (or empty-state row)
+        nets = self._wifi_networks
+        if not nets and not self._wifi_scanning:
+            rows = [("empty",)]
+        else:
+            rows = [("net", n) for n in nets]
+
+        total_h    = len(rows) * (ROW_H + 4) + (HDR_H + 4 if not nets else 0)
+        max_scroll = max(0, total_h - avail_h + ARR_H * 2)
+        scroll     = max(0, min(self._scroll_offsets.get(1, 0), max_scroll))
+        self._scroll_offsets[1] = scroll
+
+        panel.set_clip(pygame.Rect(0, content_top, W, avail_h))
+        y = content_top - scroll
+
+        if not nets and not self._wifi_scanning:
+            row_r = pygame.Rect(pad, y, W - pad * 2, ROW_H)
+            es = self._font_label.render("Tap 'Scan for Networks' to discover WiFi", True, (130, 140, 170))
+            panel.blit(es, (pad + 8, y + (ROW_H - es.get_height()) // 2))
         else:
             for net in nets:
-                ssid = net["ssid"]
-                signal = net["signal"]
+                ssid    = net["ssid"]
+                signal  = net["signal"]
                 secured = bool(net.get("security"))
+                row_y   = y
+                y      += ROW_H + 4
 
-                row_r = pygame.Rect(pad, y, W - pad * 2, ROW_H)
+                if row_y + ROW_H <= content_top or row_y >= content_bottom:
+                    continue
+
+                row_r = pygame.Rect(pad, row_y, W - pad * 2, ROW_H)
                 is_sel = (ssid == self._wifi_selected_ssid)
                 bg = pygame.Surface((row_r.w, row_r.h), pygame.SRCALPHA)
-                bg.fill((30, 80, 30, 180) if is_sel else (20, 28, 55, 150))
+                bg.fill((20, 70, 20, 200) if is_sel else (20, 28, 55, 200))
                 panel.blit(bg, row_r.topleft)
-                pygame.draw.rect(panel, (60, 90, 180, 70), row_r, 1)
+                pygame.draw.rect(panel, (60, 90, 180, 100), row_r, 1)
 
-                bars = "▂▄▆█" if signal >= 75 else ("▂▄▆" if signal >= 50 else ("▂▄" if signal >= 25 else "▂"))
-                lock = "🔒 " if secured else ""
-                ls = self._font_label.render(f"{bars}  {lock}{ssid}", True, (200, 220, 240))
-                panel.blit(ls, (pad + 8, y + (ROW_H - ls.get_height()) // 2))
+                bars = ("▂▄▆█" if signal >= 75 else
+                        "▂▄▆ " if signal >= 50 else
+                        "▂▄  " if signal >= 25 else "▂   ")
+                lock = "🔒 " if secured else "    "
+                ls = self._font_label.render(f"{bars} {lock}{ssid}", True, (210, 225, 245))
+                panel.blit(ls, (pad + 10, row_y + (ROW_H - ls.get_height()) // 2))
 
-                conn_w = max(100, W // 6)
-                conn_r = pygame.Rect(W - pad - conn_w, y + (ROW_H - 36) // 2, conn_w, 36)
-                pygame.draw.rect(panel, (40, 80, 180, 220), conn_r, border_radius=6)
+                conn_w = max(110, W // 6)
+                conn_r = pygame.Rect(W - pad - conn_w,
+                                     row_y + (ROW_H - BTN_H) // 2, conn_w, BTN_H)
+                pygame.draw.rect(panel, (35, 100, 210, 255), conn_r, border_radius=8)
                 cs = self._font_label.render("Connect", True, (255, 255, 255))
-                panel.blit(cs, (conn_r.centerx - cs.get_width() // 2, conn_r.centery - cs.get_height() // 2))
+                panel.blit(cs, (conn_r.centerx - cs.get_width() // 2,
+                                conn_r.centery - cs.get_height() // 2))
                 self._ui_rects.append((conn_r, "wifi_connect", ssid))
                 self._ui_rects.append((row_r, "wifi_connect", ssid))
 
-                y += ROW_H + 4
+        panel.set_clip(None)
 
-        # Separator
-        pygame.draw.line(panel, (60, 90, 180, 80), (pad, y), (W - pad, y), 1)
-        y += 6
-
-        return y - top
+        # Scroll arrows
+        if scroll > 0:
+            up_r = pygame.Rect(pad, content_top, W - pad * 2, ARR_H)
+            pygame.draw.rect(panel, ARR_COLOR, up_r, border_radius=6)
+            up_s = self._font_label.render("▲  scroll up", True, (200, 220, 255))
+            panel.blit(up_s, (up_r.centerx - up_s.get_width() // 2,
+                               up_r.centery - up_s.get_height() // 2))
+            self._ui_rects.append((up_r, "scroll_up", 1))
+        if scroll < max_scroll:
+            dn_r = pygame.Rect(pad, content_bottom - ARR_H, W - pad * 2, ARR_H)
+            pygame.draw.rect(panel, ARR_COLOR, dn_r, border_radius=6)
+            dn_s = self._font_label.render("▼  scroll down", True, (200, 220, 255))
+            panel.blit(dn_s, (dn_r.centerx - dn_s.get_width() // 2,
+                               dn_r.centery - dn_s.get_height() // 2))
 
     def _save_settings(self) -> None:
         try:
