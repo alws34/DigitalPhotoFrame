@@ -58,13 +58,18 @@ export default function SettingsView() {
       const data = await res.json();
       setSettings(data);
       originalRef.current = data;
-      if (!activeTab) setActiveTab(Object.keys(data).find((k) => !HIDDEN_KEYS.has(k)));
     } catch (e) {
       setStatus(`Error: ${e.message}`);
     }
-  }, [activeTab]);
+  }, []);
 
   useEffect(() => { fetchSettings(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (settings && !activeTab) {
+      setActiveTab(Object.keys(settings).find((k) => !HIDDEN_KEYS.has(k)));
+    }
+  }, [settings, activeTab]);
 
   useEffect(() => {
     fetch("/api/settings/schema")
@@ -75,7 +80,9 @@ export default function SettingsView() {
 
   useEffect(() => {
     const es = new EventSource("/api/settings/events", { withCredentials: true });
-    es.onmessage = (e) => { if (e.data === "settings_updated") fetchSettings(); };
+    es.onmessage = (e) => {
+      if (e.data === "settings_updated" && !pendingRef.current) fetchSettings();
+    };
     return () => es.close();
   }, [fetchSettings]);
 
@@ -89,23 +96,24 @@ export default function SettingsView() {
   }, []);
 
   const handleSave = async () => {
-    if (!pendingRef.current) return;
+    const snapshot = pendingRef.current;
+    if (!snapshot) return;
     setSaving(true);
     try {
       const res = await fetch("/api/settings", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(pendingRef.current),
+        body: JSON.stringify(snapshot),
       });
       if (!res.ok) throw new Error(await res.text());
 
-      const changed = collectChangedPaths(originalRef.current, pendingRef.current);
+      const changed = collectChangedPaths(originalRef.current, snapshot);
       const restartPaths = gatherRestartPaths(schema);
       const needsRestart = [...changed].some((p) => restartPaths.has(p));
 
-      originalRef.current = pendingRef.current;
-      pendingRef.current = null;
+      originalRef.current = snapshot;
+      if (pendingRef.current === snapshot) pendingRef.current = null;
       setStatus("Saved");
       setTimeout(() => setStatus(""), 2000);
       if (needsRestart) setShowRestartModal(true);

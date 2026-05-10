@@ -49,7 +49,9 @@ export default function SettingField({ fieldKey, fieldPath, value, schema, onCha
     return row(
       <select value={value ?? ""} onChange={(e) => onChange(fieldPath, e.target.value)}>
         {choices.map((c) => <option key={c} value={c}>{c}</option>)}
-        {!choices.includes(String(value)) && <option value={value}>{value}</option>}
+        {value != null && !choices.includes(String(value)) && (
+          <option value={String(value)}>{String(value)}</option>
+        )}
       </select>
     );
   }
@@ -91,7 +93,9 @@ export default function SettingField({ fieldKey, fieldPath, value, schema, onCha
             min={min} max={max} step={step}
             value={value ?? 0}
             onChange={(e) => {
-              const v = isFloat ? parseFloat(e.target.value) : parseInt(e.target.value, 10);
+              const raw = e.target.value;
+              if (raw === "") { onChange(fieldPath, min ?? 0); return; }
+              const v = isFloat ? parseFloat(raw) : parseInt(raw, 10);
               if (!isNaN(v)) onChange(fieldPath, v);
             }}
             style={{ flex: 1 }}
@@ -103,7 +107,9 @@ export default function SettingField({ fieldKey, fieldPath, value, schema, onCha
           step={step}
           min={min} max={max}
           onChange={(e) => {
-            const v = isFloat ? parseFloat(e.target.value) : parseInt(e.target.value, 10);
+            const raw = e.target.value;
+            if (raw === "") { onChange(fieldPath, min ?? 0); return; }
+            const v = isFloat ? parseFloat(raw) : parseInt(raw, 10);
             if (!isNaN(v)) onChange(fieldPath, v);
           }}
           style={{ maxWidth: 100 }}
