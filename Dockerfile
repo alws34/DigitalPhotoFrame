@@ -43,6 +43,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgles2 \
     libgbm1 \
     curl \
+    network-manager \
+    wireless-tools \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies

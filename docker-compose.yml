@@ -14,6 +14,7 @@ services:
       - /tmp/.X11-unix:/tmp/.X11-unix        # X11 Socket (fallback)
       - /run/user/1000:/run/user/1000        # Wayland Socket
       - /dev/shm:/dev/shm                    # Prevents memory crashes
+      - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket  # Host D-Bus → nmcli can reach NetworkManager
     environment:
       - PHOTOFRAME_SECRET_KEY=${PHOTOFRAME_SECRET_KEY:-change-me-in-production}
       - DISPLAY=:0

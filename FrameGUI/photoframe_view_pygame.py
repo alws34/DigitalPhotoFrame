@@ -1246,35 +1246,117 @@ class PhotoFramePygame:
         import threading
         threading.Thread(target=self._do_wifi_scan, daemon=True).start()
 
+    @staticmethod
+    def _scan_via_nmcli() -> list:
+        """Scan using nmcli (requires D-Bus access to host NetworkManager)."""
+        result = subprocess.run(
+            ["nmcli", "--terse", "--escape", "no",
+             "-f", "SSID,SIGNAL,SECURITY",
+             "device", "wifi", "list", "--rescan", "yes"],
+            capture_output=True, text=True, timeout=25,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or "nmcli error")
+        networks: list = []
+        seen: set = set()
+        for line in result.stdout.strip().splitlines():
+            # Split from right: SSID can contain colons; SIGNAL and SECURITY cannot.
+            parts = line.rsplit(":", 2)
+            if len(parts) < 3:
+                continue
+            ssid, signal_str, security = parts[0].strip(), parts[1].strip(), parts[2].strip()
+            if not ssid or ssid in seen:
+                continue
+            seen.add(ssid)
+            try:
+                signal = int(signal_str)
+            except ValueError:
+                signal = 0
+            # nmcli uses "--" for open networks
+            secured = bool(security and security != "--")
+            networks.append({"ssid": ssid, "signal": signal, "security": security if secured else ""})
+        return sorted(networks, key=lambda n: -n["signal"])
+
+    @staticmethod
+    def _scan_via_iwlist() -> list:
+        """Fallback scan using iwlist (wireless-tools, no daemon needed)."""
+        import re
+        # Find wireless interfaces
+        iw_dev = subprocess.run(["iwconfig"], capture_output=True, text=True, timeout=5)
+        ifaces = re.findall(r'^(\w+)\s+IEEE 802\.11', iw_dev.stdout, re.MULTILINE)
+        if not ifaces:
+            # Try /proc/net/wireless as a last resort
+            try:
+                with open("/proc/net/wireless") as f:
+                    for line in f:
+                        m = re.match(r'^\s*(\w+):', line)
+                        if m:
+                            ifaces.append(m.group(1))
+            except OSError:
+                pass
+        if not ifaces:
+            raise RuntimeError("No wireless interface found")
+
+        iface = ifaces[0]
+        result = subprocess.run(
+            ["iwlist", iface, "scan"],
+            capture_output=True, text=True, timeout=20,
+        )
+        networks: list = []
+        seen: set = set()
+        current: dict = {}
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            m = re.search(r'ESSID:"(.*?)"', line)
+            if m:
+                ssid = m.group(1)
+                if ssid and ssid not in seen:
+                    if current.get("ssid"):
+                        networks.append(current)
+                    seen.add(ssid)
+                    current = {"ssid": ssid, "signal": 0, "security": ""}
+            m = re.search(r'Quality=(\d+)/(\d+)', line)
+            if m and current:
+                current["signal"] = int(int(m.group(1)) * 100 / int(m.group(2)))
+            if "Encryption key:on" in line and current:
+                current["security"] = "WPA"
+        if current.get("ssid"):
+            networks.append(current)
+        return sorted(networks, key=lambda n: -n["signal"])
+
     def _do_wifi_scan(self) -> None:
+        import shutil
+        errors = []
+        networks: list = []
         try:
-            result = subprocess.run(
-                ["nmcli", "--terse", "-f", "SSID,SIGNAL,SECURITY",
-                 "device", "wifi", "list", "--rescan", "yes"],
-                capture_output=True, text=True, timeout=20,
-            )
-            networks: list = []
-            seen: set = set()
-            for line in result.stdout.strip().splitlines():
-                parts = line.split(":")
-                ssid = parts[0].strip() if parts else ""
-                if not ssid or ssid in seen:
-                    continue
-                seen.add(ssid)
-                signal = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
-                security = parts[2].strip() if len(parts) > 2 else ""
-                networks.append({"ssid": ssid, "signal": signal, "security": security})
-            networks.sort(key=lambda n: -n["signal"])
-            self._wifi_networks = networks
-            if not networks:
-                self._wifi_msg = "No networks found"
-                self._wifi_msg_until = _time.monotonic() + 4.0
+            if shutil.which("nmcli"):
+                networks = self._scan_via_nmcli()
+            else:
+                errors.append("nmcli not found")
         except Exception as exc:
-            logging.error("WiFi scan failed: %s", exc)
-            self._wifi_msg = "Scan failed"
-            self._wifi_msg_until = _time.monotonic() + 4.0
-        finally:
-            self._wifi_scanning = False
+            logging.warning("nmcli scan failed: %s", exc)
+            errors.append(f"nmcli: {exc}")
+
+        if not networks:
+            try:
+                if shutil.which("iwlist"):
+                    networks = self._scan_via_iwlist()
+                else:
+                    errors.append("iwlist not found")
+            except Exception as exc:
+                logging.warning("iwlist scan failed: %s", exc)
+                errors.append(f"iwlist: {exc}")
+
+        if networks:
+            self._wifi_networks = networks
+            self._wifi_msg = f"Found {len(networks)} network(s)"
+            self._wifi_msg_until = _time.monotonic() + 3.0
+        else:
+            msg = "; ".join(errors) if errors else "No networks found"
+            logging.error("WiFi scan failed: %s", msg)
+            self._wifi_msg = f"Scan failed: {msg[:60]}"
+            self._wifi_msg_until = _time.monotonic() + 6.0
+        self._wifi_scanning = False
 
     def _start_wifi_connect(self, ssid: str, password: str) -> None:
         self._wifi_msg = f"Connecting to {ssid}..."
