@@ -260,6 +260,7 @@ class APIServer:
         self._jpeg_queue = Queue(maxsize=30)
         self._new_frame_ev = Event()
         self._stop_event = Event()
+        self._last_jpeg: bytes = b""
 
         self.executor = ThreadPoolExecutor(max_workers=2)
         self.setup_routes()
@@ -412,6 +413,8 @@ class APIServer:
                 if now >= next_deadline:
                     if last_jpeg is None:
                         last_jpeg = self._make_heartbeat_jpeg(self.stream_w, self.stream_h)
+
+                    self._last_jpeg = last_jpeg
 
                     try:
                         self._jpeg_queue.put_nowait(last_jpeg)

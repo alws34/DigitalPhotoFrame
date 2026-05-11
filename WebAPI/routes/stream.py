@@ -12,6 +12,22 @@ from flask import (
 
 stream_bp = Blueprint('stream_bp', __name__, url_prefix='/api/stream')
 
+@stream_bp.route("/snapshot", methods=["GET"])
+def snapshot():
+    """Return a single JPEG frame — enables polling-based stream for cross-browser support."""
+    backend = current_app.config['backend']
+    data = backend._last_jpeg
+    if not data:
+        return Response(status=503)
+    return Response(
+        data,
+        mimetype="image/jpeg",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+        },
+    )
+
 @stream_bp.route("/", methods=["GET"], strict_slashes=False)
 def stream():
     backend = current_app.config['backend']

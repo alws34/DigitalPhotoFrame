@@ -202,6 +202,7 @@ class PhotoFramePygame:
         self._drag_origin: "tuple[int, int] | None" = None  # original press position
         self._drag_start: "tuple[int, int] | None" = None   # last position (for delta)
         self._drag_scrolled: bool = False  # True if total displacement > tap threshold
+        self._active_finger_id: "int | None" = None  # SDL2 finger tracking for single-touch
 
         # Numpad overlay
         self._numpad_active: bool = False
@@ -1055,6 +1056,41 @@ class PhotoFramePygame:
                     self._scroll_offsets[tab] = max(
                         0, self._scroll_offsets.get(tab, 0) - event.y * ROW_H
                     )
+            # SDL2 touch events (Wayland doesn't synthesize mouse events from touch)
+            if event.type == pygame.FINGERDOWN:
+                if self._active_finger_id is None:
+                    self._active_finger_id = event.finger_id
+                    pos = (int(event.x * self.width), int(event.y * self.height))
+                    if self._panel_visible:
+                        self._drag_origin = pos
+                        self._drag_start = pos
+                        self._drag_scrolled = False
+                    else:
+                        self._handle_triple_tap()
+            if event.type == pygame.FINGERMOTION:
+                if event.finger_id == self._active_finger_id and self._panel_visible and self._drag_start is not None:
+                    pos = (int(event.x * self.width), int(event.y * self.height))
+                    dy = pos[1] - self._drag_start[1]
+                    if abs(dy) > 3 and self._active_tab > 0:
+                        tab = self._active_tab
+                        self._scroll_offsets[tab] = max(
+                            0, self._scroll_offsets.get(tab, 0) - dy
+                        )
+                        self._drag_start = pos
+                        if self._drag_origin is not None and abs(pos[1] - self._drag_origin[1]) > 20:
+                            self._drag_scrolled = True
+            if event.type == pygame.FINGERUP:
+                if event.finger_id == self._active_finger_id:
+                    self._active_finger_id = None
+                    if self._panel_visible and self._drag_origin is not None:
+                        if not self._drag_scrolled:
+                            pos = (int(event.x * self.width), int(event.y * self.height))
+                            self._handle_panel_tap(pos)
+                        self._drag_origin = None
+                        self._drag_start = None
+                        self._drag_scrolled = False
+                    elif not self._panel_visible:
+                        self._active_finger_id = None
         return True
 
     def _handle_triple_tap(self) -> None:

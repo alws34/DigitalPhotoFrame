@@ -1,10 +1,43 @@
 import { useState, useEffect, useRef } from 'react';
 import { Expand, Maximize, Play, Pause } from 'lucide-react';
 
+const POLL_INTERVAL_MS = 200; // 5 fps — sufficient for photo frame monitoring
+
 export default function StreamView() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isPlaying, setIsPlaying] = useState(true);
+  const [snapshotUrl, setSnapshotUrl] = useState(null);
+  const [error, setError] = useState(false);
   const containerRef = useRef(null);
+  const intervalRef = useRef(null);
+
+  const fetchSnapshot = async () => {
+    try {
+      const res = await fetch('/api/stream/snapshot');
+      if (!res.ok) { setError(true); return; }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      setSnapshotUrl(prev => {
+        if (prev) URL.revokeObjectURL(prev);
+        return url;
+      });
+      setError(false);
+    } catch {
+      setError(true);
+    }
+  };
+
+  useEffect(() => {
+    if (!isPlaying) {
+      clearInterval(intervalRef.current);
+      return;
+    }
+    intervalRef.current = setInterval(fetchSnapshot, POLL_INTERVAL_MS);
+    return () => {
+      clearInterval(intervalRef.current);
+      setSnapshotUrl(prev => { if (prev) URL.revokeObjectURL(prev); return null; });
+    };
+  }, [isPlaying]);
 
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) {
@@ -31,7 +64,7 @@ export default function StreamView() {
           <h1 style={{ margin: 0, fontSize: '2rem', fontWeight: 600 }}>Live View</h1>
           <p style={{ margin: '0.5rem 0 0', color: 'var(--text-muted)' }}>Real-time stream from your digital photo frame</p>
         </div>
-        
+
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           <button onClick={() => setIsPlaying(!isPlaying)} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             {isPlaying ? <Pause size={18} /> : <Play size={18} />}
@@ -40,13 +73,13 @@ export default function StreamView() {
         </div>
       </header>
 
-      <div 
+      <div
         ref={containerRef}
-        className="glass-panel fade-in" 
-        style={{ 
-          flex: 1, 
-          position: 'relative', 
-          overflow: 'hidden', 
+        className="glass-panel fade-in"
+        style={{
+          flex: 1,
+          position: 'relative',
+          overflow: 'hidden',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -56,16 +89,18 @@ export default function StreamView() {
           animationDelay: '0.2s'
         }}
       >
-        {isPlaying ? (
-          <img 
-            src="/api/stream?width=1920&height=1080" 
-            alt="Live Stream" 
-            style={{ 
-              maxWidth: '100%', 
-              maxHeight: '100%', 
-              objectFit: 'contain' 
-            }}
+        {isPlaying && snapshotUrl ? (
+          <img
+            src={snapshotUrl}
+            alt="Live Stream"
+            style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
           />
+        ) : isPlaying && error ? (
+          <div style={{ color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem' }}>
+            <p>Stream unavailable — frame server may be starting up</p>
+          </div>
+        ) : isPlaying ? (
+          <div style={{ color: 'var(--text-muted)' }}>Connecting…</div>
         ) : (
           <div style={{ color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem' }}>
             <Pause size={48} opacity={0.5} />
@@ -73,7 +108,7 @@ export default function StreamView() {
           </div>
         )}
 
-        <button 
+        <button
           onClick={toggleFullscreen}
           className="glass-panel"
           style={{
