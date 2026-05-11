@@ -221,6 +221,10 @@ class PhotoFramePygame:
         self._osk_label: str = ""
         self._osk_target: str = "field"  # "field" or "wifi"
 
+        # Software brightness (0–100); applied as dim overlay in _blit_frame
+        self._screen_brightness_pct: int = 100
+        self._brightness_dirty: bool = False  # signals main thread to redraw after brightness change
+
         # WiFi state (Network tab)
         import shutil as _shutil
         self._wifi_available: bool = bool(_shutil.which("nmcli"))
@@ -267,8 +271,15 @@ class PhotoFramePygame:
         try:
             brightness = new_settings.get("screen", {}).get("brightness")
             if brightness is not None:
-                from Utilities.brightness import set_brightness_percent
-                set_brightness_percent(int(brightness))
+                pct = int(brightness)
+                self.set_brightness_percent(pct)
+                try:
+                    from Utilities.brightness import (  # noqa: PLC0415
+                        set_brightness_percent as _hw_brightness,
+                    )
+                    _hw_brightness(pct)
+                except Exception:
+                    pass
         except Exception as exc:
             logging.error("PhotoFramePygame: failed to apply brightness: %s", exc)
 
@@ -287,8 +298,9 @@ class PhotoFramePygame:
             self._pending_bgr = None
 
         if bgr is None:
-            # Re-render from cache so button-tap feedback is immediate
-            if self._panel_visible:
+            # Re-render from cache for panel redraws or brightness changes (thread-safe path)
+            if self._panel_visible or self._brightness_dirty:
+                self._brightness_dirty = False
                 with self._frame_lock:
                     bgr = self._last_bgr
                 if bgr is not None:
@@ -296,6 +308,7 @@ class PhotoFramePygame:
                     return True
             return False
 
+        self._brightness_dirty = False
         with self._frame_lock:
             self._last_bgr = bgr
         self._blit_frame(bgr)
@@ -309,11 +322,30 @@ class PhotoFramePygame:
             if w != self.width or h != self.height:
                 surface = pygame.transform.smoothscale(surface, (self.width, self.height))
             self.screen.blit(surface, (0, 0))
+            # Software brightness dim overlay (0% = black, 100% = no overlay)
+            pct = self._screen_brightness_pct
+            if pct < 100:
+                alpha = int((100 - pct) * 255 / 100)
+                dim = pygame.Surface((self.width, self.height))
+                dim.fill((0, 0, 0))
+                dim.set_alpha(alpha)
+                self.screen.blit(dim, (0, 0))
             if self._panel_visible:
                 self._draw_panel()
             pygame.display.flip()
         except Exception as e:
             logging.error("Pygame render error: %s", e)
+
+    def set_brightness_percent(self, pct: int, allow_zero: bool = True) -> bool:
+        """Software brightness via a black dim overlay. 0 = screen off, 100 = full.
+        Thread-safe: sets a dirty flag; the main render loop applies it within ~16 ms."""
+        pct = max(0, min(100, int(pct)))
+        self._screen_brightness_pct = pct
+        self._brightness_dirty = True  # main thread picks this up in render_pending_frame
+        return True
+
+    def read_brightness_percent(self) -> int:
+        return self._screen_brightness_pct
 
     # ------------------------------------------------------------------
     # Panel drawing

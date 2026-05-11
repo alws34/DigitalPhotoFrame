@@ -174,9 +174,10 @@ class APIServer:
         env_secret = os.getenv("PHOTOFRAME_SECRET_KEY")
         self.app.config.update(
             SESSION_COOKIE_HTTPONLY=True,
-            SESSION_COOKIE_SECURE=False, 
+            SESSION_COOKIE_SECURE=False,
             SESSION_COOKIE_SAMESITE="Lax",
             PERMANENT_SESSION_LIFETIME=3600,
+            MAX_CONTENT_LENGTH=200 * 1024 * 1024,  # 200 MB per batch (5 × 40 MB photos)
         )
 
         self.METADATA_FILE = self.set_absolute_paths("metadata.json")
@@ -378,52 +379,56 @@ class APIServer:
         print(f"[Backend] capture loop started (idle_fps={idle_fps})")
 
         while not self._stop_event.is_set() and self.Frame.get_is_running():
-            timeout = max(0.0, next_deadline - time.perf_counter())
-            got_new = self._new_frame_ev.wait(timeout=timeout)
-            if got_new:
-                self._new_frame_ev.clear()
-                frame = self.Frame.get_live_frame()
+            try:
+                timeout = max(0.0, next_deadline - time.perf_counter())
+                got_new = self._new_frame_ev.wait(timeout=timeout)
+                if got_new:
+                    self._new_frame_ev.clear()
+                    frame = self.Frame.get_live_frame()
 
-                if self._is_valid_frame(frame):
-                    if frame.ndim == 2:
-                        frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
-                    elif frame.ndim == 3 and frame.shape[2] == 4:
-                        frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+                    if self._is_valid_frame(frame):
+                        if frame.ndim == 2:
+                            frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+                        elif frame.ndim == 3 and frame.shape[2] == 4:
+                            frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
 
-                    if frame.dtype != np.uint8:
-                        try:
-                            frame = frame.astype(np.uint8)
-                        except Exception as e:
-                            print(f"[Backend] cannot cast frame dtype {frame.dtype} to uint8: {e}")
-                            frame = None
+                        if frame.dtype != np.uint8:
+                            try:
+                                frame = frame.astype(np.uint8)
+                            except Exception as e:
+                                print(f"[Backend] cannot cast frame dtype {frame.dtype} to uint8: {e}")
+                                frame = None
 
-                    if frame is not None:
-                        ok, jpg = cv2.imencode(
-                            ".jpg",
-                            frame,
-                            [cv2.IMWRITE_JPEG_QUALITY, self.encoding_quality],
-                        )
-                        if ok:
-                            last_jpeg = jpg.tobytes()
+                        if frame is not None:
+                            ok, jpg = cv2.imencode(
+                                ".jpg",
+                                frame,
+                                [cv2.IMWRITE_JPEG_QUALITY, self.encoding_quality],
+                            )
+                            if ok:
+                                last_jpeg = jpg.tobytes()
 
-            now = time.perf_counter()
-            if now >= next_deadline:
-                if last_jpeg is None:
-                    last_jpeg = self._make_heartbeat_jpeg(self.stream_w, self.stream_h)
+                now = time.perf_counter()
+                if now >= next_deadline:
+                    if last_jpeg is None:
+                        last_jpeg = self._make_heartbeat_jpeg(self.stream_w, self.stream_h)
 
-                try:
-                    self._jpeg_queue.put_nowait(last_jpeg)
-                except Full:
-                    try:
-                        _ = self._jpeg_queue.get_nowait()
-                    except Exception:
-                        pass
                     try:
                         self._jpeg_queue.put_nowait(last_jpeg)
-                    except Exception:
-                        pass
+                    except Full:
+                        try:
+                            _ = self._jpeg_queue.get_nowait()
+                        except Exception:
+                            pass
+                        try:
+                            self._jpeg_queue.put_nowait(last_jpeg)
+                        except Exception:
+                            pass
 
-                next_deadline = now + interval
+                    next_deadline = now + interval
+            except Exception as e:
+                print(f"[Backend] capture loop error: {e}")
+                time.sleep(0.5)
 
     def _encode_and_queue(self, frame: ndarray):
         frame = self._sanitize_frame(frame)
@@ -517,9 +522,13 @@ class APIServer:
     # -----------------------------------------------------------------
 
     def mjpeg_stream(self, screen_w, screen_h):
+        from queue import Empty
         boundary_line = b"--frame\r\n"
         while self.Frame.get_is_running():
-            data = self._jpeg_queue.get() 
+            try:
+                data = self._jpeg_queue.get(timeout=1.0)
+            except Empty:
+                continue
             yield (
                 boundary_line
                 + b"Content-Type: image/jpeg\r\n"
@@ -749,8 +758,20 @@ class APIServer:
     # -----------------------------------------------------------------
 
     def start(self):
+        import socket as _socket
+        host = self.host or "0.0.0.0"
+        for attempt in range(10):
+            try:
+                s = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+                s.setsockopt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, 1)
+                s.bind((host, self.port))
+                s.close()
+                break
+            except OSError:
+                print(f"[Backend] Port {self.port} busy, retrying in 3s ({attempt + 1}/10)…")
+                time.sleep(3)
         self.app.run(
-            host=self.host,
+            host=host,
             port=self.port,
             debug=False,
             use_reloader=False,

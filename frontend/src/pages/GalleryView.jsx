@@ -24,32 +24,53 @@ export default function GalleryView() {
   }, []);
 
   const handleFileUpload = async (e) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
 
     setUploading(true);
     setUploadProgress(0);
 
-    const formData = new FormData();
-    for (let i = 0; i < files.length; i++) {
-        formData.append('file[]', files[i]);
+    const BATCH_SIZE = 5;
+    const batches = [];
+    for (let i = 0; i < files.length; i += BATCH_SIZE) {
+      batches.push(files.slice(i, i + BATCH_SIZE));
     }
 
+    let completedBatches = 0;
+    let errorCount = 0;
+
     try {
-      await axios.post('/api/images/upload', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-        onUploadProgress: (progressEvent) => {
-          const percentCompleted = Math.round((progressEvent.loaded * 100) / progressEvent.total);
-          setUploadProgress(percentCompleted);
+      for (const batch of batches) {
+        const formData = new FormData();
+        batch.forEach(f => formData.append('file[]', f));
+
+        try {
+          await axios.post('/api/images/upload', formData, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+            onUploadProgress: ({ loaded, total }) => {
+              const batchFraction = total ? loaded / total : 0;
+              const overall = Math.round(((completedBatches + batchFraction) / batches.length) * 100);
+              setUploadProgress(Math.min(overall, 99));
+            },
+          });
+        } catch (err) {
+          errorCount++;
+          console.error('Batch upload error', err);
         }
-      });
-      fetchImages();
-    } catch (err) {
-      console.error('Upload failed', err);
-      alert('Upload failed: ' + (err.response?.data?.error || err.message));
+
+        completedBatches++;
+        setUploadProgress(Math.round((completedBatches / batches.length) * 100));
+      }
+
+      await fetchImages();
+
+      if (errorCount > 0) {
+        alert(`Upload finished with ${errorCount} batch error(s). Some photos may not have been saved.`);
+      }
     } finally {
       setUploading(false);
-      e.target.value = ''; // Reset input
+      setUploadProgress(0);
+      e.target.value = '';
     }
   };
 
@@ -91,7 +112,7 @@ export default function GalleryView() {
             }}
           >
             {uploading ? <Loader2 size={18} className="spin" /> : <Upload size={18} />}
-            {uploading ? `Uploading ${uploadProgress}%` : 'Upload Photos'}
+            {uploading ? `Uploading… ${uploadProgress}%` : 'Upload Photos'}
           </label>
           <input 
             type="file" 

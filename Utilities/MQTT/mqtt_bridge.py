@@ -489,6 +489,14 @@ class MqttBridge:
 
     # ---------- brightness ----------
     def _read_brightness_percent(self) -> Optional[int]:
+        # Try view directly (pygame software brightness)
+        try:
+            if hasattr(self.view, "read_brightness_percent"):
+                pct = self.view.read_brightness_percent()
+                if pct is not None:
+                    return int(pct)
+        except Exception:
+            pass
         # Prefer ScreenController if it exposes a reader
         try:
             sc = getattr(self.view, "screen", None)
@@ -531,6 +539,16 @@ class MqttBridge:
         # remember last nonzero brightness so we can restore after screen on
         if pct > 0:
             self._last_nonzero_brightness = pct
+
+        # Try view directly (pygame software brightness)
+        try:
+            if hasattr(self.view, "set_brightness_percent"):
+                ok = bool(self.view.set_brightness_percent(pct, allow_zero=True))
+                if ok:
+                    self._publish_brightness_state()
+                    return
+        except Exception as e:
+            self._log(f"View set_brightness_percent failed: {e}", logging.ERROR)
 
         try:
             sc = getattr(self.view, "screen", None)
