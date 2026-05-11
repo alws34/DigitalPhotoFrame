@@ -114,7 +114,7 @@ def get_default_settings() -> dict[str, Any]:
             "font_name": "arial.ttf",
             "is_24h": False,
             "margins": {"bottom": 30, "left": 80, "right": 50},
-            "show_weather": False,
+            "show_weather": True,
             "spacing_between": 50,
             "text_shadow": {"alpha": 230, "blur": 16, "offset_x": 2, "offset_y": 2},
             "time_font_size": 80,
@@ -299,6 +299,11 @@ def load_settings(json_path: str | None = None) -> dict[str, Any]:
             with open(json_path, "r", encoding="utf-8") as f:
                 saved = json.load(f)
             merged = _deep_merge(get_default_settings(), saved)
+            # Auto-enable weather when coordinates are configured
+            lat = merged.get("open_meteo", {}).get("latitude", "")
+            lon = merged.get("open_meteo", {}).get("longitude", "")
+            if lat and lon:
+                merged.setdefault("ui", {})["show_weather"] = True
             save_settings(merged)
             print(f"[Config] Migrated settings from {json_path}")
             return merged

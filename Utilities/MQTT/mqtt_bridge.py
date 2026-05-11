@@ -109,18 +109,36 @@ class MqttBridge:
 
     def _on_settings_changed(self, new_data: dict) -> None:
         new_cfg = (new_data.get("mqtt") or {}).copy()
-        if (new_cfg.get("host") != self.cfg.get("host") or
-                new_cfg.get("port") != self.cfg.get("port")):
-            self.cfg = new_cfg
-            self.settings = new_data
-            self._log("[MqttBridge] Settings changed — reconnecting", logging.INFO)
-            try:
-                self.disconnect()
-            except Exception:
-                pass
-        else:
-            self.cfg = new_cfg
-            self.settings = new_data
+        new_enabled = bool(new_cfg.get("enabled", False))
+
+        connection_changed = (
+            new_cfg.get("host") != self.cfg.get("host") or
+            new_cfg.get("port") != self.cfg.get("port") or
+            new_enabled != self.enabled
+        )
+
+        self.cfg = new_cfg
+        self.settings = new_data
+        self.enabled = new_enabled
+        self.host = new_cfg.get("host", "127.0.0.1")
+        self.port = int(new_cfg.get("port", 1883))
+        self.username = new_cfg.get("username") or None
+        self.password = new_cfg.get("password") or None
+        self.tls = bool(new_cfg.get("tls", False))
+        self.interval = int(new_cfg.get("interval_seconds", 10))
+
+        if connection_changed:
+            self._log("MQTT settings changed — restarting bridge", logging.INFO)
+            self._async(self._restart_bridge)
+
+    def _restart_bridge(self) -> None:
+        self.stop()
+        old_thread = self.thread
+        if old_thread and old_thread.is_alive():
+            old_thread.join(timeout=5.0)
+        self.thread = None
+        if self.enabled:
+            self.start()
 
     def start(self):
         if not self.enabled:
@@ -132,10 +150,19 @@ class MqttBridge:
         if self.thread and self.thread.is_alive():
             return
 
+        # paho-mqtt 2.x introduced CallbackAPIVersion; fall back gracefully
         try:
-            self.client = mqtt.Client(client_id=self.client_id, clean_session=True)
-        except TypeError:
-            self.client = mqtt.Client(client_id=self.client_id)
+            from paho.mqtt.enums import CallbackAPIVersion
+            self.client = mqtt.Client(
+                callback_api_version=CallbackAPIVersion.VERSION1,
+                client_id=self.client_id,
+                clean_session=True,
+            )
+        except (ImportError, TypeError):
+            try:
+                self.client = mqtt.Client(client_id=self.client_id, clean_session=True)
+            except TypeError:
+                self.client = mqtt.Client(client_id=self.client_id)
             
         if self.username:
             self.client.username_pw_set(self.username, self.password or None)
@@ -162,7 +189,7 @@ class MqttBridge:
         self.stop_event.clear()
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
-        self._log("MQTT bridge started.", logging.info)
+        self._log("MQTT bridge started.", logging.INFO)
 
     def stop(self):
         self.stop_event.set()
