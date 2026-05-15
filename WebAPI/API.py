@@ -466,9 +466,10 @@ class APIServer:
         return "." in filename and Path(filename).suffix.lower() in self.ALLOWED_EXTENSIONS
 
     def get_images_from_directory(self):
+        root = Path(self.IMAGE_DIR)
         return [
-            entry.name
-            for entry in Path(self.IMAGE_DIR).iterdir()
+            str(entry.relative_to(root))
+            for entry in root.rglob("*")
             if entry.is_file() and self.allowed_file(entry.name)
         ]
 

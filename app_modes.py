@@ -94,6 +94,13 @@ def _run_headless(settings: Dict[str, Any], settings_path: str,
     if album_manager is not None:
         backend.album_manager = album_manager
 
+        def _on_dir_change_headless(new_dir: str) -> None:
+            srv.set_images_dir(new_dir)
+            backend.IMAGE_DIR = backend._resolve_dir(new_dir)
+            backend.THUMB_DIR = os.path.join(os.path.dirname(backend.IMAGE_DIR), "_thumbs")
+
+        album_manager.register_dir_change_callback(_on_dir_change_headless)
+
     threading.Thread(target=backend.start, daemon=True).start()
     srv.m_api = backend
 
@@ -149,6 +156,14 @@ def _run_pygame(settings: Dict[str, Any], settings_path: str) -> None:
     backend.set_restart_fn(_restart_program)
     if album_manager is not None:
         backend.album_manager = album_manager
+
+        def _on_dir_change_pygame(new_dir: str) -> None:
+            srv.set_images_dir(new_dir)
+            backend.IMAGE_DIR = backend._resolve_dir(new_dir)
+            backend.THUMB_DIR = os.path.join(os.path.dirname(backend.IMAGE_DIR), "_thumbs")
+
+        album_manager.register_dir_change_callback(_on_dir_change_pygame)
+
     threading.Thread(target=backend.start, daemon=True).start()
     srv.m_api = backend
 
@@ -308,6 +323,14 @@ def _run_gui(settings: Dict[str, Any], settings_path: str) -> None:
     backend.set_restart_fn(_restart_program)
     if album_manager is not None:
         backend.album_manager = album_manager
+
+        def _on_dir_change_gui(new_dir: str) -> None:
+            srv.set_images_dir(new_dir)
+            backend.IMAGE_DIR = backend._resolve_dir(new_dir)
+            backend.THUMB_DIR = os.path.join(os.path.dirname(backend.IMAGE_DIR), "_thumbs")
+
+        album_manager.register_dir_change_callback(_on_dir_change_gui)
+
     threading.Thread(target=backend.start, daemon=True).start()
     srv.m_api = backend
 

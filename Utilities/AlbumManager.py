@@ -72,6 +72,13 @@ class AlbumManager:
         # Immich streaming cache (active only when an Immich album is selected)
         self._streaming_cache = None
 
+        # Callbacks fired when active image directory changes (e.g. album switch)
+        self._dir_change_callbacks: list = []
+
+    def register_dir_change_callback(self, fn) -> None:
+        """Register a callable(new_dir: str) called when the active image dir changes."""
+        self._dir_change_callbacks.append(fn)
+
     # ------------------------------------------------------------------ #
     # Lifecycle                                                            #
     # ------------------------------------------------------------------ #
@@ -160,7 +167,10 @@ class AlbumManager:
         """Return the Path that PhotoFrameServer should play from."""
         album_id = self.get_active_album_id()
         if album_id == "all" or not album_id:
-            return self._images_root
+            # "All" mode plays only local images — Immich dirs are streaming-only
+            local = self._images_root / "local_images"
+            local.mkdir(parents=True, exist_ok=True)
+            return local
 
         with get_db() as conn:
             row = conn.execute(
@@ -190,6 +200,12 @@ class AlbumManager:
         notify_settings_changed(settings)
         logger.info("[AlbumManager] Active album set to: %s", album_id)
         self._refresh_streaming_cache()
+        new_dir = str(self.get_active_image_dir())
+        for fn in self._dir_change_callbacks:
+            try:
+                fn(new_dir)
+            except Exception:
+                logger.exception("[AlbumManager] dir_change_callback error")
 
     def _refresh_streaming_cache(self) -> None:
         """Stop any running streaming cache and start a new one if active album is Immich."""
@@ -429,7 +445,32 @@ class AlbumManager:
         logger.info(
             "[AlbumManager] Subscribed album '%s' id=%s → %s", name, album_id, local_path
         )
+
+        # For Immich: fetch media_count immediately in background
+        if source_type == "immich":
+            threading.Thread(
+                target=self._fetch_immich_media_count,
+                args=(album_id, source_id, remote_id),
+                daemon=True,
+            ).start()
+
         return album_id
+
+    def _fetch_immich_media_count(self, album_id: str, source_id: str, remote_id: str) -> None:
+        try:
+            instance = self.get_source_instance(source_id)
+            if instance is None or not instance.is_authenticated:
+                return
+            assets = instance.list_album_assets(remote_id)
+            count = len(assets)
+            with get_db() as conn:
+                conn.execute(
+                    "UPDATE albums SET media_count = ? WHERE id = ?",
+                    (count, album_id),
+                )
+            logger.info("[AlbumManager] Immich album %s has %d assets", album_id, count)
+        except Exception:
+            logger.exception("[AlbumManager] Failed to fetch media count for %s", album_id)
 
     def unsubscribe_album(self, album_id: str) -> None:
         """Remove album from DB and delete local files."""
