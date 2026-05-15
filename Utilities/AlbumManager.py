@@ -91,6 +91,7 @@ class AlbumManager:
         )
         self._thread.start()
         logger.info("[AlbumManager] Started background sync thread.")
+        self._migrate_root_images_to_local()
         self._repair_album_paths()
         self._refresh_streaming_cache()
         self._refresh_immich_counts()
@@ -492,6 +493,33 @@ class AlbumManager:
                 args=(row["id"], row["source_id"], row["remote_id"]),
                 daemon=True,
             ).start()
+
+    def _migrate_root_images_to_local(self) -> None:
+        """Move any image files sitting directly in _images_root into local_images/.
+
+        Uploaded photos were previously stored at Images/<file>.  After switching
+        to source-segregated directories, "all" / Local Images mode reads from
+        Images/local_images/.  This one-time migration moves existing root-level
+        images so they continue to appear in local mode.
+        """
+        _IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".heic", ".heif", ".webp"}
+        _SOURCE_DIRS = {"immich", "google_photos", "local", "local_images"}
+        try:
+            local_dir = self._images_root / "local_images"
+            local_dir.mkdir(parents=True, exist_ok=True)
+            moved = 0
+            for f in self._images_root.iterdir():
+                if f.is_file() and f.suffix.lower() in _IMAGE_EXTS:
+                    dest = local_dir / f.name
+                    if not dest.exists():
+                        f.rename(dest)
+                        moved += 1
+            if moved:
+                logger.info(
+                    "[AlbumManager] Migrated %d image(s) from Images/ root → local_images/", moved
+                )
+        except Exception:
+            logger.exception("[AlbumManager] _migrate_root_images_to_local failed")
 
     def _repair_album_paths(self) -> None:
         """Fix local_path entries that don't live under _images_root / source_type."""

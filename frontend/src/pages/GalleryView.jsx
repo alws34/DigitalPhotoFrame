@@ -19,7 +19,9 @@ export default function GalleryView() {
       const res = await axios.get('/api/images');
       setImages(res.data);
     } catch (err) {
-      console.error('Failed to fetch images', err);
+      if (err?.response?.status !== 401) {
+        console.error('Failed to fetch images', err);
+      }
     } finally {
       setLoading(false);
     }
