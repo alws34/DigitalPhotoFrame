@@ -143,6 +143,7 @@ class PhotoFrameServer(iFrame):
         self.current_image = None
         self.next_image = None
         self.frame_to_stream = None
+        self._raw_frame_to_stream = None
         self.is_running = True
 
         self.EffectHandler = EffectHandler()
@@ -358,6 +359,9 @@ class PhotoFrameServer(iFrame):
                                    interpolation=cv2.INTER_LINEAR)
 
         # 2. Bake Overlay (Date/Time/Weather)
+        # Save raw frame before overlay so stream can serve clean frames.
+        self._raw_frame_to_stream = frame_bgr
+
         # This is the most CPU-intensive part; we optimize by caching settings.
         if self._overlay:
             try:
@@ -463,6 +467,15 @@ class PhotoFrameServer(iFrame):
         if isinstance(self.frame_to_stream, np.ndarray) and self.frame_to_stream.size:
             return self.frame_to_stream
         return self._blank_frame()
+
+    def get_stream_frame(self):
+        """Return the frame for the web stream — raw (no overlay) by default."""
+        show_overlay = (self._settings or {}).get("stream", {}).get("show_overlay", False)
+        if not show_overlay:
+            raw = self._raw_frame_to_stream
+            if isinstance(raw, np.ndarray) and raw.size:
+                return raw
+        return self.get_live_frame()
 
     def update_frame_to_stream(self, frame_bgr: np.ndarray) -> None:
         pass

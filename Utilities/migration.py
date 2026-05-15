@@ -23,11 +23,18 @@ def run_migrations(images_root: str | Path) -> None:
         logger.info("[Migration] images_root does not exist yet: %s", images_root)
         return
 
+    unsorted = local_images / "Unsorted"
+
     for entry in list(images_root.iterdir()):
         if entry.name in _KNOWN_SOURCE_DIRS:
             continue
-        # Move files and unknown dirs into local_images/
-        dest = local_images / entry.name
+        if entry.is_dir():
+            # Named subfolders become albums inside local_images/
+            dest = local_images / entry.name
+        else:
+            # Flat files go into Unsorted/ so LocalFolderSource picks them up as an album
+            unsorted.mkdir(parents=True, exist_ok=True)
+            dest = unsorted / entry.name
         if not dest.exists():
             try:
                 entry.rename(dest)

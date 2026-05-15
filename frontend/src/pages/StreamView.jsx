@@ -1,11 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
-import { Expand, Maximize, Play, Pause } from 'lucide-react';
+import { Expand, Maximize, Play, Pause, Layers } from 'lucide-react';
 
 const POLL_INTERVAL_MS = 200; // 5 fps — sufficient for photo frame monitoring
 
 export default function StreamView() {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isPlaying, setIsPlaying] = useState(true);
+  const [showOverlay, setShowOverlay] = useState(false);
   const [snapshotUrl, setSnapshotUrl] = useState(null);
   const [error, setError] = useState(false);
   const containerRef = useRef(null);
@@ -66,6 +67,23 @@ export default function StreamView() {
         </div>
 
         <div style={{ display: 'flex', gap: '0.5rem' }}>
+          <button
+            onClick={() => {
+              const next = !showOverlay;
+              setShowOverlay(next);
+              fetch('/api/settings', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'include',
+                body: JSON.stringify({ stream: { show_overlay: next } }),
+              }).catch(() => {});
+            }}
+            style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', opacity: showOverlay ? 1 : 0.5 }}
+            title={showOverlay ? 'Hide overlay' : 'Show overlay'}
+          >
+            <Layers size={18} />
+            Overlay {showOverlay ? 'On' : 'Off'}
+          </button>
           <button onClick={() => setIsPlaying(!isPlaying)} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             {isPlaying ? <Pause size={18} /> : <Play size={18} />}
             {isPlaying ? 'Pause Stream' : 'Resume'}

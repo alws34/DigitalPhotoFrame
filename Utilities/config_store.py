@@ -106,6 +106,9 @@ def get_default_settings() -> dict[str, Any]:
                 {"days": [0, 1, 2, 3, 4, 5, 6], "enabled": False, "off_hour": 0, "on_hour": 10}
             ],
         },
+        "stream": {
+            "show_overlay": False,
+        },
         "stats": {"font_color": "yellow", "font_size": 20, "show": False},
         "system": {
             "image_dir": "Images",
@@ -199,6 +202,9 @@ SETTINGS_SCHEMA: dict = {
         "orientation":      {"type": "int",  "label": "Orientation (°)", "min": 0, "max": 270, "step": 90, "restart_required": False},
         "schedule_enabled": {"type": "bool", "label": "Enable Schedule",                                   "restart_required": False},
         # "schedules" is a list of per-schedule objects — managed via web UI only, intentionally absent
+    },
+    "stream": {
+        "show_overlay": {"type": "bool", "label": "Show Overlay on Stream", "restart_required": False},
     },
     "stats": {
         "font_color": {"type": "color", "label": "Font Color", "choices": ["yellow", "white", "red", "green", "blue"], "restart_required": False},

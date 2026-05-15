@@ -386,7 +386,7 @@ class APIServer:
                 got_new = self._new_frame_ev.wait(timeout=timeout)
                 if got_new:
                     self._new_frame_ev.clear()
-                    frame = self.Frame.get_live_frame()
+                    frame = self.Frame.get_stream_frame()
 
                     if self._is_valid_frame(frame):
                         if frame.ndim == 2:
