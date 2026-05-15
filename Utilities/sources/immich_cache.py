@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import threading
 from pathlib import Path
+from typing import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -26,11 +27,13 @@ class ImmichStreamingCache:
         remote_id: str,  # Immich album ID
         local_path: Path,
         delay_seconds: float,
+        on_change: Callable[[], None] | None = None,
     ) -> None:
         self._source = source
         self._remote_id = remote_id
         self._local_path = local_path
         self._delay = max(float(delay_seconds), 1.0)
+        self._on_change = on_change
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._counter = 0
@@ -78,6 +81,7 @@ class ImmichStreamingCache:
             self._source.download_asset(asset_id, tmp)
             tmp.rename(dest)
             logger.debug("[ImmichCache] Cached %s", name)
+            self._notify_change()
             return True
         except Exception as exc:
             logger.warning("[ImmichCache] Download failed for %s: %s", asset_id, exc)
@@ -90,14 +94,28 @@ class ImmichStreamingCache:
             try:
                 files[0].unlink()
                 logger.debug("[ImmichCache] Evicted %s", files[0].name)
+                self._notify_change()
             except Exception:
                 pass
 
     def _clear_cache(self) -> None:
+        changed = False
         for f in self._cached_files():
             f.unlink(missing_ok=True)
+            changed = True
         for tmp in self._local_path.glob(f"{_PREFIX}*.tmp"):
             tmp.unlink(missing_ok=True)
+            changed = True
+        if changed:
+            self._notify_change()
+
+    def _notify_change(self) -> None:
+        if self._on_change is None:
+            return
+        try:
+            self._on_change()
+        except Exception:
+            logger.exception("[ImmichCache] Change callback failed")
 
     def _run(self) -> None:
         try:

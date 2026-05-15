@@ -501,7 +501,7 @@ class PhotoFrameServer(iFrame):
             ".mov", ".mp4"
         ]
         image_paths = []
-        for root, dirs, files in os.walk(self.IMAGE_DIR):
+        for root, _dirs, files in os.walk(self.IMAGE_DIR):
             for file in files:
                 if file.lower().endswith(tuple(image_extensions)):
                     image_path = os.path.join(root, file)
@@ -547,7 +547,9 @@ class PhotoFrameServer(iFrame):
 
         logging.info("Using IMAGE_DIR = %s", self.IMAGE_DIR)
 
-        # Restart observer on new directory so watchdog tracks the right path
+        # Restart observer on new directory so watchdog tracks the right path.
+        # If the directory is unchanged, still reload; remote streaming caches
+        # can mutate the active directory without a reliable watchdog event.
         if getattr(self, "_observer_started", False) and self.IMAGE_DIR != old_dir:
             try:
                 self.Observer.stop_observer()
@@ -559,6 +561,8 @@ class PhotoFrameServer(iFrame):
             self._observer_started = False
             self.Observer.start_observer()
             self._observer_started = True
+            self.update_images_list()
+        elif self.IMAGE_DIR == old_dir:
             self.update_images_list()
 
         return True
@@ -713,6 +717,8 @@ class PhotoFrameServer(iFrame):
                         "PhotoFrameServer: Pillow HEIC decode failed for %r: %s", path, e)
 
                 try:
+                    import pyheif
+
                     heif = pyheif.read(path)
                     pil_img = Image.frombytes(
                         heif.mode, heif.size, heif.data, "raw", heif.mode, heif.stride)

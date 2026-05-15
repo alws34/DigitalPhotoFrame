@@ -79,6 +79,14 @@ class AlbumManager:
         """Register a callable(new_dir: str) called when the active image dir changes."""
         self._dir_change_callbacks.append(fn)
 
+    def _notify_active_dir_changed(self, new_dir: str | Path) -> None:
+        """Tell listeners that the active image directory should be reloaded."""
+        for fn in self._dir_change_callbacks:
+            try:
+                fn(str(new_dir))
+            except Exception:
+                logger.exception("[AlbumManager] dir_change_callback error")
+
     # ------------------------------------------------------------------ #
     # Lifecycle                                                            #
     # ------------------------------------------------------------------ #
@@ -203,12 +211,7 @@ class AlbumManager:
         notify_settings_changed(settings)
         logger.info("[AlbumManager] Active album set to: %s", album_id)
         self._refresh_streaming_cache()
-        new_dir = str(self.get_active_image_dir())
-        for fn in self._dir_change_callbacks:
-            try:
-                fn(new_dir)
-            except Exception:
-                logger.exception("[AlbumManager] dir_change_callback error")
+        self._notify_active_dir_changed(self.get_active_image_dir())
 
     def _refresh_streaming_cache(self) -> None:
         """Stop any running streaming cache and start a new one if active album is Immich."""
@@ -248,11 +251,13 @@ class AlbumManager:
 
             from Utilities.sources.immich_cache import ImmichStreamingCache
 
+            local_path = Path(row["local_path"])
             cache = ImmichStreamingCache(
                 source=instance,
                 remote_id=row["remote_id"],
-                local_path=Path(row["local_path"]),
+                local_path=local_path,
                 delay_seconds=delay,
+                on_change=lambda: self._notify_active_dir_changed(local_path),
             )
             cache.start()
             self._streaming_cache = cache

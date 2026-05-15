@@ -39,6 +39,8 @@ export default function GalleryView() {
           activeAlbumRef.current = id;
           setActiveAlbum(res.data);
           fetchImages();
+        } else if (id && id !== 'all') {
+          fetchImages();
         }
       } catch {
         // ignore — AlbumManager may not be available
