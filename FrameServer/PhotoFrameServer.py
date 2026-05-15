@@ -522,6 +522,8 @@ class PhotoFrameServer(iFrame):
         base_root = os.path.abspath(
             os.path.join(os.path.dirname(__file__), ".."))
 
+        old_dir = getattr(self, "IMAGE_DIR", None)
+
         if images_dir is not None:
             if os.path.isabs(images_dir):
                 self.IMAGE_DIR = images_dir
@@ -544,6 +546,21 @@ class PhotoFrameServer(iFrame):
                 "'%s' directory not found. Created a new one.", self.IMAGE_DIR)
 
         logging.info("Using IMAGE_DIR = %s", self.IMAGE_DIR)
+
+        # Restart observer on new directory so watchdog tracks the right path
+        if self._observer_started and self.IMAGE_DIR != old_dir:
+            try:
+                self.Observer.stop_observer()
+            except Exception:
+                pass
+            self.Observer = ImagesObserver(frame=self, images_dir=self.IMAGE_DIR)
+            if hasattr(self.Observer, "on_change"):
+                self.Observer.on_change = self._on_images_dir_changed
+            self._observer_started = False
+            self.Observer.start_observer()
+            self._observer_started = True
+            self.update_images_list()
+
         return True
 
     def update_images_list(self):
