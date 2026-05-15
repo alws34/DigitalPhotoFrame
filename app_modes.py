@@ -30,6 +30,9 @@ def _build_album_manager(settings: Dict[str, Any]):
         from Utilities.AlbumManager import AlbumManager
         from Utilities.encryption import load_or_create_key
         from Utilities.migration import run_migrations
+        from WebAPI.database import init_db
+
+        init_db()  # ensure sources/albums tables exist before sync thread starts
 
         sys_cfg = settings.get("system", {})
         images_root = sys_cfg.get("image_dir") or "Images"
