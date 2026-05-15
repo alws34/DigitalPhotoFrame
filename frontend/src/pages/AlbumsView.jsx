@@ -47,6 +47,45 @@ function formatDate(ts) {
 }
 
 // ---------------------------------------------------------------------------
+// Google Photos setup guide (inline collapsible)
+// ---------------------------------------------------------------------------
+function GooglePhotosSetupGuide() {
+  const [open, setOpen] = useState(false);
+  const steps = [
+    { n: 1, title: 'Open Google Cloud Console', body: <>Go to <a href="https://console.cloud.google.com" target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>console.cloud.google.com</a> and create a new project (or select an existing one).</> },
+    { n: 2, title: 'Enable the Photos Library API', body: <>Navigate to <strong>APIs &amp; Services → Library</strong>, search for <strong>"Photos Library API"</strong>, and click <strong>Enable</strong>.</> },
+    { n: 3, title: 'Configure the OAuth consent screen', body: <>Go to <strong>APIs &amp; Services → OAuth consent screen</strong>. Choose <strong>External</strong>, fill in the app name (e.g. "Photo Frame"), add your email as a test user, and save.</> },
+    { n: 4, title: 'Create an OAuth 2.0 Client ID', body: <>Go to <strong>APIs &amp; Services → Credentials → Create Credentials → OAuth client ID</strong>. Choose <strong>Web application</strong>. You will paste the Redirect URI shown in the next step.</> },
+    { n: 5, title: 'Paste the Client ID and Secret here', body: <>Copy the <strong>Client ID</strong> and <strong>Client Secret</strong> from the credentials page into the fields below, then click Connect to get the Redirect URI.</> },
+    { n: 6, title: 'Add the Redirect URI to Google', body: <>After clicking Connect, copy the Redirect URI shown and add it under <strong>Authorized redirect URIs</strong> in your OAuth client, then click <strong>Open Google Authorization</strong>.</> },
+  ];
+  return (
+    <div style={{ marginBottom: '1.25rem' }}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: '0.4rem',
+          fontSize: '0.83rem', color: 'var(--accent)', background: 'none',
+          border: 'none', padding: 0, cursor: 'pointer', marginBottom: open ? '0.75rem' : 0,
+        }}
+      >
+        {open ? '▼' : '▶'} Setup guide — how to get your Client ID &amp; Secret
+      </button>
+      {open && (
+        <ol style={{ margin: 0, paddingLeft: '1.2rem', display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+          {steps.map(({ n, title, body }) => (
+            <li key={n} style={{ fontSize: '0.83rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+              <strong style={{ color: 'var(--text-primary)' }}>{title}</strong><br />{body}
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Shared modal shell
 // ---------------------------------------------------------------------------
 const overlayStyle = {
@@ -149,9 +188,8 @@ function GooglePhotosModal({ onClose, onAdd }) {
     <div style={overlayStyle} onClick={onClose}>
       <div style={modalStyle} onClick={(e) => e.stopPropagation()}>
         <h2 style={{ margin: '0 0 0.5rem' }}>Connect Google Photos</h2>
-        <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '1.5rem' }}>
-          Requires a Google Cloud Console project with the <strong>Photos Library API</strong> enabled and an OAuth 2.0 Web Client ID.
-        </p>
+        <GooglePhotosSetupGuide />
+
         <form onSubmit={handleConnect} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
           {[
             { label: 'Name', value: name, set: setName, type: 'text', placeholder: 'Google Photos' },
