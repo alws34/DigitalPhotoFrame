@@ -26,7 +26,7 @@ const MOCK_ALBUMS = [
   },
 ];
 
-const MOCK_ACTIVE = { album_id: 'all', name: 'All Photos' };
+const MOCK_ACTIVE = { album_id: 'all', name: 'Local Images' };
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -714,7 +714,7 @@ export default function AlbumsView() {
       console.warn('PUT /api/albums/active failed (API not implemented yet):', e.message);
       // Optimistic update when API unavailable
       const found = albums.find((a) => a.id === albumId);
-      setActiveAlbum(albumId === 'all' ? { album_id: 'all', name: 'All Photos' } : { album_id: albumId, name: found?.name ?? albumId });
+      setActiveAlbum(albumId === 'all' ? { album_id: 'all', name: 'Local Images' } : { album_id: albumId, name: found?.name ?? albumId });
     } finally {
       setSettingActive(false);
     }
@@ -804,7 +804,7 @@ export default function AlbumsView() {
                 disabled={settingActive}
                 style={{ paddingRight: '2rem', appearance: 'none' }}
               >
-                <option value="all">All Photos</option>
+                <option value="all">Local Images</option>
                 {albums.map((a) => (
                   <option key={a.id} value={a.id}>{a.name}</option>
                 ))}

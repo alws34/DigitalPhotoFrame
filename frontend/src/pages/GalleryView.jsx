@@ -1,12 +1,18 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { Upload, Trash2, Image as ImageIcon, Loader2 } from 'lucide-react';
+
+function encodeImagePath(p) {
+  return p.split('/').map(encodeURIComponent).join('/');
+}
 
 export default function GalleryView() {
   const [images, setImages] = useState([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [activeAlbum, setActiveAlbum] = useState(null);
+  const activeAlbumRef = useRef(null);
 
   const fetchImages = async () => {
     try {
@@ -21,6 +27,24 @@ export default function GalleryView() {
 
   useEffect(() => {
     fetchImages();
+
+    // Poll active album; refetch images when it changes
+    const poll = async () => {
+      try {
+        const res = await axios.get('/api/albums/active', { withCredentials: true });
+        const id = res.data?.album_id ?? null;
+        if (id !== activeAlbumRef.current) {
+          activeAlbumRef.current = id;
+          setActiveAlbum(res.data);
+          fetchImages();
+        }
+      } catch {
+        // ignore — AlbumManager may not be available
+      }
+    };
+    poll();
+    const timer = setInterval(poll, 5000);
+    return () => clearInterval(timer);
   }, []);
 
   const handleFileUpload = async (e) => {
@@ -78,7 +102,7 @@ export default function GalleryView() {
     if (!window.confirm(`Are you sure you want to delete ${filename}?`)) return;
     
     try {
-      await axios.delete(`/api/images/${encodeURIComponent(filename)}`);
+      await axios.delete(`/api/images/${encodeImagePath(filename)}`);
       setImages(images.filter(img => img.name !== filename));
     } catch (err) {
       console.error('Delete failed', err);
@@ -91,7 +115,9 @@ export default function GalleryView() {
       <header style={{ marginBottom: '2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
           <h1 style={{ margin: 0, fontSize: '2rem', fontWeight: 600 }}>Gallery</h1>
-          <p style={{ margin: '0.5rem 0 0', color: 'var(--text-muted)' }}>Manage {images.length} photos on your frame</p>
+          <p style={{ margin: '0.5rem 0 0', color: 'var(--text-muted)' }}>
+            {activeAlbum && activeAlbum.name ? `${activeAlbum.name} · ` : ''}{images.length} photos
+          </p>
         </div>
         
         <div>
@@ -153,14 +179,13 @@ export default function GalleryView() {
               }}
             >
               <div style={{ aspectRatio: '4/3', backgroundColor: '#000', position: 'relative' }}>
-                <img 
-                  src={`/api/images/thumb/${encodeURIComponent(img.name)}?w=400`} 
+                <img
+                  src={`/api/images/thumb/${encodeImagePath(img.name)}?w=400`}
                   alt={img.name}
                   loading="lazy"
                   style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                   onError={(e) => {
-                    // Fallback to full image if thumb fails
-                    e.target.src = `/api/images/${encodeURIComponent(img.name)}`;
+                    e.target.src = `/api/images/${encodeImagePath(img.name)}`;
                   }}
                 />
                 

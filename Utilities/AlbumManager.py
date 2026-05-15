@@ -92,6 +92,7 @@ class AlbumManager:
         self._thread.start()
         logger.info("[AlbumManager] Started background sync thread.")
         self._refresh_streaming_cache()
+        self._refresh_immich_counts()
 
     def stop(self) -> None:
         """Signal background thread to stop and wait for it to finish."""
@@ -471,6 +472,25 @@ class AlbumManager:
             logger.info("[AlbumManager] Immich album %s has %d assets", album_id, count)
         except Exception:
             logger.exception("[AlbumManager] Failed to fetch media count for %s", album_id)
+
+    def _refresh_immich_counts(self) -> None:
+        """On startup, refresh media_count for all subscribed Immich albums in background."""
+        try:
+            with get_db() as conn:
+                rows = conn.execute(
+                    """SELECT a.id, a.source_id, a.remote_id
+                       FROM albums a
+                       JOIN sources s ON s.id = a.source_id
+                       WHERE a.subscribed = 1 AND s.source_type = 'immich'"""
+                ).fetchall()
+        except Exception:
+            return
+        for row in rows:
+            threading.Thread(
+                target=self._fetch_immich_media_count,
+                args=(row["id"], row["source_id"], row["remote_id"]),
+                daemon=True,
+            ).start()
 
     def unsubscribe_album(self, album_id: str) -> None:
         """Remove album from DB and delete local files."""

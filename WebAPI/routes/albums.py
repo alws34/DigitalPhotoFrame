@@ -13,7 +13,7 @@ def _get_album_manager():
 def _active_response(am, album_id: str) -> dict:
     """Build the standard active-album response dict."""
     if album_id == "all" or not album_id:
-        return {"album_id": "all", "name": "All Photos"}
+        return {"album_id": "all", "name": "Local Images"}
     # Look up name from subscribed albums
     try:
         albums = am.get_albums()
