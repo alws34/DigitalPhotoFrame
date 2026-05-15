@@ -6,6 +6,7 @@ import DashboardLayout from './components/DashboardLayout';
 import StreamView from './pages/StreamView';
 import GalleryView from './pages/GalleryView';
 import SettingsView from './pages/SettingsView';
+import AlbumsView from './pages/AlbumsView';
 import ResetPassword from './pages/ResetPassword';
 import FrameView from './pages/FrameView';
 
@@ -36,6 +37,7 @@ function App() {
             <Route index element={<Navigate to="/stream" replace />} />
             <Route path="stream" element={<StreamView />} />
             <Route path="gallery" element={<GalleryView />} />
+            <Route path="albums" element={<AlbumsView />} />
             <Route path="settings" element={<SettingsView />} />
           </Route>
         </Routes>

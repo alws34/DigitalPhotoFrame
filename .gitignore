@@ -16,7 +16,9 @@ build/
 
 # Settings (Secrets)
 photoframe_settings.json
+photoframe_settings.json.migrated
 users.json
+.pf_secret_key
 
 # Media
 Images/

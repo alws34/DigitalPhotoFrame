@@ -21,7 +21,9 @@ def get_db():
 def init_db():
     with get_db() as conn:
         cursor = conn.cursor()
-        
+
+        cursor.execute("PRAGMA foreign_keys = ON")
+
         # Create users table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
@@ -39,7 +41,7 @@ def init_db():
                 password_changed_at REAL
             )
         ''')
-        
+
         # Create images_metadata table
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS images_metadata (
@@ -69,12 +71,42 @@ def init_db():
             )
         ''')
 
+        # Create sources table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS sources (
+                id               TEXT PRIMARY KEY,
+                source_type      TEXT NOT NULL,
+                name             TEXT NOT NULL,
+                config_json      TEXT,
+                credentials_enc  TEXT,
+                enabled          INTEGER DEFAULT 1,
+                last_synced_at   REAL,
+                created_at       REAL
+            )
+        ''')
+
+        # Create albums table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS albums (
+                id             TEXT PRIMARY KEY,
+                source_id      TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+                remote_id      TEXT NOT NULL,
+                name           TEXT NOT NULL,
+                local_path     TEXT NOT NULL,
+                cover_image    TEXT,
+                media_count    INTEGER DEFAULT 0,
+                subscribed     INTEGER DEFAULT 1,
+                last_synced_at REAL,
+                created_at     REAL
+            )
+        ''')
+
 def migrate_jsons_if_needed(metadata_json_path):
     with get_db() as conn:
         cursor = conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM images_metadata")
         images_count = cursor.fetchone()[0]
-        
+
     if images_count == 0 and os.path.exists(metadata_json_path):
         with open(metadata_json_path, 'r', encoding='utf-8') as f:
             try:
@@ -171,7 +203,7 @@ def get_all_users():
 def update_password_db(uid, pw_hash, algo, password_changed_at):
     with get_db() as conn:
         cursor = conn.cursor()
-        cursor.execute("UPDATE users SET pw_hash = ?, algo = ?, password_changed_at = ? WHERE uid = ?", 
+        cursor.execute("UPDATE users SET pw_hash = ?, algo = ?, password_changed_at = ? WHERE uid = ?",
                        (pw_hash, algo, password_changed_at, uid))
 
 def create_user_db(uid, username, email, pw_hash, role, algo, created_at, password_changed_at):
@@ -179,12 +211,12 @@ def create_user_db(uid, username, email, pw_hash, role, algo, created_at, passwo
         cursor = conn.cursor()
         cursor.execute('''
             INSERT INTO users (
-                uid, username, email, pw_hash, role, algo, 
-                created_at, last_login, failed_count, is_active, 
+                uid, username, email, pw_hash, role, algo,
+                created_at, last_login, failed_count, is_active,
                 lock_until, password_changed_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
-            uid, username, email, pw_hash, role, algo, created_at, 
+            uid, username, email, pw_hash, role, algo, created_at,
             0.0, 0, True, 0.0, password_changed_at
         ))
 
@@ -206,7 +238,7 @@ def get_metadata(img_hash):
 def update_metadata(img_hash, data):
     with get_db() as conn:
         cursor = conn.cursor()
-        
+
         # Check if exists
         cursor.execute("SELECT 1 FROM images_metadata WHERE hash = ?", (img_hash,))
         if cursor.fetchone():

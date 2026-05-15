@@ -21,6 +21,33 @@ def _restart_program():
     os.execl(python, python, *sys.argv)
 
 
+def _build_album_manager(settings: Dict[str, Any]):
+    """
+    Construct, migrate, and start AlbumManager. Returns the AlbumManager instance.
+    Fails softly: logs and returns None if anything goes wrong.
+    """
+    try:
+        from Utilities.AlbumManager import AlbumManager
+        from Utilities.encryption import load_or_create_key
+        from Utilities.migration import run_migrations
+
+        sys_cfg = settings.get("system", {})
+        images_root = sys_cfg.get("image_dir") or "Images"
+
+        encryption_key = load_or_create_key()
+        run_migrations(images_root)
+
+        album_manager = AlbumManager(images_root=images_root, encryption_key=encryption_key)
+        album_manager.start()
+        return album_manager
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception(
+            "[AlbumManager] Failed to start AlbumManager; playback falls back to IMAGE_DIR."
+        )
+        return None
+
+
 def _run_headless(settings: Dict[str, Any], settings_path: str,
                   width: Optional[int], height: Optional[int]) -> None:
     from FrameServer.PhotoFrameServer import PhotoFrameServer
@@ -36,6 +63,9 @@ def _run_headless(settings: Dict[str, Any], settings_path: str,
     print(
         f"[PhotoFrame] Headless mode. Resolution {w}x{h}. Settings: {settings_path}")
 
+    # --- AlbumManager ---
+    album_manager = _build_album_manager(settings)
+
     # --- AutoUpdater Setup ---
     stop_event = threading.Event()
     au_cfg = settings.get("autoupdate", {})
@@ -47,12 +77,19 @@ def _run_headless(settings: Dict[str, Any], settings_path: str,
     )
     updater.start()
 
-    srv = PhotoFrameServer(width=w, height=h, iframe=None,
-                           images_dir=images_dir, settings_path=settings_path)
+    # Resolve active image dir from AlbumManager if available
+    active_images_dir = (
+        str(album_manager.get_active_image_dir()) if album_manager else images_dir
+    )
 
-    backend = APIServer(frame=srv, image_dir=images_dir)
+    srv = PhotoFrameServer(width=w, height=h, iframe=None,
+                           images_dir=active_images_dir, settings_path=settings_path)
+
+    backend = APIServer(frame=srv, image_dir=active_images_dir)
     backend.set_restart_fn(_restart_program)
     backend.updater = updater
+    if album_manager is not None:
+        backend.album_manager = album_manager
 
     threading.Thread(target=backend.start, daemon=True).start()
     srv.m_api = backend
@@ -67,6 +104,11 @@ def _run_headless(settings: Dict[str, Any], settings_path: str,
         pass
     finally:
         stop_event.set()
+        if album_manager is not None:
+            try:
+                album_manager.stop()
+            except Exception:
+                pass
         try:
             srv.stop_services()
         except Exception:
@@ -81,19 +123,29 @@ def _run_pygame(settings: Dict[str, Any], settings_path: str) -> None:
     images_dir = sys_cfg.get("image_dir") or settings.get(
         "image_dir") or settings.get("images_dir") or None
 
+    # --- AlbumManager ---
+    album_manager = _build_album_manager(settings)
+
     # Create the pygame display (detects screen resolution)
     view = PhotoFramePygame(settings=settings)
     sw, sh = view.width, view.height
 
     print(f"[PhotoFrame] Pygame display {sw}x{sh}. Settings: {settings_path}")
 
+    # Resolve active image dir from AlbumManager if available
+    active_images_dir = (
+        str(album_manager.get_active_image_dir()) if album_manager else images_dir
+    )
+
     # Create the compositor with the display as its frame target
     srv = PhotoFrameServer(width=sw, height=sh, iframe=view,
-                           images_dir=images_dir, settings_path=settings_path)
+                           images_dir=active_images_dir, settings_path=settings_path)
 
     # Start Flask backend
-    backend = APIServer(frame=srv, image_dir=images_dir)
+    backend = APIServer(frame=srv, image_dir=active_images_dir)
     backend.set_restart_fn(_restart_program)
+    if album_manager is not None:
+        backend.album_manager = album_manager
     threading.Thread(target=backend.start, daemon=True).start()
     srv.m_api = backend
 
@@ -132,6 +184,11 @@ def _run_pygame(settings: Dict[str, Any], settings_path: str) -> None:
         pass
     finally:
         stop_event.set()
+        if album_manager is not None:
+            try:
+                album_manager.stop()
+            except Exception:
+                pass
         try:
             mqtt.stop()
         except Exception:
@@ -233,11 +290,21 @@ def _run_gui(settings: Dict[str, Any], settings_path: str) -> None:
     images_dir = sys_cfg.get("image_dir") or settings.get(
         "image_dir") or settings.get("images_dir") or None
 
-    srv = PhotoFrameServer(width=sw, height=sh, iframe=view,
-                           images_dir=images_dir, settings_path=settings_path)
+    # --- AlbumManager ---
+    album_manager = _build_album_manager(settings)
 
-    backend = APIServer(frame=srv, image_dir=images_dir)
+    # Resolve active image dir from AlbumManager if available
+    active_images_dir = (
+        str(album_manager.get_active_image_dir()) if album_manager else images_dir
+    )
+
+    srv = PhotoFrameServer(width=sw, height=sh, iframe=view,
+                           images_dir=active_images_dir, settings_path=settings_path)
+
+    backend = APIServer(frame=srv, image_dir=active_images_dir)
     backend.set_restart_fn(_restart_program)
+    if album_manager is not None:
+        backend.album_manager = album_manager
     threading.Thread(target=backend.start, daemon=True).start()
     srv.m_api = backend
 
@@ -262,6 +329,11 @@ def _run_gui(settings: Dict[str, Any], settings_path: str) -> None:
 
     def _on_quit():
         stop_event.set()
+        if album_manager is not None:
+            try:
+                album_manager.stop()
+            except Exception:
+                pass
         try:
             mqtt.stop()
         except Exception:

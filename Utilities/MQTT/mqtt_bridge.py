@@ -13,7 +13,7 @@ try:
     import paho.mqtt.client as mqtt
 except Exception:
     mqtt = None
-    
+
 if TYPE_CHECKING:
     from paho.mqtt.client import Client as MqttClient
 else:
@@ -25,6 +25,42 @@ except Exception:
     _get_local_ip_util = None
 
 
+# Dotted paths that must never be exposed as MQTT entities
+MQTT_SKIP_PATHS = {
+    "mqtt.base_topic", "mqtt.client_id", "mqtt.discovery_prefix",
+    "mqtt.enabled", "mqtt.host", "mqtt.password", "mqtt.port",
+    "mqtt.retain_config", "mqtt.tls", "mqtt.username", "mqtt.discovery",
+    "mqtt.interval_seconds",
+    "backend_configs.supersecretkey", "backend_configs.host",
+    "backend_configs.server_port", "backend_configs.stream_height",
+    "backend_configs.stream_width", "backend_configs.idle_fps",
+    "system.image_dir", "system.log_file_path", "system.service_name",
+    "system.image_quality_encoding",
+    "autoupdate.repo_path", "autoupdate.remote", "autoupdate.branch",
+    "autoupdate.hour", "autoupdate.minute", "autoupdate.shallow_ok",
+    "albums.active_album_id",  # handled by the dedicated album select entity
+    "about.image_path", "about.text", "about.version",
+    "ui.font_name", "ui.date_format",
+    "open_meteo.timeformat", "open_meteo.timezone",
+    "open_meteo.latitude", "open_meteo.longitude",
+    # brightness has its own dedicated entity with custom topic
+    "screen.brightness",
+}
+
+
+def _iter_schema_leaves(schema: dict, prefix: str = "") -> "list[tuple[str, dict]]":
+    """Recursively yield (dotted_path, leaf_descriptor) for all typed leaves."""
+    results = []
+    for key, value in schema.items():
+        path = f"{prefix}.{key}" if prefix else key
+        if isinstance(value, dict):
+            if "type" in value:
+                results.append((path, value))
+            else:
+                results.extend(_iter_schema_leaves(value, path))
+    return results
+
+
 class MqttBridge:
     """
     Publishes (state topic JSON):
@@ -34,9 +70,12 @@ class MqttBridge:
     Home Assistant discovery entities:
       - Sensors for all stats above
       - number: Screen Brightness (10..100)
+      - switch: Screen Power
       - button: Pull Update
       - switch: Service (ON=start, OFF=stop)
-      - button: Restart Service (extra)
+      - button: Restart Service
+      - Schema-driven entities for all exposed settings
+      - select: Active Album (dynamic, from AlbumManager)
 
     Settings (settings['mqtt']):
       enabled: true|false
@@ -54,10 +93,11 @@ class MqttBridge:
     """
 
     # ---------- lifecycle ----------
-    def __init__(self, view, settings: dict):
+    def __init__(self, view, settings: dict, album_manager=None):
         self.view = view
         self.settings = settings or {}
         self.cfg = (self.settings.get("mqtt") or {}).copy()
+        self._album_manager = album_manager
 
         self.enabled = bool(self.cfg.get("enabled", False))
         self.host = self.cfg.get("host", "127.0.0.1")
@@ -88,57 +128,22 @@ class MqttBridge:
         self.t_cmd_restart  = f"{self.base_topic}/{self.device_id}/cmd/restart"
         self.t_cmd_service  = f"{self.base_topic}/{self.device_id}/cmd/service"
         self.t_cmd_screen   = f"{self.base_topic}/{self.device_id}/cmd/screen"
-        
-        self._ext_ip_cache = (None, 0) 
 
-        self._last_nonzero_brightness = 60 
-        
+        self._ext_ip_cache = (None, 0)
+
+        self._last_nonzero_brightness = 60
+
         self.client: Optional[MqttClient] = None
         self.connected = False
         self.stop_event = threading.Event()
         self.thread: Optional[threading.Thread] = None
         self._start_ts = time.time()
-        
+
         # Watchdog
         self.last_connect_time = 0
         self.last_disconnect_time = 0
         self.WATCHDOG_TIMEOUT = 60  # seconds
 
-        from Utilities.config_events import on_settings_changed
-        on_settings_changed(self._on_settings_changed)
-
-    def _on_settings_changed(self, new_data: dict) -> None:
-        new_cfg = (new_data.get("mqtt") or {}).copy()
-        new_enabled = bool(new_cfg.get("enabled", False))
-
-        connection_changed = (
-            new_cfg.get("host") != self.cfg.get("host") or
-            new_cfg.get("port") != self.cfg.get("port") or
-            new_enabled != self.enabled
-        )
-
-        self.cfg = new_cfg
-        self.settings = new_data
-        self.enabled = new_enabled
-        self.host = new_cfg.get("host", "127.0.0.1")
-        self.port = int(new_cfg.get("port", 1883))
-        self.username = new_cfg.get("username") or None
-        self.password = new_cfg.get("password") or None
-        self.tls = bool(new_cfg.get("tls", False))
-        self.interval = int(new_cfg.get("interval_seconds", 10))
-
-        if connection_changed:
-            self._log("MQTT settings changed — restarting bridge", logging.INFO)
-            self._async(self._restart_bridge)
-
-    def _restart_bridge(self) -> None:
-        self.stop()
-        old_thread = self.thread
-        if old_thread and old_thread.is_alive():
-            old_thread.join(timeout=5.0)
-        self.thread = None
-        if self.enabled:
-            self.start()
 
     def start(self):
         if not self.enabled:
@@ -150,20 +155,11 @@ class MqttBridge:
         if self.thread and self.thread.is_alive():
             return
 
-        # paho-mqtt 2.x introduced CallbackAPIVersion; fall back gracefully
         try:
-            from paho.mqtt.enums import CallbackAPIVersion
-            self.client = mqtt.Client(
-                callback_api_version=CallbackAPIVersion.VERSION1,
-                client_id=self.client_id,
-                clean_session=True,
-            )
-        except (ImportError, TypeError):
-            try:
-                self.client = mqtt.Client(client_id=self.client_id, clean_session=True)
-            except TypeError:
-                self.client = mqtt.Client(client_id=self.client_id)
-            
+            self.client = mqtt.Client(client_id=self.client_id, clean_session=True)
+        except TypeError:
+            self.client = mqtt.Client(client_id=self.client_id)
+
         if self.username:
             self.client.username_pw_set(self.username, self.password or None)
         if self.tls:
@@ -200,9 +196,10 @@ class MqttBridge:
                 self.client.disconnect()
         except Exception:
             pass
+
     def _async(self, fn, *args, **kwargs):
         threading.Thread(target=lambda: fn(*args, **kwargs), daemon=True).start()
-    
+
     # ---------- callbacks ----------
     def _on_connect(self, _c, _u, _f, rc):
         self.connected = (rc == 0)
@@ -219,7 +216,11 @@ class MqttBridge:
         self.client.subscribe(self.t_cmd_update, qos=1)
         self.client.subscribe(self.t_cmd_restart, qos=1)
         self.client.subscribe(self.t_cmd_service, qos=1)
-        self.client.subscribe(self.t_cmd_screen, qos=1) 
+        self.client.subscribe(self.t_cmd_screen, qos=1)
+        # subscribe schema-driven settings commands
+        self.client.subscribe(f"{self.base_topic}/{self.device_id}/cmd/settings/#", qos=1)
+        # subscribe album command
+        self.client.subscribe(f"{self.base_topic}/{self.device_id}/cmd/albums/active", qos=1)
 
         if self.discovery:
             self._publish_discovery_all()
@@ -248,6 +249,11 @@ class MqttBridge:
             self._async(self._handle_cmd_service, payload)
         elif topic == self.t_cmd_screen:
             self._async(self._handle_cmd_screen, payload)
+        elif topic == f"{self.base_topic}/{self.device_id}/cmd/albums/active":
+            self._async(self._handle_album_cmd, payload)
+        elif topic.startswith(f"{self.base_topic}/{self.device_id}/cmd/settings/"):
+            dotted_path = topic.split("/cmd/settings/", 1)[1]
+            self._async(self._handle_setting_cmd, dotted_path, payload)
 
     def _handle_cmd_screen(self, payload: str):
         target = (payload or "").strip().lower()
@@ -263,6 +269,112 @@ class MqttBridge:
             pct = max(10, min(100, int(self._last_nonzero_brightness or 60)))
             self._handle_cmd_brightness(str(pct))
 
+    # ---------- schema-driven settings command handler ----------
+    def _handle_setting_cmd(self, dotted_path: str, payload: str) -> None:
+        from Utilities.config_events import notify_settings_changed
+        from Utilities.config_store import (
+            get_field_schema,
+            load_settings,
+            save_settings,
+        )
+
+        schema = get_field_schema(dotted_path)
+        if schema is None:
+            self._log(f"Unknown settings path: {dotted_path!r}", logging.WARNING)
+            return
+
+        if dotted_path in MQTT_SKIP_PATHS:
+            self._log(f"Settings path {dotted_path!r} is on skip list; ignoring.", logging.WARNING)
+            return
+
+        stype = schema["type"]
+        # parse value
+        if stype == "bool":
+            value = payload.lower() in ("true", "on", "1", "yes")
+        elif stype == "int":
+            try:
+                value = int(payload)
+            except ValueError:
+                self._log(f"Invalid int payload for {dotted_path}: {payload!r}", logging.WARNING)
+                return
+        elif stype == "float":
+            try:
+                value = float(payload)
+            except ValueError:
+                self._log(f"Invalid float payload for {dotted_path}: {payload!r}", logging.WARNING)
+                return
+        elif stype in ("enum", "color"):
+            if payload not in schema.get("choices", []):
+                self._log(
+                    f"Invalid choice {payload!r} for {dotted_path}; "
+                    f"valid: {schema.get('choices', [])}", logging.WARNING
+                )
+                return
+            value = payload
+        else:
+            self._log(f"Settings type {stype!r} for {dotted_path} is not writable via MQTT.", logging.WARNING)
+            return
+
+        # apply
+        parts = dotted_path.split(".")
+        settings = load_settings()
+        node = settings
+        for p in parts[:-1]:
+            node = node.setdefault(p, {})
+        node[parts[-1]] = value
+        save_settings(settings)
+
+        # hot-reload
+        notify_settings_changed(settings)
+
+        # publish updated state back
+        state_topic = f"{self.base_topic}/{self.device_id}/settings/{dotted_path}"
+        self._publish(state_topic, payload, retain=True)
+        self._log(f"Setting {dotted_path} updated to {value!r}", logging.INFO)
+
+    # ---------- album command handlers ----------
+    def _get_albums(self) -> list:
+        if self._album_manager is None:
+            return []
+        try:
+            return self._album_manager.get_albums()
+        except Exception as e:
+            self._log(f"get_albums() failed: {e}", logging.ERROR)
+            return []
+
+    def _handle_album_cmd(self, album_name: str) -> None:
+        if self._album_manager is None:
+            return
+        if album_name == "All Photos":
+            self._album_manager.set_active_album("all")
+        else:
+            albums = self._get_albums()
+            match = next((a for a in albums if a["name"] == album_name), None)
+            if match:
+                self._album_manager.set_active_album(match["id"])
+            else:
+                self._log(f"Album not found: {album_name!r}", logging.WARNING)
+                return
+        self._publish_album_state()
+
+    def _publish_album_state(self) -> None:
+        if self._album_manager is None:
+            return
+        try:
+            album_id = self._album_manager.get_active_album_id()
+            if album_id == "all" or not album_id:
+                name = "All Photos"
+            else:
+                albums = self._get_albums()
+                match = next((a for a in albums if a["id"] == album_id), None)
+                name = match["name"] if match else "All Photos"
+            self._publish(
+                f"{self.base_topic}/{self.device_id}/albums/active",
+                name,
+                retain=True,
+            )
+        except Exception as e:
+            self._log(f"_publish_album_state failed: {e}", logging.ERROR)
 
     # ---------- worker ----------
     def _run(self):
@@ -270,29 +382,19 @@ class MqttBridge:
             try:
                 # Watchdog check
                 if not self.connected:
-                    # If we have been disconnected for too long, force a reconnect
-                    # (only if we have attempted to connect at least once)
                     now = time.time()
-                    # If we never connected, last_disconnect_time might be 0, so check start time too?
-                    # actually, paho loop_start handles initial re-connects normally.
-                    # We only care if it gets stuck.
-                    
-                    # If we are disconnected and it's been a while since we saw a disconnect OR 
-                    # since we started (if never connected)
                     ref_time = max(self.last_disconnect_time, self._start_ts)
                     if (now - ref_time) > self.WATCHDOG_TIMEOUT:
-                        self._log(f"Watchdog: Disconnected for > {self.WATCHDOG_TIMEOUT}s. Forcing reconnect...", logging.WARNING)
+                        self._log(
+                            f"Watchdog: Disconnected for > {self.WATCHDOG_TIMEOUT}s. Forcing reconnect...",
+                            logging.WARNING,
+                        )
                         try:
-                            # Re-initiate connection
-                            # client.reconnect() is blocking, but useful here.
-                            # Ideally we trust loop_start() to reconnect, but if it fails repeatedly 
-                            # (e.g. DNS changes, network interface changes), a manual kick helps.
                             self.client.reconnect()
-                            self.last_disconnect_time = now # reset timer so we don't spam
+                            self.last_disconnect_time = now
                         except Exception as e:
                             self._log(f"Watchdog reconnect failed: {e}", logging.ERROR)
-                            # Reset timer to avoid tight loop
-                            self.last_disconnect_time = now 
+                            self.last_disconnect_time = now
 
                 if self.connected:
                     self._publish_stats()
@@ -300,7 +402,7 @@ class MqttBridge:
                     self._publish_service_state()
             except Exception as e:
                 self._log(f"tick failed: {e}", logging.ERROR)
-            
+
             self.stop_event.wait(self.interval)
 
     # ---------- discovery ----------
@@ -329,7 +431,7 @@ class MqttBridge:
                 cfg["unit_of_measurement"] = unit
             if device_class:
                 cfg["device_class"] = device_class
-            if state_class:  # ← key change: only add for numeric sensors
+            if state_class:  # only add for numeric sensors
                 cfg["state_class"] = state_class
             if icon:
                 cfg["icon"] = icon
@@ -337,15 +439,14 @@ class MqttBridge:
                 cfg.update(extra)
             pub(f"{dp}/sensor/{did}/{object_id}/config", cfg)
 
-        # Controls
-        # Screen brightness as a slider 0..100
+        # --- Screen brightness slider (dedicated topic, keep as-is) ---
         number_brightness = {
             "name": "Screen Brightness",
             "unique_id": f"{did}_screen_brightness",
             "state_topic": self.t_brightness_state,
             "command_topic": self.t_cmd_brightness,
             "availability_topic": self.t_avail,
-            "min": 0,                 # was 10; now 0 to allow OFF
+            "min": 0,
             "max": 100,
             "step": 1,
             "unit_of_measurement": "%",
@@ -355,7 +456,7 @@ class MqttBridge:
         }
         pub(f"{dp}/number/{did}/screen_brightness/config", number_brightness)
 
-        # NEW: screen power switch (maps to 0% / last nonzero)
+        # --- Screen power switch ---
         switch_screen = {
             "name": "Screen Power",
             "unique_id": f"{did}_screen_power",
@@ -364,14 +465,13 @@ class MqttBridge:
             "availability_topic": self.t_avail,
             "payload_on": "on",
             "payload_off": "off",
-            # Derive switch state from brightness %
             "value_template": "{{ 'on' if (value|int(0)) > 0 else 'off' }}",
             "device": dev,
-            "icon": "mdi:monitor"
+            "icon": "mdi:monitor",
         }
         pub(f"{dp}/switch/{did}/screen_power/config", switch_screen)
 
-        # Optional: service switch / restart / pull update
+        # --- Update / restart / service ---
         button_update = {
             "name": "Pull Update",
             "unique_id": f"{did}_pull_update",
@@ -405,25 +505,105 @@ class MqttBridge:
         }
         pub(f"{dp}/switch/{did}/service/config", switch_service)
 
-
-        # Sensors from state JSON
+        # --- Diagnostic sensors ---
         sensor(
             "external_ip", "External IP", "{{ value_json.external_ip }}",
             icon="mdi:web",
             extra={"entity_category": "diagnostic"},
-            unique_suffix="_v2"
+            unique_suffix="_v2",
         )
         sensor("cpu", "CPU Usage", "{{ value_json.cpu_usage }}", unit="%", device_class="power_factor")
         sensor("cputemp", "CPU Temperature", "{{ value_json.cpu_temp_c }}", unit="°C", device_class="temperature")
         sensor("ram_pct", "RAM Usage", "{{ value_json.ram_percent }}", unit="%", device_class="power_factor")
         sensor("ram_used", "RAM Used", "{{ value_json.ram_used_mb }}", unit="MB", icon="mdi:memory")
         sensor("ram_total", "RAM Total", "{{ value_json.ram_total_mb }}", unit="MB", icon="mdi:memory")
-        sensor("ssid", "Wi-Fi SSID", "{{ value_json.wifi_ssid }}",
+        sensor(
+            "ssid", "Wi-Fi SSID", "{{ value_json.wifi_ssid }}",
             icon="mdi:wifi",
             extra={"entity_category": "diagnostic"},
-            unique_suffix="_v2")
+            unique_suffix="_v2",
+        )
         sensor("uptime", "Uptime", "{{ value_json.uptime_s }}", unit="s", icon="mdi:timer-outline")
         sensor("brightness", "Screen Brightness", "{{ value_json.brightness }}", unit="%", icon="mdi:brightness-6")
+
+        # --- Schema-driven settings entities ---
+        self._publish_schema_discovery(pub, dev)
+
+        # --- Dynamic album select entity ---
+        self._publish_album_select_discovery(pub, dev)
+
+    def _publish_schema_discovery(self, pub, dev) -> None:
+        """Publish HA discovery for all SETTINGS_SCHEMA leaves that aren't skipped."""
+        from Utilities.config_store import SETTINGS_SCHEMA
+
+        dp = self.discovery_prefix
+        did = self.device_id
+
+        for dotted_path, leaf in _iter_schema_leaves(SETTINGS_SCHEMA):
+            if dotted_path in MQTT_SKIP_PATHS:
+                continue
+
+            stype = leaf.get("type", "")
+            if stype in ("str", "password", "numeric_string"):
+                continue  # not safe/useful via MQTT
+
+            label = leaf.get("label", dotted_path)
+            # Use dotted_path as object_id (replace dots with underscores for safety)
+            obj_id = dotted_path.replace(".", "_")
+            unique_id = f"{did}_setting_{obj_id}"
+            state_topic = f"{self.base_topic}/{did}/settings/{dotted_path}"
+            cmd_topic = f"{self.base_topic}/{did}/cmd/settings/{dotted_path}"
+
+            base_cfg = {
+                "name": label,
+                "unique_id": unique_id,
+                "state_topic": state_topic,
+                "command_topic": cmd_topic,
+                "availability_topic": self.t_avail,
+                "device": dev,
+                "retain": True,
+            }
+
+            if stype == "bool":
+                cfg = dict(base_cfg)
+                cfg["payload_on"] = "true"
+                cfg["payload_off"] = "false"
+                pub(f"{dp}/switch/{did}/setting_{obj_id}/config", cfg)
+
+            elif stype in ("int", "float"):
+                cfg = dict(base_cfg)
+                if "min" in leaf:
+                    cfg["min"] = leaf["min"]
+                if "max" in leaf:
+                    cfg["max"] = leaf["max"]
+                if "step" in leaf:
+                    cfg["step"] = leaf["step"]
+                pub(f"{dp}/number/{did}/setting_{obj_id}/config", cfg)
+
+            elif stype in ("enum", "color"):
+                cfg = dict(base_cfg)
+                cfg["options"] = leaf.get("choices", [])
+                pub(f"{dp}/select/{did}/setting_{obj_id}/config", cfg)
+
+    def _publish_album_select_discovery(self, pub, dev) -> None:
+        """Publish HA select entity for the active album (dynamic options)."""
+        did = self.device_id
+        dp = self.discovery_prefix
+
+        albums = self._get_albums()
+        options = ["All Photos"] + [a["name"] for a in albums]
+
+        cfg = {
+            "name": "Active Album",
+            "unique_id": f"{did}_active_album",
+            "state_topic": f"{self.base_topic}/{did}/albums/active",
+            "command_topic": f"{self.base_topic}/{did}/cmd/albums/active",
+            "availability_topic": self.t_avail,
+            "options": options,
+            "device": dev,
+            "icon": "mdi:image-album",
+        }
+        pub(f"{dp}/select/{did}/active_album/config", cfg)
 
     def _device_payload(self):
         sw = "PhotoFrame 2.0"
@@ -446,6 +626,44 @@ class MqttBridge:
         self._publish_brightness_state()
         self._publish_service_state()
         self._publish_stats()
+        self._publish_all_settings_states()
+        self._publish_album_state()
+
+    def _publish_all_settings_states(self) -> None:
+        """Publish current value of every schema-driven setting entity."""
+        from Utilities.config_store import SETTINGS_SCHEMA, load_settings
+
+        try:
+            current_settings = load_settings()
+        except Exception as e:
+            self._log(f"_publish_all_settings_states: load_settings failed: {e}", logging.ERROR)
+            return
+
+        for dotted_path, leaf in _iter_schema_leaves(SETTINGS_SCHEMA):
+            if dotted_path in MQTT_SKIP_PATHS:
+                continue
+            stype = leaf.get("type", "")
+            if stype in ("str", "password", "numeric_string"):
+                continue
+
+            # Resolve value from settings dict
+            parts = dotted_path.split(".")
+            node = current_settings
+            try:
+                for p in parts:
+                    node = node[p]
+                value = node
+            except (KeyError, TypeError):
+                continue
+
+            # Serialize to MQTT payload
+            if stype == "bool":
+                payload = "true" if bool(value) else "false"
+            else:
+                payload = str(value)
+
+            state_topic = f"{self.base_topic}/{self.device_id}/settings/{dotted_path}"
+            self._publish(state_topic, payload, retain=True)
 
     def _publish_stats(self):
         self._publish(self.t_state, json.dumps(self._stats()), qos=1, retain=False)
@@ -475,8 +693,8 @@ class MqttBridge:
         brightness = self._read_brightness_percent()
 
         return {
-            "ip": ip,                      # local IP
-            "external_ip": ext_ip,         # NEW: public IP
+            "ip": ip,
+            "external_ip": ext_ip,
             "cpu_usage": cpu_pct,
             "cpu_temp_c": cpu_temp,
             "ram_percent": ram_percent,
@@ -489,14 +707,6 @@ class MqttBridge:
 
     # ---------- brightness ----------
     def _read_brightness_percent(self) -> Optional[int]:
-        # Try view directly (pygame software brightness)
-        try:
-            if hasattr(self.view, "read_brightness_percent"):
-                pct = self.view.read_brightness_percent()
-                if pct is not None:
-                    return int(pct)
-        except Exception:
-            pass
         # Prefer ScreenController if it exposes a reader
         try:
             sc = getattr(self.view, "screen", None)
@@ -540,20 +750,10 @@ class MqttBridge:
         if pct > 0:
             self._last_nonzero_brightness = pct
 
-        # Try view directly (pygame software brightness)
-        try:
-            if hasattr(self.view, "set_brightness_percent"):
-                ok = bool(self.view.set_brightness_percent(pct, allow_zero=True))
-                if ok:
-                    self._publish_brightness_state()
-                    return
-        except Exception as e:
-            self._log(f"View set_brightness_percent failed: {e}", logging.ERROR)
-
         try:
             sc = getattr(self.view, "screen", None)
             if sc and hasattr(sc, "set_brightness_percent"):
-                ok = bool(sc.set_brightness_percent(pct, allow_zero=True))  # allow zero
+                ok = bool(sc.set_brightness_percent(pct, allow_zero=True))
                 if not ok:
                     self._log("ScreenController refused brightness change.", logging.WARNING)
                 self._publish_brightness_state()
@@ -567,7 +767,7 @@ class MqttBridge:
             if not dev:
                 self._log("No backlight device found.", logging.ERROR)
                 return
-            _ = self._write_brightness_percent(dev, pct, allow_zero=True)  # allow zero
+            self._write_brightness_percent(dev, pct, allow_zero=True)
             self._publish_brightness_state()
         except Exception as e:
             self._log(f"Fallback brightness write failed: {e}", logging.ERROR)
@@ -613,17 +813,17 @@ class MqttBridge:
         name = self.service_name
 
         if target == "OFF":
-            # 1) tell HA we’re going offline
+            # 1) tell HA we're going offline
             try:
                 mi = self.client.publish(self.t_avail, "offline", qos=1, retain=True)
                 mi.wait_for_publish(timeout=1.0)
             except Exception:
                 pass
 
-            # 2) disconnect cleanly so the broker doesn't show 'connection lost'
+            # 2) disconnect cleanly
             try:
                 self.client.disconnect()
-                self.client.loop_stop()   # stop network loop
+                self.client.loop_stop()
             except Exception:
                 pass
 
@@ -638,7 +838,6 @@ class MqttBridge:
         try:
             if not self._is_service_running(name):
                 self._start_service(name)
-            # let things settle and then republish state
             self._delayed_publish_service_state()
         except Exception as e:
             self._log(f"Start service error: {e}", logging.ERROR)
@@ -651,7 +850,6 @@ class MqttBridge:
             except Exception:
                 pass
         threading.Thread(target=_w, daemon=True).start()
-
 
     def _publish_service_state(self):
         state = "ON" if self._is_service_running(self.service_name) else "OFF"

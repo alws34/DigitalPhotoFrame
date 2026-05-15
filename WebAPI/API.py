@@ -190,6 +190,7 @@ class APIServer:
         self._rl_signup = RateLimiter(limit=5, window_sec=300)
 
         self.Frame = frame
+        self.album_manager = None
         _init_settings = _cs_load()
 
         # --- Resolve IMAGE_DIR using 'system' or root ---
@@ -660,17 +661,22 @@ class APIServer:
             response.content_type = "application/problem+json"
             return response, 500
 
+        from WebAPI.routes.albums import albums_bp
         from WebAPI.routes.auth import auth_bp
         from WebAPI.routes.images import images_bp
         from WebAPI.routes.maintenance import maintenance_bp
         from WebAPI.routes.settings import settings_bp
+        from WebAPI.routes.sources import sources_bp
         from WebAPI.routes.stream import stream_bp
 
+        self.app.config["backend"] = self
         self.app.register_blueprint(auth_bp)
         self.app.register_blueprint(settings_bp)
         self.app.register_blueprint(images_bp)
         self.app.register_blueprint(stream_bp)
         self.app.register_blueprint(maintenance_bp)
+        self.app.register_blueprint(sources_bp)
+        self.app.register_blueprint(albums_bp)
         
         @self.app.route('/', defaults={'path': ''})
         @self.app.route('/<path:path>')

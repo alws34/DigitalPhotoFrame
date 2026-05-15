@@ -85,6 +85,12 @@ def get_default_settings() -> dict[str, Any]:
             "units": "metric",
             "wind_speed_unit": "kmh",
         },
+        "albums": {
+            "active_album_id": "all",
+            "sync_interval_hours": 6,
+            "sync_on_startup": True,
+            "sync_delete_removed": True,
+        },
         "playback": {
             "animation_duration": 10,
             "animation_fps": 30,
@@ -123,6 +129,12 @@ def get_default_settings() -> dict[str, Any]:
 
 
 SETTINGS_SCHEMA: dict = {
+    "albums": {
+        "active_album_id":      {"type": "str",  "label": "Active Album ID",          "restart_required": False},
+        "sync_interval_hours":  {"type": "int",  "label": "Sync Interval (hours)",    "min": 1, "max": 168, "step": 1, "restart_required": False},
+        "sync_on_startup":      {"type": "bool", "label": "Sync on Startup",          "restart_required": False},
+        "sync_delete_removed":  {"type": "bool", "label": "Delete Removed Media",     "restart_required": False},
+    },
     "autoupdate": {
         "branch":     {"type": "str",  "label": "Branch",               "restart_required": False},
         "enabled":    {"type": "bool", "label": "Enable Auto-Update",    "restart_required": False},
@@ -306,6 +318,12 @@ def load_settings(json_path: str | None = None) -> dict[str, Any]:
                 merged.setdefault("ui", {})["show_weather"] = True
             save_settings(merged)
             print(f"[Config] Migrated settings from {json_path}")
+            try:
+                migrated_path = json_path + ".migrated"
+                os.rename(json_path, migrated_path)
+                print(f"[Config] Renamed {json_path} → {migrated_path}")
+            except Exception as rename_err:
+                print(f"[Config] Could not rename settings JSON: {rename_err}")
             return merged
         except Exception as e:
             print(f"[Config] Migration failed: {e}")

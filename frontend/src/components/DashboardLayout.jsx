@@ -1,6 +1,6 @@
 import { Outlet, NavLink } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { MonitorPlay, Aperture, Settings, LogOut, User } from 'lucide-react';
+import { MonitorPlay, Aperture, Settings, LogOut, User, BookImage } from 'lucide-react';
 
 export default function DashboardLayout() {
   const { user, logout } = useAuth();
@@ -8,6 +8,7 @@ export default function DashboardLayout() {
   const navItems = [
     { path: '/stream', icon: <MonitorPlay size={20} />, label: 'Live Stream' },
     { path: '/gallery', icon: <Aperture size={20} />, label: 'Gallery' },
+    { path: '/albums', icon: <BookImage size={20} />, label: 'Albums' },
     { path: '/settings', icon: <Settings size={20} />, label: 'Settings' },
   ];
 
