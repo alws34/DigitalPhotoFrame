@@ -69,6 +69,9 @@ class AlbumManager:
         self._sync_queue_event = threading.Event()
         self._thread: threading.Thread | None = None
 
+        # Immich streaming cache (active only when an Immich album is selected)
+        self._streaming_cache = None
+
     # ------------------------------------------------------------------ #
     # Lifecycle                                                            #
     # ------------------------------------------------------------------ #
@@ -81,6 +84,7 @@ class AlbumManager:
         )
         self._thread.start()
         logger.info("[AlbumManager] Started background sync thread.")
+        self._refresh_streaming_cache()
 
     def stop(self) -> None:
         """Signal background thread to stop and wait for it to finish."""
@@ -88,6 +92,9 @@ class AlbumManager:
         self._sync_queue_event.set()  # wake up the loop so it can exit
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=10)
+        if self._streaming_cache is not None:
+            self._streaming_cache.stop()
+            self._streaming_cache = None
         logger.info("[AlbumManager] Background sync thread stopped.")
 
     def _background_loop(self) -> None:
@@ -182,6 +189,58 @@ class AlbumManager:
         # Fire hot-reload chain so PhotoFrameServer and MQTT react
         notify_settings_changed(settings)
         logger.info("[AlbumManager] Active album set to: %s", album_id)
+        self._refresh_streaming_cache()
+
+    def _refresh_streaming_cache(self) -> None:
+        """Stop any running streaming cache and start a new one if active album is Immich."""
+        # Stop existing cache
+        if self._streaming_cache is not None:
+            self._streaming_cache.stop()
+            self._streaming_cache = None
+
+        album_id = self.get_active_album_id()
+        if not album_id or album_id == "all":
+            return
+
+        try:
+            with get_db() as conn:
+                row = conn.execute(
+                    "SELECT source_id, remote_id, local_path FROM albums WHERE id = ?",
+                    (album_id,),
+                ).fetchone()
+            if not row:
+                return
+
+            # Only stream for Immich sources
+            with get_db() as conn:
+                src_row = conn.execute(
+                    "SELECT source_type FROM sources WHERE id = ?", (row["source_id"],)
+                ).fetchone()
+            if not src_row or src_row["source_type"] != "immich":
+                return
+
+            instance = self.get_source_instance(row["source_id"])
+            if instance is None or not instance.is_authenticated:
+                logger.warning("[AlbumManager] Immich source not authenticated; skip streaming cache")
+                return
+
+            settings = load_settings()
+            delay = float(settings.get("playback", {}).get("delay_between_images", 30))
+
+            from Utilities.sources.immich_cache import ImmichStreamingCache
+
+            cache = ImmichStreamingCache(
+                source=instance,
+                remote_id=row["remote_id"],
+                local_path=Path(row["local_path"]),
+                delay_seconds=delay,
+            )
+            cache.start()
+            self._streaming_cache = cache
+            logger.info("[AlbumManager] Streaming cache started for album %s", album_id)
+
+        except Exception:
+            logger.exception("[AlbumManager] Failed to start streaming cache")
 
     def get_active_album_id(self) -> str:
         settings = load_settings()

@@ -65,61 +65,40 @@ class ImmichSource(ImageSource):
             )
         return albums
 
-    def sync_album(
-        self, remote_id: str, local_path: Path, existing_files: set[str]
-    ) -> SyncResult:
-        local_path.mkdir(parents=True, exist_ok=True)
-        result = SyncResult()
+    # ------------------------------------------------------------------
+    # Asset helpers for streaming cache
+    # ------------------------------------------------------------------
 
+    def list_album_assets(self, remote_id: str) -> list[tuple[str, str]]:
+        """Return ordered list of (asset_id, ext) for all assets in an album."""
         resp = requests.get(
             f"{self._base_url}/api/albums/{remote_id}",
             headers=self._headers(),
             params={"withAssets": "true"},
-            timeout=30,
+            timeout=60,
         )
         resp.raise_for_status()
-        album_data = resp.json()
-        assets = album_data.get("assets", [])
+        assets = []
+        for item in resp.json().get("assets", []):
+            ext = Path(item.get("originalPath", "")).suffix.lower() or ".jpg"
+            if ext in SUPPORTED_EXTENSIONS:
+                assets.append((item["id"], ext))
+        return assets
 
-        remote_ids: set[str] = set()
-        for asset in assets:
-            asset_id = asset["id"]
-            original_path = asset.get("originalPath", "")
-            ext = Path(original_path).suffix.lower() or ".jpg"
-            if ext not in SUPPORTED_EXTENSIONS:
-                continue
-            filename = f"{asset_id}{ext}"
-            remote_ids.add(filename)
+    def download_asset(self, asset_id: str, dest: Path) -> None:
+        """Download a single asset to dest (caller handles atomic rename)."""
+        url = f"{self._base_url}/api/assets/{asset_id}/original"
+        headers = {**self._headers(), "Accept": "application/octet-stream"}
+        with requests.get(url, headers=headers, stream=True, timeout=120) as r:
+            r.raise_for_status()
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            with open(dest, "wb") as f:
+                for chunk in r.iter_content(chunk_size=65536):
+                    f.write(chunk)
 
-            if filename not in existing_files:
-                try:
-                    _download_asset(
-                        f"{self._base_url}/api/assets/{asset_id}/original",
-                        local_path / filename,
-                        self._headers(),
-                    )
-                    result.added += 1
-                    existing_files.add(filename)
-                except Exception as e:
-                    result.errors.append(f"Failed to download {filename}: {e}")
-                    logging.warning("[Immich] %s", result.errors[-1])
-
-        for fname in list(existing_files):
-            if fname not in remote_ids:
-                try:
-                    (local_path / fname).unlink(missing_ok=True)
-                    result.removed += 1
-                    existing_files.discard(fname)
-                except Exception as e:
-                    result.errors.append(f"Failed to remove {fname}: {e}")
-
-        return result
-
-
-def _download_asset(url: str, dest: Path, headers: dict) -> None:
-    dl_headers = {**headers, "Accept": "application/octet-stream"}
-    with requests.get(url, headers=dl_headers, stream=True, timeout=120) as r:
-        r.raise_for_status()
-        with open(dest, "wb") as f:
-            for chunk in r.iter_content(chunk_size=65536):
-                f.write(chunk)
+    def sync_album(
+        self, remote_id: str, local_path: Path, existing_files: set[str]
+    ) -> SyncResult:
+        # Immich albums are streamed via ImmichStreamingCache — no bulk download.
+        local_path.mkdir(parents=True, exist_ok=True)
+        return SyncResult()
