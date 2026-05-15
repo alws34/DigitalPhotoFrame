@@ -69,8 +69,8 @@ export default function SettingsView() {
 
   useEffect(() => {
     fetch("/api/albums", { credentials: "include" })
-      .then((r) => r.json())
-      .then(setAlbums)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((d) => setAlbums(Array.isArray(d) ? d : []))
       .catch(() => {});
   }, []);
 

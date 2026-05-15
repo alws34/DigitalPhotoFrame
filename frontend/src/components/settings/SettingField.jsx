@@ -75,7 +75,7 @@ export default function SettingField({ fieldKey, fieldPath, value, schema, onCha
   }
 
   if (schema?.ui === "album_select") {
-    const albums = extras?.albums ?? [];
+    const albums = Array.isArray(extras?.albums) ? extras.albums : [];
     return row(
       <select value={value ?? "all"} onChange={(e) => onChange(fieldPath, e.target.value)}>
         <option value="all">All Photos</option>
