@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import SettingField from "./SettingField";
 
-export default function SettingsSection({ data, pathPrefix, schema, onChange, depth = 0 }) {
+export default function SettingsSection({ data, pathPrefix, schema, onChange, depth = 0, extras = {} }) {
   const [collapsed, setCollapsed] = useState({});
   const toggle = (key) => setCollapsed((prev) => ({ ...prev, [key]: !prev[key] }));
 
@@ -36,11 +36,17 @@ export default function SettingsSection({ data, pathPrefix, schema, onChange, de
                     schema={fieldSchema ?? {}}
                     onChange={onChange}
                     depth={depth + 1}
+                    extras={extras}
                   />
                 </div>
               )}
             </div>
           );
+        }
+
+        // Skip keys that have no schema entry and hold arrays or complex objects
+        if (!fieldSchema && (Array.isArray(value) || (value !== null && typeof value === "object"))) {
+          return null;
         }
 
         return (
@@ -52,6 +58,7 @@ export default function SettingsSection({ data, pathPrefix, schema, onChange, de
             schema={fieldSchema}
             onChange={onChange}
             depth={depth}
+            extras={extras}
           />
         );
       })}

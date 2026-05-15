@@ -1,6 +1,7 @@
 import React, { useState } from "react";
+import ClockKnob from "./ClockKnob";
 
-export default function SettingField({ fieldKey, fieldPath, value, schema, onChange, depth = 0 }) {
+export default function SettingField({ fieldKey, fieldPath, value, schema, onChange, depth = 0, extras = {} }) {
   const [showPassword, setShowPassword] = useState(false);
   const ftype = schema?.type ?? null;
 
@@ -67,6 +68,24 @@ export default function SettingField({ fieldKey, fieldPath, value, schema, onCha
     );
   }
 
+  if (schema?.ui === "clock") {
+    return row(
+      <ClockKnob value={value} onChange={(h) => onChange(fieldPath, h)} />
+    );
+  }
+
+  if (schema?.ui === "album_select") {
+    const albums = extras?.albums ?? [];
+    return row(
+      <select value={value ?? "all"} onChange={(e) => onChange(fieldPath, e.target.value)}>
+        <option value="all">All Photos</option>
+        {albums.map((a) => (
+          <option key={a.id} value={a.id}>{a.name}</option>
+        ))}
+      </select>
+    );
+  }
+
   if (typeof value === "boolean" || ftype === "bool") {
     return row(
       <label className="toggle">
@@ -130,23 +149,15 @@ export default function SettingField({ fieldKey, fieldPath, value, schema, onCha
 
   if (Array.isArray(value)) {
     const isSimple = value.every((v) => typeof v !== "object");
-    if (isSimple) {
-      return row(
-        <input
-          type="text"
-          value={value.join(", ")}
-          onChange={(e) =>
-            onChange(fieldPath, e.target.value.split(",").map((s) => s.trim()).filter(Boolean)
-              .map((s) => (isNaN(Number(s)) ? s : Number(s))))
-          }
-        />
-      );
-    }
+    if (!isSimple) return null;  // hide complex arrays (e.g. schedules) — managed elsewhere
     return row(
-      <textarea rows={3}
-        value={JSON.stringify(value, null, 2)}
-        onChange={(e) => { try { onChange(fieldPath, JSON.parse(e.target.value)); } catch { /* ignore invalid JSON while user is typing */ } }}
-        style={{ fontFamily: "monospace", fontSize: "0.8em" }}
+      <input
+        type="text"
+        value={value.join(", ")}
+        onChange={(e) =>
+          onChange(fieldPath, e.target.value.split(",").map((s) => s.trim()).filter(Boolean)
+            .map((s) => (isNaN(Number(s)) ? s : Number(s))))
+        }
       />
     );
   }

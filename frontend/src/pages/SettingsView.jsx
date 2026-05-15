@@ -51,6 +51,8 @@ export default function SettingsView() {
   const originalRef = useRef(null);
   const pendingRef = useRef(null);
 
+  const [albums, setAlbums] = useState([]);
+
   const fetchSettings = useCallback(async () => {
     try {
       const res = await fetch("/api/settings", { credentials: "include" });
@@ -64,6 +66,13 @@ export default function SettingsView() {
   }, []);
 
   useEffect(() => { fetchSettings(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    fetch("/api/albums", { credentials: "include" })
+      .then((r) => r.json())
+      .then(setAlbums)
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (settings && !activeTab) {
@@ -181,15 +190,14 @@ export default function SettingsView() {
 
       {activeTab && settings[activeTab] && (
         <div className="glass" style={{ flex: 1, overflowY: "auto", padding: 20 }}>
-          {typeof settings[activeTab] === "object" && !Array.isArray(settings[activeTab]) ? (
+          {typeof settings[activeTab] === "object" && !Array.isArray(settings[activeTab]) && (
             <SettingsSection
               data={settings[activeTab]}
               pathPrefix={activeTab}
               schema={schema[activeTab] ?? {}}
               onChange={handleChange}
+              extras={{ albums }}
             />
-          ) : (
-            <p style={{ color: "var(--text-secondary)" }}>{JSON.stringify(settings[activeTab])}</p>
           )}
         </div>
       )}

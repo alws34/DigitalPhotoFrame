@@ -133,7 +133,7 @@ def get_default_settings() -> dict[str, Any]:
 
 SETTINGS_SCHEMA: dict = {
     "albums": {
-        "active_album_id":      {"type": "str",  "label": "Active Album ID",          "restart_required": False},
+        "active_album_id":      {"type": "str",  "label": "Active Album",             "restart_required": False, "ui": "album_select"},
         "sync_interval_hours":  {"type": "int",  "label": "Sync Interval (hours)",    "min": 1, "max": 168, "step": 1, "restart_required": False},
         "sync_on_startup":      {"type": "bool", "label": "Sync on Startup",          "restart_required": False},
         "sync_delete_removed":  {"type": "bool", "label": "Delete Removed Media",     "restart_required": False},
@@ -197,8 +197,8 @@ SETTINGS_SCHEMA: dict = {
     },
     "screen": {
         "brightness":       {"type": "int",  "label": "Brightness (%)",  "min": 0, "max": 100, "step": 5,  "restart_required": False},
-        "off_hour":         {"type": "int",  "label": "Screen Off Hour", "min": 0, "max": 23,  "step": 1,  "restart_required": False},
-        "on_hour":          {"type": "int",  "label": "Screen On Hour",  "min": 0, "max": 23,  "step": 1,  "restart_required": False},
+        "off_hour":         {"type": "int",  "label": "Screen Off Hour", "min": 0, "max": 23,  "step": 1,  "restart_required": False, "ui": "clock"},
+        "on_hour":          {"type": "int",  "label": "Screen On Hour",  "min": 0, "max": 23,  "step": 1,  "restart_required": False, "ui": "clock"},
         "orientation":      {"type": "int",  "label": "Orientation (°)", "min": 0, "max": 270, "step": 90, "restart_required": False},
         "schedule_enabled": {"type": "bool", "label": "Enable Schedule",                                   "restart_required": False},
         # "schedules" is a list of per-schedule objects — managed via web UI only, intentionally absent
