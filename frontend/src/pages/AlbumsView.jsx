@@ -47,6 +47,137 @@ function formatDate(ts) {
 }
 
 // ---------------------------------------------------------------------------
+// Shared modal shell
+// ---------------------------------------------------------------------------
+const overlayStyle = {
+  position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
+  display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+};
+const modalStyle = {
+  background: 'rgba(20,25,40,0.98)', border: '1px solid var(--glass-border)',
+  borderRadius: '16px', padding: '2rem', width: '460px', maxWidth: '90vw',
+  boxShadow: 'var(--glass-shadow)',
+};
+
+// ---------------------------------------------------------------------------
+// Google Photos modal
+// ---------------------------------------------------------------------------
+function GooglePhotosModal({ onClose, onAdd }) {
+  const [name, setName] = useState('Google Photos');
+  const [clientId, setClientId] = useState('');
+  const [clientSecret, setClientSecret] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  // step: 'form' | 'authorize'
+  const [step, setStep] = useState('form');
+  const [authUrl, setAuthUrl] = useState('');
+  const [redirectUri, setRedirectUri] = useState('');
+
+  const handleConnect = async (e) => {
+    e.preventDefault();
+    setBusy(true);
+    setErr('');
+    try {
+      // 1. Create source
+      const createRes = await fetch('/api/sources', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ type: 'google_photos', name }),
+      });
+      if (!createRes.ok) throw new Error(await createRes.text());
+      const created = await createRes.json();
+
+      // 2. Start OAuth — compute redirect URI from current origin
+      const redir = `${window.location.origin}/api/sources/${created.id}/auth/callback`;
+      const authRes = await fetch(`/api/sources/${created.id}/auth/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ client_id: clientId, client_secret: clientSecret, redirect_uri: redir }),
+      });
+      if (!authRes.ok) throw new Error(await authRes.text());
+      const { redirect_url } = await authRes.json();
+
+      onAdd(created);
+      setRedirectUri(redir);
+      setAuthUrl(redirect_url);
+      setStep('authorize');
+    } catch (e) {
+      setErr(e.message || 'Failed to start Google Photos auth');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (step === 'authorize') {
+    return (
+      <div style={overlayStyle} onClick={onClose}>
+        <div style={modalStyle} onClick={(e) => e.stopPropagation()}>
+          <h2 style={{ margin: '0 0 1rem' }}>Authorize Google Photos</h2>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', marginBottom: '1rem' }}>
+            Add this URI to your Google Cloud Console → OAuth 2.0 Client → Authorized redirect URIs:
+          </p>
+          <div style={{
+            background: 'rgba(255,255,255,0.06)', border: '1px solid var(--glass-border)',
+            borderRadius: '8px', padding: '0.75rem 1rem', fontFamily: 'monospace',
+            fontSize: '0.82rem', wordBreak: 'break-all', marginBottom: '1.5rem',
+            display: 'flex', gap: '0.5rem', alignItems: 'center',
+          }}>
+            <span style={{ flex: 1 }}>{redirectUri}</span>
+            <button
+              type="button"
+              onClick={() => navigator.clipboard.writeText(redirectUri)}
+              style={{ padding: '0.2rem 0.6rem', fontSize: '0.78rem', flexShrink: 0 }}
+            >Copy</button>
+          </div>
+          <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
+            <button type="button" onClick={onClose}>Close</button>
+            <button
+              className="primary"
+              onClick={() => { window.open(authUrl, '_blank'); onClose(); }}
+            >
+              Open Google Authorization →
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={overlayStyle} onClick={onClose}>
+      <div style={modalStyle} onClick={(e) => e.stopPropagation()}>
+        <h2 style={{ margin: '0 0 0.5rem' }}>Connect Google Photos</h2>
+        <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginBottom: '1.5rem' }}>
+          Requires a Google Cloud Console project with the <strong>Photos Library API</strong> enabled and an OAuth 2.0 Web Client ID.
+        </p>
+        <form onSubmit={handleConnect} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          {[
+            { label: 'Name', value: name, set: setName, type: 'text', placeholder: 'Google Photos' },
+            { label: 'Client ID', value: clientId, set: setClientId, type: 'text', placeholder: '…apps.googleusercontent.com' },
+            { label: 'Client Secret', value: clientSecret, set: setClientSecret, type: 'password', placeholder: 'GOCSPX-…' },
+          ].map(({ label, value, set, type, placeholder }) => (
+            <div key={label}>
+              <label style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', display: 'block', marginBottom: '0.35rem' }}>{label}</label>
+              <input type={type} value={value} onChange={(e) => set(e.target.value)} placeholder={placeholder} required={label !== 'Name'} />
+            </div>
+          ))}
+          {err && <p style={{ color: 'var(--danger)', fontSize: '0.85rem', margin: 0 }}>{err}</p>}
+          <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end', marginTop: '0.5rem' }}>
+            <button type="button" onClick={onClose}>Cancel</button>
+            <button type="submit" className="primary" disabled={busy}>
+              {busy ? <Loader2 size={16} className="spin" /> : null}
+              {busy ? ' Connecting…' : 'Connect'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Immich modal
 // ---------------------------------------------------------------------------
 function ImmichModal({ onClose, onAdd }) {
@@ -81,26 +212,6 @@ function ImmichModal({ onClose, onAdd }) {
     } finally {
       setBusy(false);
     }
-  };
-
-  const overlayStyle = {
-    position: 'fixed',
-    inset: 0,
-    background: 'rgba(0,0,0,0.6)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 1000,
-  };
-
-  const modalStyle = {
-    background: 'rgba(20,25,40,0.98)',
-    border: '1px solid var(--glass-border)',
-    borderRadius: '16px',
-    padding: '2rem',
-    width: '420px',
-    maxWidth: '90vw',
-    boxShadow: 'var(--glass-shadow)',
   };
 
   return (
@@ -478,6 +589,7 @@ export default function AlbumsView() {
   const [activeAlbum, setActiveAlbum] = useState(MOCK_ACTIVE);
   const [loading, setLoading] = useState(true);
   const [showImmichModal, setShowImmichModal] = useState(false);
+  const [showGoogleModal, setShowGoogleModal] = useState(false);
   const [settingActive, setSettingActive] = useState(false);
   const pollRef = useRef(null);
 
@@ -565,31 +677,6 @@ export default function AlbumsView() {
   };
 
   // ── Add Source handlers ────────────────────────────────────────────────
-  const handleAddGooglePhotos = async () => {
-    try {
-      // First create the source, then start auth
-      const createRes = await fetch('/api/sources', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ type: 'google_photos', name: 'Google Photos' }),
-      });
-      if (!createRes.ok) throw new Error(await createRes.text());
-      const created = await createRes.json();
-      setSources((prev) => [...prev, created]);
-
-      const authRes = await fetch(`/api/sources/${created.id}/auth/start`, {
-        method: 'POST',
-        credentials: 'include',
-      });
-      if (!authRes.ok) throw new Error(await authRes.text());
-      const { redirect_url } = await authRes.json();
-      window.open(redirect_url, '_blank');
-    } catch (e) {
-      console.warn('Google Photos OAuth not yet implemented:', e.message);
-      alert('Google Photos OAuth is not yet available. Backend implementation is coming soon.');
-    }
-  };
 
   const handleAddLocal = async () => {
     try {
@@ -721,7 +808,7 @@ export default function AlbumsView() {
             <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
               <button
                 className="primary"
-                onClick={handleAddGooglePhotos}
+                onClick={() => setShowGoogleModal(true)}
                 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
               >
                 <Plus size={16} /> 📷 Google Photos
@@ -744,7 +831,12 @@ export default function AlbumsView() {
         </>
       )}
 
-      {/* Immich modal */}
+      {showGoogleModal && (
+        <GooglePhotosModal
+          onClose={() => setShowGoogleModal(false)}
+          onAdd={(src) => { setSources((prev) => [...prev, src]); }}
+        />
+      )}
       {showImmichModal && (
         <ImmichModal
           onClose={() => setShowImmichModal(false)}
