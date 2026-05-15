@@ -265,9 +265,11 @@ class AlbumManager:
 
     def get_source_instance(self, source_id: str) -> ImageSource | None:
         """Load source from DB, decrypt credentials, instantiate and authenticate."""
+        import json as _json
+
         with get_db() as conn:
             row = conn.execute(
-                "SELECT source_type, credentials_enc FROM sources WHERE id = ?",
+                "SELECT source_type, config_json, credentials_enc FROM sources WHERE id = ?",
                 (source_id,),
             ).fetchone()
 
@@ -280,10 +282,17 @@ class AlbumManager:
         if cls is None:
             return None
 
-        credentials: dict = {}
+        # Merge config (plain) + credentials (encrypted) — authenticate() receives both
+        config: dict = {}
+        try:
+            config = _json.loads(row["config_json"] or "{}")
+        except Exception:
+            pass
+
+        credentials: dict = {**config}
         if row["credentials_enc"]:
             try:
-                credentials = decrypt_json(row["credentials_enc"], self._key)
+                credentials.update(decrypt_json(row["credentials_enc"], self._key))
             except Exception:
                 logger.exception(
                     "[AlbumManager] Failed to decrypt credentials for source %s", source_id

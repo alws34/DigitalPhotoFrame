@@ -268,6 +268,7 @@ function ImmichModal({ onClose, onAdd }) {
 function BrowsePanel({ source, subscribedAlbums, onSubscribe, onClose }) {
   const [remoteAlbums, setRemoteAlbums] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadErr, setLoadErr] = useState('');
   const [subscribing, setSubscribing] = useState(null);
 
   const subscribedRemoteIds = new Set(subscribedAlbums.map((a) => a.id.split(':').slice(1).join(':')));
@@ -276,14 +277,17 @@ function BrowsePanel({ source, subscribedAlbums, onSubscribe, onClose }) {
     let cancelled = false;
     const load = async () => {
       setLoading(true);
+      setLoadErr('');
       try {
         const res = await fetch(`/api/sources/${source.id}/remote-albums`, { credentials: 'include' });
-        if (!res.ok) throw new Error('Not OK');
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          throw new Error(body.error || `HTTP ${res.status}`);
+        }
         const data = await res.json();
         if (!cancelled) setRemoteAlbums(data);
-      } catch {
-        console.warn(`GET /api/sources/${source.id}/remote-albums not available yet`);
-        if (!cancelled) setRemoteAlbums([]);
+      } catch (e) {
+        if (!cancelled) setLoadErr(e.message || 'Failed to load albums');
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -337,9 +341,11 @@ function BrowsePanel({ source, subscribedAlbums, onSubscribe, onClose }) {
         <div style={{ display: 'flex', justifyContent: 'center', padding: '2rem' }}>
           <Loader2 size={24} className="spin" />
         </div>
+      ) : loadErr ? (
+        <p style={{ color: 'var(--danger)', textAlign: 'center', padding: '1.5rem' }}>{loadErr}</p>
       ) : remoteAlbums.length === 0 ? (
         <p style={{ color: 'var(--text-secondary)', textAlign: 'center', padding: '1.5rem' }}>
-          No remote albums found. API not yet implemented.
+          No albums found on this source.
         </p>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>

@@ -23,10 +23,10 @@ class ImmichSource(ImageSource):
         self._api_key = credentials.get("api_key", "")
         if not self._base_url or not self._api_key:
             return False
-        # Validate by calling server info
+        # Validate API key — /api/users/me works across all Immich versions
         try:
             resp = requests.get(
-                f"{self._base_url}/api/server-info",
+                f"{self._base_url}/api/users/me",
                 headers=self._headers(),
                 timeout=10,
             )
