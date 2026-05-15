@@ -23,11 +23,12 @@ class ImmichSource(ImageSource):
         self._api_key = credentials.get("api_key", "")
         if not self._base_url or not self._api_key:
             return False
-        # Validate API key — /api/users/me works across all Immich versions
+        # Validate API key using album.read — avoids requiring user.read permission
         try:
             resp = requests.get(
-                f"{self._base_url}/api/users/me",
+                f"{self._base_url}/api/albums",
                 headers=self._headers(),
+                params={"take": 1},
                 timeout=10,
             )
             return resp.status_code == 200
