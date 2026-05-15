@@ -548,7 +548,7 @@ class PhotoFrameServer(iFrame):
         logging.info("Using IMAGE_DIR = %s", self.IMAGE_DIR)
 
         # Restart observer on new directory so watchdog tracks the right path
-        if self._observer_started and self.IMAGE_DIR != old_dir:
+        if getattr(self, "_observer_started", False) and self.IMAGE_DIR != old_dir:
             try:
                 self.Observer.stop_observer()
             except Exception:

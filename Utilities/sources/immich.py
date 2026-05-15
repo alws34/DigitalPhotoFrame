@@ -86,10 +86,17 @@ class ImmichSource(ImageSource):
         return assets
 
     def download_asset(self, asset_id: str, dest: Path) -> None:
-        """Download a single asset to dest (caller handles atomic rename)."""
-        url = f"{self._base_url}/api/assets/{asset_id}/original"
-        headers = {**self._headers(), "Accept": "application/octet-stream"}
-        with requests.get(url, headers=headers, stream=True, timeout=120) as r:
+        """Download preview-size JPEG to dest (caller handles atomic rename).
+
+        Uses /thumbnail?size=preview — requires asset.view scope.
+        Preview is sufficient for display; avoids pulling full-res originals.
+        """
+        url = f"{self._base_url}/api/assets/{asset_id}/thumbnail"
+        headers = {**self._headers(), "Accept": "image/jpeg"}
+        with requests.get(
+            url, headers=headers, params={"size": "preview"},
+            stream=True, timeout=120,
+        ) as r:
             r.raise_for_status()
             dest.parent.mkdir(parents=True, exist_ok=True)
             with open(dest, "wb") as f:

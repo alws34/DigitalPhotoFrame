@@ -62,7 +62,8 @@ class ImmichStreamingCache:
         with self._lock:
             n = self._counter
             self._counter += 1
-        return f"{_PREFIX}{n:010d}{ext}"
+        # Preview endpoint always returns JPEG regardless of original extension
+        return f"{_PREFIX}{n:010d}.jpg"
 
     def _cached_files(self) -> list[Path]:
         """Return streaming cache files sorted oldest-first (by name = by counter)."""

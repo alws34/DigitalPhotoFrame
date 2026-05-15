@@ -91,6 +91,7 @@ class AlbumManager:
         )
         self._thread.start()
         logger.info("[AlbumManager] Started background sync thread.")
+        self._repair_album_paths()
         self._refresh_streaming_cache()
         self._refresh_immich_counts()
 
@@ -491,6 +492,43 @@ class AlbumManager:
                 args=(row["id"], row["source_id"], row["remote_id"]),
                 daemon=True,
             ).start()
+
+    def _repair_album_paths(self) -> None:
+        """Fix local_path entries that don't live under _images_root / source_type."""
+        try:
+            with get_db() as conn:
+                rows = conn.execute(
+                    """SELECT a.id, a.name, a.local_path, s.source_type
+                       FROM albums a JOIN sources s ON s.id = a.source_id
+                       WHERE a.subscribed = 1"""
+                ).fetchall()
+            for row in rows:
+                expected_base = self._images_root / row["source_type"]
+                current = Path(row["local_path"])
+                if current.is_relative_to(expected_base):
+                    continue  # already correct
+                safe_name = _sanitize_name(row["name"])
+                correct = expected_base / safe_name
+                correct.mkdir(parents=True, exist_ok=True)
+                # Move any cached files to correct location
+                if current.exists():
+                    import shutil as _shutil
+                    for f in current.iterdir():
+                        try:
+                            _shutil.move(str(f), str(correct / f.name))
+                        except Exception:
+                            pass
+                with get_db() as conn:
+                    conn.execute(
+                        "UPDATE albums SET local_path = ? WHERE id = ?",
+                        (str(correct), row["id"]),
+                    )
+                logger.info(
+                    "[AlbumManager] Repaired local_path for album '%s': %s → %s",
+                    row["name"], current, correct,
+                )
+        except Exception:
+            logger.exception("[AlbumManager] _repair_album_paths failed")
 
     def unsubscribe_album(self, album_id: str) -> None:
         """Remove album from DB and delete local files."""
