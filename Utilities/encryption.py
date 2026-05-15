@@ -10,6 +10,11 @@ _KEY_FILENAME = ".pf_secret_key"
 
 
 def _key_path(filename: str = _KEY_FILENAME) -> str:
+    # Prefer to co-locate the key with the DB (persistent volume in Docker).
+    # PF_DB_PATH is set to /data/photoframe.db in Docker; fall back to repo root.
+    db_path = os.environ.get("PF_DB_PATH", "")
+    if db_path:
+        return os.path.join(os.path.dirname(db_path), filename)
     repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(repo_root, filename)
 
