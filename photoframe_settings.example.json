@@ -20,5 +20,10 @@
   },
   "autoupdate": {
     "enabled": true
+  },
+  "admin_ui": {
+    "accent_color": "indigo",
+    "motion_intensity": "subtle",
+    "sidebar_collapsed": false
   }
 }

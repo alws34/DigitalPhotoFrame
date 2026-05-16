@@ -1,5 +1,7 @@
 import React, { useState } from "react";
 import ClockKnob from "./ClockKnob";
+import ColorThemePicker from "./ColorThemePicker";
+import MotionSelect from "./MotionSelect";
 
 export default function SettingField({ fieldKey, fieldPath, value, schema, onChange, depth = 0, extras = {} }) {
   const [showPassword, setShowPassword] = useState(false);
@@ -71,6 +73,18 @@ export default function SettingField({ fieldKey, fieldPath, value, schema, onCha
   if (schema?.ui === "clock") {
     return row(
       <ClockKnob value={value} onChange={(h) => onChange(fieldPath, h)} />
+    );
+  }
+
+  if (schema?.ui === "color_theme") {
+    return row(
+      <ColorThemePicker value={value ?? "indigo"} onChange={(v) => onChange(fieldPath, v)} />
+    );
+  }
+
+  if (schema?.ui === "motion_select") {
+    return row(
+      <MotionSelect value={value ?? "subtle"} onChange={(v) => onChange(fieldPath, v)} />
     );
   }
 

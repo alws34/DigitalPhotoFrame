@@ -238,6 +238,11 @@ SETTINGS_SCHEMA: dict = {
         },
         "time_font_size": {"type": "int", "label": "Time Font Size", "min": 10, "max": 300, "step": 5, "restart_required": False},
     },
+    "admin_ui": {
+        "accent_color":      {"type": "enum", "label": "Accent Color",     "choices": ["indigo", "sky", "emerald", "rose"], "restart_required": False, "ui": "color_theme"},
+        "motion_intensity":  {"type": "enum", "label": "Motion Intensity", "choices": ["subtle", "cinematic"],              "restart_required": False, "ui": "motion_select"},
+        "sidebar_collapsed": {"type": "bool", "label": "Sidebar Collapsed",                                                 "restart_required": False},
+    },
 }
 
 
