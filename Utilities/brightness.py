@@ -123,3 +123,57 @@ def set_brightness_percent(percent: int) -> tuple[bool, str]:
             return True, ""
         return False, f"{err}; {err2}"
     return False, err
+
+
+def get_brightness_percent() -> int | None:
+    """
+    Return the current brightness as an integer percentage (0–100), or None if unreadable.
+    Tries sysfs first, then xrandr (X11), then wlr-randr (Wayland).
+    """
+    # sysfs backlight (works for DSI/LVDS panels on Pi and laptops)
+    try:
+        dirs = sorted(glob.glob("/sys/class/backlight/*"))
+        if dirs:
+            path = dirs[0]
+            with open(os.path.join(path, "max_brightness")) as f:
+                maxb = int(f.read().strip())
+            with open(os.path.join(path, "brightness")) as f:
+                cur = int(f.read().strip())
+            if maxb > 0:
+                return round(cur / maxb * 100)
+    except Exception:
+        pass
+
+    # xrandr (X11)
+    if os.environ.get("DISPLAY"):
+        try:
+            exe = _which("xrandr")
+            if exe:
+                out = subprocess.check_output(
+                    [exe, "--verbose"], text=True, stderr=subprocess.DEVNULL, timeout=3
+                )
+                for line in out.splitlines():
+                    stripped = line.strip().lower()
+                    if stripped.startswith("brightness:"):
+                        val = float(stripped.split(":")[1].strip())
+                        return round(val * 100)
+        except Exception:
+            pass
+
+    # wlr-randr (Wayland)
+    if os.environ.get("WAYLAND_DISPLAY"):
+        try:
+            exe = _which("wlr-randr")
+            if exe:
+                out = subprocess.check_output(
+                    [exe], text=True, stderr=subprocess.DEVNULL, timeout=3
+                )
+                for line in out.splitlines():
+                    stripped = line.strip().lower()
+                    if "brightness:" in stripped:
+                        val = float(stripped.split("brightness:")[1].strip().split()[0])
+                        return round(val * 100)
+        except Exception:
+            pass
+
+    return None

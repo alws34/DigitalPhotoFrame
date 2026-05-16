@@ -26,6 +26,7 @@ from image_handler import Image_Utils
 from overlay import OverlayRenderer
 from pillow_heif import register_heif_opener
 
+from Utilities.brightness import get_brightness_percent
 from Utilities.config_events import on_settings_changed
 from Utilities.config_store import load_settings as _load_settings
 from Utilities.observer import ImagesObserver
@@ -383,8 +384,12 @@ class PhotoFrameServer(iFrame):
                     weather = self._weather_data if show_weather else {}
 
                 # Optimized call (Assuming overlay.py is using Numpy blending)
+                datetime_corner = ui_cfg.get("datetime_corner", "bottom-left")
+                weather_corner = ui_cfg.get("weather_corner", "bottom-right")
                 frame_bgr = self._overlay.render_datetime_and_weather(
                     frame_bgr, margins, weather,
+                    datetime_corner=datetime_corner,
+                    weather_corner=weather_corner,
                     font_color=(255, 255, 255),
                     contrast_text=contrast_text,
                 )
@@ -392,17 +397,49 @@ class PhotoFrameServer(iFrame):
                 # Fallback to raw frame if overlay fails to prevent a hard crash/freeze
                 pass
 
-        # 2b. Stats overlay (CPU/RAM)
+        # 2b. Stats overlay (CPU/RAM/Temp/Disk/Brightness)
         if self._overlay and self._settings.get('stats', {}).get('show', False):
             try:
                 now_ts = time.time()
                 if now_ts - self._stats_last_refresh >= 5.0:
                     cpu = round(psutil.cpu_percent())
                     ram = round(psutil.virtual_memory().percent)
-                    self._stats_text = f"CPU {cpu}% | RAM {ram}%"
+                    try:
+                        temps = psutil.sensors_temperatures()
+                        temp_val = None
+                        if temps:
+                            for key in ("coretemp", "cpu_thermal", "cpu-thermal", "k10temp", "acpitz"):
+                                if key in temps and temps[key]:
+                                    temp_val = round(temps[key][0].current)
+                                    break
+                        temp_str = f"{temp_val}°C" if temp_val is not None else "N/A"
+                    except Exception:
+                        temp_str = "N/A"
+                    try:
+                        disk_free = psutil.disk_usage('/').free / (1024 ** 3)
+                        disk_str = f"{disk_free:.1f}GB"
+                    except Exception:
+                        disk_str = "N/A"
+                    try:
+                        bright = get_brightness_percent()
+                        bright_str = f"{bright}%" if bright is not None else "N/A"
+                    except Exception:
+                        bright_str = "N/A"
+                    self._stats_text = (
+                        f"CPU {cpu}%  Temp {temp_str}\n"
+                        f"RAM {ram}%  Disk {disk_str}\n"
+                        f"Bright {bright_str}"
+                    )
                     self._stats_last_refresh = now_ts
-                color = self._settings.get('stats', {}).get('font_color', 'white')
-                frame_bgr = self._overlay.render_stats(frame_bgr, self._stats_text, color)
+                stats_cfg = self._settings.get('stats', {})
+                color = stats_cfg.get('font_color', 'white')
+                corner = stats_cfg.get('corner', 'top-left')
+                margin_x = int(stats_cfg.get('margin_x', 20))
+                margin_y = int(stats_cfg.get('margin_y', 20))
+                frame_bgr = self._overlay.render_stats(
+                    frame_bgr, self._stats_text, color,
+                    corner=corner, margin_x=margin_x, margin_y=margin_y,
+                )
             except Exception:
                 pass
 

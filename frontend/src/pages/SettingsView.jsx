@@ -2,12 +2,11 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import SettingsSection from "../components/settings/SettingsSection";
 
 const HIDDEN_KEYS = new Set(["about"]);
-const MERGED_KEYS = new Set(["backend_configs", "autoupdate", "playback", "screen", "admin_ui", "stats", "effects"]);
+const MERGED_KEYS = new Set(["backend_configs", "autoupdate", "playback", "screen", "admin_ui", "stats", "effects", "stream"]);
 
 const TAB_GROUPS = {
-  system: ["backend_configs", "autoupdate", "screen", "admin_ui"],
+  system: ["backend_configs", "autoupdate", "screen", "admin_ui", "stream", "playback"],
   ui: ["stats", "effects"],
-  stream: ["playback"],
 };
 
 const TAB_LABELS = {
@@ -25,6 +24,7 @@ const SECTION_LABELS = {
   admin_ui:        "Admin UI",
   stats:           "Stats",
   effects:         "Effects",
+  stream:          "Stream",
 };
 
 function tabLabel(key) {

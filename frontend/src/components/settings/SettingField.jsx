@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import ClockKnob from "./ClockKnob";
 import ColorThemePicker from "./ColorThemePicker";
+import CornerPicker from "./CornerPicker";
 import MotionSelect from "./MotionSelect";
 import OrientationButtons from "./OrientationButtons";
 
@@ -92,6 +93,12 @@ export default function SettingField({ fieldKey, fieldPath, value, schema, onCha
   if (schema?.ui === "orientation_buttons") {
     return row(
       <OrientationButtons value={value ?? 0} onChange={(v) => onChange(fieldPath, v)} />
+    );
+  }
+
+  if (schema?.ui === "corner_picker") {
+    return row(
+      <CornerPicker value={value ?? "top-left"} onChange={(v) => onChange(fieldPath, v)} />
     );
   }
 

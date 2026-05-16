@@ -87,16 +87,21 @@ class OverlayRenderer:
         frame_bgr: np.ndarray,
         margins: Dict[str, int],
         weather: Dict,
+        datetime_corner: str = "bottom-left",
+        weather_corner: str = "bottom-right",
         font_color: Tuple[int, int, int] = (255, 255, 255),
         contrast_text: bool = False,
     ) -> np.ndarray:
         # Cache key: recompute only when the clock second or weather changes.
         # This reduces the expensive PIL pass from 30x/sec to 1x/sec.
         tick = time.strftime("%H:%M:%S")
-        cache_key = (tick, repr(weather), repr(margins), font_color)
+        cache_key = (tick, repr(weather), repr(margins), datetime_corner, weather_corner, font_color)
         if cache_key != getattr(self, "_overlay_cache_key", None):
             overlay_rgba = self.render_overlay_rgba(
-                self.desired_w, self.desired_h, margins, weather, font_color
+                self.desired_w, self.desired_h, margins, weather,
+                datetime_corner=datetime_corner,
+                weather_corner=weather_corner,
+                font_color=font_color,
             )
             alpha = overlay_rgba.split()[3]
             mask = np.array(alpha, dtype=np.float32) / 255.0
@@ -116,6 +121,8 @@ class OverlayRenderer:
         height: int,
         margins: Dict[str, int],
         weather: Dict,
+        datetime_corner: str = "bottom-left",
+        weather_corner: str = "bottom-right",
         font_color: Tuple[int, int, int] = (255, 255, 255),
     ) -> Image.Image:
         # Transparent canvas
@@ -130,23 +137,36 @@ class OverlayRenderer:
         ml = int(margins.get("left", 50))
         mb = int(margins.get("bottom", 50))
         mr = int(margins.get("right", 50))
+        mt = int(margins.get("top", margins.get("bottom", 50)))
         # Support both legacy "spacing" and newer "spacing_between" keys.
         spacing = int(margins.get("spacing_between", margins.get("spacing", 10)))
 
-        # Measure
+        # Measure datetime block
         tb = draw.textbbox((0, 0), current_time, font=self.time_font)
         db = draw.textbbox((0, 0), current_date, font=self.date_font)
         t_w, t_h = tb[2] - tb[0], tb[3] - tb[1]
         d_w, d_h = db[2] - db[0], db[3] - db[1]
 
-        # Left block
-        baseline_y = height - mb
-        x_date = ml
-        y_date = baseline_y - d_h
-        x_time = x_date + (d_w - t_w) // 2
-        y_time = y_date - spacing - t_h
+        # Datetime block anchor from corner
+        block_total_w = max(t_w, d_w)
+        block_total_h = t_h + spacing + d_h
+        if datetime_corner == "bottom-left":
+            bx, by = ml, height - mb - block_total_h
+        elif datetime_corner == "bottom-right":
+            bx, by = width - mr - block_total_w, height - mb - block_total_h
+        elif datetime_corner == "top-left":
+            bx, by = ml, mt
+        elif datetime_corner == "top-right":
+            bx, by = width - mr - block_total_w, mt
+        else:
+            bx, by = ml, height - mb - block_total_h
 
-        # Right block
+        x_time = bx + (block_total_w - t_w) // 2
+        y_time = by
+        x_date = bx + (block_total_w - d_w) // 2
+        y_date = by + t_h + spacing
+
+        # Weather block
         right_positions = []
         temp_text = None
         cond_text = None
@@ -168,15 +188,22 @@ class OverlayRenderer:
             block_w = max(temp_w, cond_w)
             block_h = temp_h + (6 + cond_h if cond_text else 0)
 
-            x_right = width - mr
-            y_block_top = baseline_y - block_h
-            x_block_left = x_right - block_w
+            if weather_corner == "bottom-left":
+                wx, wy = ml, height - mb - block_h
+            elif weather_corner == "bottom-right":
+                wx, wy = width - mr - block_w, height - mb - block_h
+            elif weather_corner == "top-left":
+                wx, wy = ml, mt
+            elif weather_corner == "top-right":
+                wx, wy = width - mr - block_w, mt
+            else:
+                wx, wy = width - mr - block_w, height - mb - block_h
 
-            x_temp = x_block_left + (block_w - temp_w) // 2
-            y_temp = y_block_top
+            x_temp = wx + (block_w - temp_w) // 2
+            y_temp = wy
             right_positions.append((temp_text, x_temp, y_temp, self.time_font))
             if cond_text:
-                x_cond = x_block_left + (block_w - cond_w) // 2
+                x_cond = wx + (block_w - cond_w) // 2
                 y_cond = y_temp + temp_h + 6
                 right_positions.append((cond_text, x_cond, y_cond, self.date_font))
 
@@ -189,9 +216,35 @@ class OverlayRenderer:
         return overlay
 
 
-    def render_stats(self, frame_bgr: np.ndarray, text: str, color_name: str) -> np.ndarray:
-        color = self._color_from_name(color_name)
+    def render_stats(
+        self,
+        frame_bgr: np.ndarray,
+        text: str,
+        color_name: str,
+        corner: str = "top-left",
+        margin_x: int = 20,
+        margin_y: int = 20,
+    ) -> np.ndarray:
+        h, w = frame_bgr.shape[:2]
         pil = Image.fromarray(cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)).convert("RGBA")
         draw = ImageDraw.Draw(pil)
-        draw.text((10, 10), text, font=self.stats_font, fill=(*color, 255))
+
+        # Measure multiline text
+        bbox = draw.multiline_textbbox((0, 0), text, font=self.stats_font, spacing=4)
+        text_w = bbox[2] - bbox[0]
+        text_h = bbox[3] - bbox[1]
+
+        if corner == "top-left":
+            x, y = margin_x, margin_y
+        elif corner == "top-right":
+            x, y = w - text_w - margin_x, margin_y
+        elif corner == "bottom-left":
+            x, y = margin_x, h - text_h - margin_y
+        elif corner == "bottom-right":
+            x, y = w - text_w - margin_x, h - text_h - margin_y
+        else:
+            x, y = margin_x, margin_y
+
+        color = self._color_from_name(color_name)
+        draw.multiline_text((x, y), text, font=self.stats_font, fill=(*color, 255), spacing=4)
         return cv2.cvtColor(np.array(pil.convert("RGB")), cv2.COLOR_RGB2BGR)

@@ -111,7 +111,7 @@ def get_default_settings() -> dict[str, Any]:
         "stream": {
             "show_overlay": False,
         },
-        "stats": {"font_color": "yellow", "font_size": 20, "show": False},
+        "stats": {"font_color": "yellow", "font_size": 20, "show": False, "corner": "top-left", "margin_x": 20, "margin_y": 20},
         "system": {
             "image_dir": "Images",
             "image_quality_encoding": 100,
@@ -130,6 +130,8 @@ def get_default_settings() -> dict[str, Any]:
             "spacing_between": 50,
             "text_shadow": {"alpha": 230, "blur": 16, "offset_x": 2, "offset_y": 2},
             "time_font_size": 80,
+            "datetime_corner": "bottom-left",
+            "weather_corner": "bottom-right",
         },
     }
 
@@ -137,15 +139,15 @@ def get_default_settings() -> dict[str, Any]:
 SETTINGS_SCHEMA: dict = {
     "albums": {
         "active_album_id":      {"type": "str",  "label": "Active Album",             "restart_required": False, "ui": "album_select"},
-        "sync_interval_hours":  {"type": "int",  "label": "Sync Interval (hours)",    "min": 1, "max": 168, "step": 1, "restart_required": False},
+        "sync_interval_hours":  {"type": "int",  "label": "Sync Interval (hours)",    "min": 0, "max": 72, "step": 1, "restart_required": False, "ui": "clock"},
         "sync_on_startup":      {"type": "bool", "label": "Sync on Startup",          "restart_required": False},
         "sync_delete_removed":  {"type": "bool", "label": "Delete Removed Media",     "restart_required": False},
     },
     "autoupdate": {
         "branch":     {"type": "str",  "label": "Branch",               "restart_required": False},
         "enabled":    {"type": "bool", "label": "Enable Auto-Update",    "restart_required": False},
-        "hour":       {"type": "int",  "label": "Update Hour",   "min": 0,  "max": 23,  "step": 1, "restart_required": False},
-        "minute":     {"type": "int",  "label": "Update Minute", "min": 0,  "max": 59,  "step": 1, "restart_required": False},
+        "hour":       {"type": "int",  "label": "Update Hour",   "min": 0,  "max": 23,  "step": 1, "restart_required": False, "ui": "clock"},
+        "minute":     {"type": "int",  "label": "Update Minute", "min": 0,  "max": 59,  "step": 1, "restart_required": False, "ui": "clock"},
         "remote":     {"type": "str",  "label": "Git Remote",            "restart_required": False},
         "repo_path":  {"type": "str",  "label": "Repo Path",             "restart_required": False},
         "shallow_ok": {"type": "bool", "label": "Allow Shallow Clone",   "restart_required": False},
@@ -212,6 +214,15 @@ SETTINGS_SCHEMA: dict = {
         "font_color": {"type": "color", "label": "Font Color", "choices": ["yellow", "white", "red", "green", "blue"], "restart_required": False},
         "font_size":  {"type": "int",   "label": "Font Size",  "min": 8, "max": 100, "step": 2, "restart_required": False, "no_slider": True},
         "show":       {"type": "bool",  "label": "Show Stats",                                   "restart_required": False},
+        "corner": {
+            "type": "enum",
+            "label": "Stats Corner",
+            "choices": ["top-left", "top-right", "bottom-left", "bottom-right"],
+            "restart_required": False,
+            "ui": "corner_picker",
+        },
+        "margin_x": {"type": "int", "label": "Stats Margin X (px)", "min": 0, "max": 200, "step": 1, "restart_required": False, "no_slider": True},
+        "margin_y": {"type": "int", "label": "Stats Margin Y (px)", "min": 0, "max": 200, "step": 1, "restart_required": False, "no_slider": True},
     },
     "system": {
         "image_dir":              {"type": "str",  "label": "Image Directory",    "restart_required": False},
@@ -240,6 +251,20 @@ SETTINGS_SCHEMA: dict = {
             "offset_y": {"type": "int", "label": "Shadow Offset Y", "min": -50, "max": 50,  "step": 1, "restart_required": False, "no_slider": True},
         },
         "time_font_size": {"type": "int", "label": "Time Font Size", "min": 10, "max": 300, "step": 5, "restart_required": False, "no_slider": True},
+        "datetime_corner": {
+            "type": "enum",
+            "label": "Date/Time Corner",
+            "choices": ["bottom-left", "bottom-right", "top-left", "top-right"],
+            "restart_required": False,
+            "ui": "corner_picker",
+        },
+        "weather_corner": {
+            "type": "enum",
+            "label": "Weather Corner",
+            "choices": ["bottom-left", "bottom-right", "top-left", "top-right"],
+            "restart_required": False,
+            "ui": "corner_picker",
+        },
     },
     "admin_ui": {
         "accent_color":     {"type": "enum", "label": "Accent Color",     "choices": ["indigo", "sky", "emerald", "rose"], "restart_required": False, "ui": "color_theme"},
