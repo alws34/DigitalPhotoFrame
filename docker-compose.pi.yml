@@ -1,0 +1,20 @@
+# Pi overlay: docker compose -f docker-compose.yml -f docker-compose.pi.yml up -d
+# Requires: Pi OS Bookworm desktop (Wayland/labwc). User must be in 'video' and 'render' groups.
+services:
+  photoframe:
+    group_add:
+      - video
+      - render
+    devices:
+      - /dev/dri:/dev/dri
+      - /dev/input:/dev/input
+    volumes:
+      - /sys/class/backlight:/sys/class/backlight
+      - /run/user/1000:/run/user/1000
+    environment:
+      - WAYLAND_DISPLAY=wayland-0
+      - XDG_RUNTIME_DIR=/run/user/1000
+      - SDL_VIDEODRIVER=wayland
+      - SDL_WAYLAND_CHECK_LIVE_RESIZE=0
+    # Uncomment for MQTT / mDNS:
+    # network_mode: host

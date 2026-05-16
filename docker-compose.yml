@@ -1,0 +1,32 @@
+services:
+  photoframe:
+    build: .
+    container_name: photoframe
+    restart: unless-stopped
+    network_mode: host
+    user: "1000:1000"                        # Run as pi user to access Wayland socket
+    ports:
+      - "${PHOTOFRAME_PORT:-5002}:${PHOTOFRAME_PORT:-5002}"
+    volumes:
+      - ./Images:/app/Images
+      - ./photoframe_settings.json:/app/photoframe_settings.json:ro  # seed for one-time migration; settings are stored in /data DB after first run
+      - photoframe-data:/data
+      - /tmp/.X11-unix:/tmp/.X11-unix        # X11 Socket (fallback)
+      - /run/user/1000:/run/user/1000        # Wayland Socket
+      - /dev/shm:/dev/shm                    # Prevents memory crashes
+      - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket  # Host D-Bus → nmcli can reach NetworkManager
+    environment:
+      - PHOTOFRAME_SECRET_KEY=${PHOTOFRAME_SECRET_KEY:-change-me-in-production}
+      - DISPLAY=:0
+      - WAYLAND_DISPLAY=wayland-0
+      - XDG_RUNTIME_DIR=/run/user/1000
+      - SDL_VIDEODRIVER=wayland              # Pi OS Bookworm uses Wayland (labwc)
+      - LIBGL_ALWAYS_SOFTWARE=1             # Mesa software fallback if GPU EGL unavailable
+      - HOME=/tmp                           # Prevents Mesa writing to /.cache
+      - XDG_CACHE_HOME=/tmp/mesa_cache
+      - PF_DB_PATH=/data/photoframe.db
+    devices:
+      - /dev/dri:/dev/dri                    # GPU Acceleration
+    privileged: true
+volumes:
+  photoframe-data:

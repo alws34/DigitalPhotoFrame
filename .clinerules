@@ -1,0 +1,34 @@
+# DigitalPhotoFrame Development Rules
+
+This repository uses the following rules for AI assistants (like Cline, Roo, Cursor, and Copilot).
+
+## Commands
+
+- **Install dependencies:** `pip install -e .` (Requires Python 3.8+; run within a virtual environment `python -m venv env && source env/bin/activate`)
+- **Run the app (GUI):** `python app.py`
+- **Run the app (Headless):** `python app.py --headless`
+- **Run tests:** `pytest`
+- **Lint code:** `ruff check .`
+- **Format code:** `ruff format .`
+
+## Project Architecture
+
+The Digital Photo Frame is a compositing engine and a web-based administration UI.
+
+- **`app.py`**: Entry point. Sets up GUI/headless and unifies FrameServer and WebAPI.
+- **`FrameServer/`**: Core logic (`PhotoFrameServer.py`) that loads images, transitions, and weather overlays via OpenCV/NumPy.
+- **`FrameGUI/`**: PySide6 client handling UI.
+- **`WebAPI/`**: Flask backend (`API.py`) serving an MJPEG stream and the GUI Settings.
+- **`Utilities/`**: Utility scripts (MQTT, Weather cache, AutoUpdater).
+- **`Tests/`**: pytest suite validating system behaviors.
+
+## Code Style & Best Practices
+
+- **Type Hints**: Always use strict typing on function signatures (e.g., `def load(val: str) -> None:`). Import types with `from typing import Dict, Any, Optional`. Require `from __future__ import annotations`.
+- **Error Handling**: Silent/graceful failure is absolutely required. Do not crash the application on network timeouts, corrupt images, or missing APIs (it operates unattended). Instead, catch exceptions, log them, and continue streaming.
+- **Formatting Rule**: Follow `ruff` guidelines (Line length is 88 as configured in `pyproject.toml`).
+- **Naming Conventions**:
+  - `PascalCase` for Classes.
+  - `snake_case` for local variables, functions, and module names.
+  - Prefix "private" functions with `_` (e.g., `def _load_settings(...)`).
+- **Performance Guidelines**: Remember that transitions execute extremely quickly (e.g., inside OpenCV generators). Avoid I/O, large allocations, or blocking calls in the frame generator hooks. Use numpy vectorized operations instead of nested loops wherever possible.

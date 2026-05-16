@@ -1,0 +1,55 @@
+# Environments
+env/
+.env
+.venv
+venv/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+
+# Settings (Secrets)
+photoframe_settings.json
+photoframe_settings.json.migrated
+users.json
+.pf_secret_key
+
+# Media
+Images/
+_thumbs/
+
+# IDE
+.vscode/
+.idea/
+
+# Personal Claude overrides
+CLAUDE.local.md
+
+# Testing/Type checking
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Logs
+PhotoFrame.log
+*.log
+
+# Runtime cache files
+openmeteo_weather_cache.json
+
+# Claude Code
+.claude/*
+!.claude/settings.json
+!.claude/hooks/
+!.claude/hooks/*.sh
+!.claude/rules/
+!.claude/rules/**/*.md
+.claude/worktrees/
+foss_env/
+users.json
