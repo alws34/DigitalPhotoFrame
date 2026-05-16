@@ -13,6 +13,26 @@ from Utilities.config_store import save_settings as _cs_save
 from .viewmodel import SettingsViewModel
 from .widgets import Sparkline
 
+# Mirror the web UI tab structure exactly.
+_HIDDEN_KEYS = {"about"}
+_MERGED_KEYS = {"backend_configs", "autoupdate", "playback", "screen", "admin_ui", "stats", "effects", "stream"}
+_TAB_GROUPS = {
+    "system": ["backend_configs", "autoupdate", "screen", "admin_ui", "stream", "playback"],
+    "ui":     ["stats", "effects"],
+}
+_TAB_LABELS = {"open_meteo": "Weather", "ui": "Frame UI"}
+_TAB_ORDER  = ["system", "ui", "albums", "mqtt", "open_meteo"]
+_SECTION_LABELS = {
+    "backend_configs": "Backend Config",
+    "autoupdate":      "Auto Update",
+    "playback":        "Playback",
+    "screen":          "Screen",
+    "admin_ui":        "Admin UI",
+    "stats":           "Stats",
+    "effects":         "Effects",
+    "stream":          "Stream",
+}
+
 
 def _apply_pending(base: dict, changes: dict) -> None:
     """Recursively merge changes into base in-place."""
@@ -145,13 +165,14 @@ class SettingsDialog(QtWidgets.QDialog):
         self.layout().addWidget(self._tabs)
         self._pending_changes: dict = {}
 
-        # Pinned System tab (stats/QR/graphs)
-        stats_tab = self._build_stats_tab()
-        self._tabs.addTab(self._wrap_scroll(stats_tab), "System")
-
-        # Dynamic settings tabs
         from Utilities.config_store import load_settings
         current_settings = load_settings()
+
+        # System tab: stats/QR/graphs + merged settings sections
+        system_tab = self._build_system_tab(current_settings)
+        self._tabs.addTab(self._wrap_scroll(system_tab), "System")
+
+        # Remaining settings tabs (web UI order)
         self._build_dynamic_tabs(current_settings)
 
         # Save button
@@ -188,8 +209,10 @@ class SettingsDialog(QtWidgets.QDialog):
         return sc
 
     def _apply_safe_theme(self) -> None:
-        """Force a clean, high-contrast theme to ensure readability on frame buffers."""
+        """Force a clean, high-contrast opaque theme to ensure readability on frame buffers."""
         self.setAttribute(QtCore.Qt.WA_StyledBackground, True)
+        self.setAttribute(QtCore.Qt.WA_TranslucentBackground, False)
+        self.setWindowOpacity(1.0)
         try:
             self.setStyle(QtWidgets.QStyleFactory.create("Fusion"))
         except Exception:
@@ -256,9 +279,47 @@ class SettingsDialog(QtWidgets.QDialog):
             pass
 
     # =========================================================================
-    # TAB: SYSTEM (stats/QR/graphs)
+    # TAB: SYSTEM (stats/QR/graphs + merged settings sections)
     # =========================================================================
-    def _build_stats_tab(self):
+    def _build_system_tab(self, settings: dict) -> QtWidgets.QWidget:
+        """System tab: stats widget at top, then merged settings sections below."""
+        container = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(container)
+        layout.setAlignment(QtCore.Qt.AlignTop)
+
+        layout.addWidget(self._build_stats_widget())
+
+        # Settings sections (refreshed on hot-reload via _populate_system_settings)
+        self._system_settings_container = QtWidgets.QWidget()
+        self._system_settings_layout = QtWidgets.QVBoxLayout(self._system_settings_container)
+        self._system_settings_layout.setContentsMargins(0, 0, 0, 0)
+        self._populate_system_settings(settings)
+        layout.addWidget(self._system_settings_container)
+        layout.addStretch(1)
+        return container
+
+    def _populate_system_settings(self, settings: dict) -> None:
+        """Fill (or refresh) the settings part of the System tab."""
+        lay = self._system_settings_layout
+        while lay.count():
+            item = lay.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        # Primary "system" section
+        if isinstance(settings.get("system"), dict):
+            lay.addWidget(self._make_section_header("System Config"))
+            lay.addWidget(self._build_section_widget(settings["system"], parent_key="system"))
+
+        # Merged sub-sections matching web UI TAB_GROUPS["system"]
+        for sub_key in _TAB_GROUPS.get("system", []):
+            if isinstance(settings.get(sub_key), dict):
+                label = _SECTION_LABELS.get(sub_key, sub_key)
+                lay.addWidget(self._make_section_header(label))
+                lay.addWidget(self._build_section_widget(settings[sub_key], parent_key=sub_key))
+
+    def _build_stats_widget(self) -> QtWidgets.QWidget:
+        """QR / network info / sparkline graphs / maintenance buttons."""
         w = QtWidgets.QWidget()
         lay = QtWidgets.QVBoxLayout(w)
 
@@ -297,16 +358,16 @@ class SettingsDialog(QtWidgets.QDialog):
         gl.setRowWrapPolicy(policy)
         gl.setFieldGrowthPolicy(QtWidgets.QFormLayout.ExpandingFieldsGrow)
 
-        def row(w_graph_attr: str, init_text: str) -> QtWidgets.QWidget:
+        def _row(graph_attr: str, init_text: str) -> QtWidgets.QWidget:
             wrap = QtWidgets.QWidget()
             hl = QtWidgets.QHBoxLayout(wrap)
             hl.setContentsMargins(0, 0, 0, 0)
             graph = Sparkline(maxlen=60)
-            setattr(self, w_graph_attr, graph)
+            setattr(self, graph_attr, graph)
             val_lbl = QtWidgets.QLabel(init_text)
             val_lbl.setMinimumWidth(56)
             val_lbl.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
-            setattr(self, w_graph_attr.replace("_graph", "_val"), val_lbl)
+            setattr(self, graph_attr.replace("_graph", "_val"), val_lbl)
             hl.addWidget(graph, 1)
             hl.addWidget(val_lbl, 0)
             return wrap
@@ -314,15 +375,15 @@ class SettingsDialog(QtWidgets.QDialog):
         self.cpu_graph = Sparkline(maxlen=60)
         self.ram_graph = Sparkline(maxlen=60)
         self.tmp_graph = Sparkline(maxlen=60)
-        gl.addRow("CPU %",  row("cpu_graph", "0%"))
-        gl.addRow("RAM %",  row("ram_graph", "0%"))
-        gl.addRow("Temp C", row("tmp_graph", "0.0 C"))
+        gl.addRow("CPU %",  _row("cpu_graph", "0%"))
+        gl.addRow("RAM %",  _row("ram_graph", "0%"))
+        gl.addRow("Temp C", _row("tmp_graph", "0.0 C"))
         lay.addWidget(g)
 
         # Maintenance Buttons
         maint_row = QtWidgets.QHBoxLayout()
-        self.pull_btn = QtWidgets.QPushButton("Pull updates now", clicked=self.vm.pull_updates)
-        self.restart_btn = QtWidgets.QPushButton("Restart service", clicked=self.vm.restart_service)
+        self.pull_btn    = QtWidgets.QPushButton("Pull updates now", clicked=self.vm.pull_updates)
+        self.restart_btn = QtWidgets.QPushButton("Restart service",  clicked=self.vm.restart_service)
         self.maint_status = QtWidgets.QLabel("")
         self.maint_status.setWordWrap(True)
         maint_row.addWidget(self.pull_btn)
@@ -331,8 +392,17 @@ class SettingsDialog(QtWidgets.QDialog):
         maint_row.addSpacing(16)
         maint_row.addWidget(self.maint_status, 1)
         lay.addLayout(maint_row)
-        lay.addStretch(1)
         return w
+
+    def _make_section_header(self, label: str) -> QtWidgets.QLabel:
+        """Styled section divider matching the web UI uppercase sub-section headers."""
+        lbl = QtWidgets.QLabel(label.upper())
+        lbl.setStyleSheet(
+            "font-size: 8pt; font-weight: 700; letter-spacing: 1px;"
+            " color: #666666; border-bottom: 1px solid #cfcfcf;"
+            " padding-bottom: 4px; margin-top: 16px;"
+        )
+        return lbl
 
     def _set_version_label(self) -> None:
         try:
@@ -376,16 +446,41 @@ class SettingsDialog(QtWidgets.QDialog):
         super().resizeEvent(e)
 
     # =========================================================================
-    # DYNAMIC SETTINGS TABS
+    # DYNAMIC SETTINGS TABS  (mirrors web UI tab order + merged sections)
     # =========================================================================
     def _build_dynamic_tabs(self, settings: dict) -> None:
-        SKIP = {"about"}
-        for key, section in settings.items():
-            if key in SKIP or not isinstance(section, dict):
-                continue
-            tab_label = key.replace("_", " ").title()
-            widget = self._build_section_widget(section, parent_key=key)
-            self._tabs.addTab(self._wrap_scroll(widget), tab_label)
+        # Keys eligible to become tabs: not hidden, not merged, not system (handled separately)
+        available = {
+            k for k, v in settings.items()
+            if k not in _HIDDEN_KEYS and k not in _MERGED_KEYS
+            and k != "system" and isinstance(v, dict)
+        }
+        pinned     = [k for k in _TAB_ORDER if k in available and k != "system"]
+        pinned_set = set(pinned)
+        rest       = sorted(k for k in available if k not in pinned_set)
+
+        for key in pinned + rest:
+            label  = _TAB_LABELS.get(key) or key.replace("_", " ").title()
+            widget = self._build_tab_content(key, settings)
+            self._tabs.addTab(self._wrap_scroll(widget), label)
+
+    def _build_tab_content(self, key: str, settings: dict) -> QtWidgets.QWidget:
+        """Build a tab widget: primary section + any merged sub-sections."""
+        container = QtWidgets.QWidget()
+        layout    = QtWidgets.QVBoxLayout(container)
+        layout.setAlignment(QtCore.Qt.AlignTop)
+
+        if isinstance(settings.get(key), dict):
+            layout.addWidget(self._build_section_widget(settings[key], parent_key=key))
+
+        for sub_key in _TAB_GROUPS.get(key, []):
+            if isinstance(settings.get(sub_key), dict):
+                label = _SECTION_LABELS.get(sub_key, sub_key)
+                layout.addWidget(self._make_section_header(label))
+                layout.addWidget(self._build_section_widget(settings[sub_key], parent_key=sub_key))
+
+        layout.addStretch(1)
+        return container
 
     def _build_section_widget(self, section: dict, parent_key: str) -> QtWidgets.QWidget:
         from Utilities.config_store import get_field_schema
@@ -513,6 +608,9 @@ class SettingsDialog(QtWidgets.QDialog):
 
     @QtCore.Slot(dict)
     def _refresh_from_settings(self, new_data: dict) -> None:
+        # Refresh system tab settings sections (stats widget stays intact)
+        self._populate_system_settings(new_data)
+        # Rebuild all non-system tabs
         while self._tabs.count() > 1:
             self._tabs.removeTab(1)
         self._build_dynamic_tabs(new_data)
