@@ -16,14 +16,18 @@
   },
   "system": {
     "image_dir": "Images",
-    "service_name": "PhotoFrame"
+    "service_name": "PhotoFrame",
+    "sidebar_collapsed": false
+  },
+  "effects": {
+    "background_blur_enabled": true,
+    "shadow_enabled": true
   },
   "autoupdate": {
     "enabled": true
   },
   "admin_ui": {
     "accent_color": "indigo",
-    "motion_intensity": "subtle",
-    "sidebar_collapsed": false
+    "motion_intensity": "subtle"
   }
 }

@@ -1,7 +1,28 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import SettingsSection from "../components/settings/SettingsSection";
 
 const HIDDEN_KEYS = new Set(["about"]);
+const MERGED_KEYS = new Set(["backend_configs", "autoupdate", "playback"]);
+
+const TAB_GROUPS = {
+  system: ["backend_configs", "autoupdate"],
+  stream: ["playback"],
+};
+
+const TAB_LABELS = {
+  open_meteo: "Weather",
+  admin_ui:   "Admin UI",
+};
+
+const SECTION_LABELS = {
+  backend_configs: "Backend Config",
+  autoupdate:      "Auto Update",
+  playback:        "Playback",
+};
+
+function tabLabel(key) {
+  return TAB_LABELS[key] ?? key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
 function setNestedValue(obj, path, value) {
   const [head, ...rest] = path.split(".");
@@ -50,7 +71,6 @@ export default function SettingsView() {
   const [showRestartModal, setShowRestartModal] = useState(false);
   const originalRef = useRef(null);
   const pendingRef = useRef(null);
-
   const [albums, setAlbums] = useState([]);
 
   const fetchSettings = useCallback(async () => {
@@ -75,12 +95,6 @@ export default function SettingsView() {
   }, []);
 
   useEffect(() => {
-    if (settings && !activeTab) {
-      setActiveTab(Object.keys(settings).find((k) => !HIDDEN_KEYS.has(k)));
-    }
-  }, [settings, activeTab]);
-
-  useEffect(() => {
     fetch("/api/settings/schema")
       .then((r) => r.json())
       .then(setSchema)
@@ -94,6 +108,20 @@ export default function SettingsView() {
     };
     return () => es.close();
   }, [fetchSettings]);
+
+  // Build ordered tab list: system first, rest alphabetical, merged keys hidden
+  const tabs = useMemo(() => {
+    if (!settings) return [];
+    const keys = Object.keys(settings).filter((k) => !HIDDEN_KEYS.has(k) && !MERGED_KEYS.has(k));
+    const rest = keys.filter((k) => k !== "system").sort();
+    return ["system", ...rest].filter((k) => keys.includes(k));
+  }, [settings]);
+
+  useEffect(() => {
+    if (settings && !activeTab && tabs.length > 0) {
+      setActiveTab(tabs[0]);
+    }
+  }, [settings, activeTab, tabs]);
 
   const handleChange = useCallback((path, value) => {
     setSettings((prev) => {
@@ -147,8 +175,6 @@ export default function SettingsView() {
     return <div style={{ padding: 40, color: "var(--text-secondary)" }}>Loading settings…</div>;
   }
 
-  const tabs = Object.keys(settings).filter((k) => !HIDDEN_KEYS.has(k));
-
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", padding: 24, gap: 16 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -158,7 +184,7 @@ export default function SettingsView() {
             <span style={{
               color: status.startsWith("Error") || status.startsWith("Save failed")
                 ? "var(--danger)" : "var(--accent)",
-              fontSize: "0.85em"
+              fontSize: "0.85em",
             }}>
               {status}
             </span>
@@ -177,20 +203,20 @@ export default function SettingsView() {
             style={{
               padding: "6px 16px", borderRadius: 20,
               border: activeTab === key ? "1px solid var(--accent)" : "1px solid var(--glass-border)",
-              background: activeTab === key ? "rgba(90,150,255,0.2)" : "var(--glass-bg)",
+              background: activeTab === key ? "var(--accent-glow)" : "var(--glass-bg)",
               color: activeTab === key ? "var(--accent-hover)" : "var(--text-secondary)",
               fontWeight: activeTab === key ? 600 : 400,
-              textTransform: "capitalize",
             }}
           >
-            {key.replace(/_/g, " ")}
+            {tabLabel(key)}
           </button>
         ))}
       </div>
 
-      {activeTab && settings[activeTab] && (
+      {activeTab && (
         <div className="glass" style={{ flex: 1, overflowY: "auto", padding: 20 }}>
-          {typeof settings[activeTab] === "object" && !Array.isArray(settings[activeTab]) && (
+          {/* Primary section */}
+          {settings[activeTab] && typeof settings[activeTab] === "object" && !Array.isArray(settings[activeTab]) && (
             <SettingsSection
               data={settings[activeTab]}
               pathPrefix={activeTab}
@@ -198,6 +224,28 @@ export default function SettingsView() {
               onChange={handleChange}
               extras={{ albums }}
             />
+          )}
+          {/* Merged sections */}
+          {(TAB_GROUPS[activeTab] ?? []).map((key) =>
+            settings[key] && typeof settings[key] === "object" && !Array.isArray(settings[key]) ? (
+              <div key={key} style={{ marginTop: 24 }}>
+                <div style={{
+                  fontSize: "0.72em", fontWeight: 700, letterSpacing: "0.1em",
+                  color: "var(--text-secondary)", textTransform: "uppercase",
+                  paddingBottom: 8, borderBottom: "1px solid var(--glass-border)",
+                  marginBottom: 12,
+                }}>
+                  {SECTION_LABELS[key] ?? key}
+                </div>
+                <SettingsSection
+                  data={settings[key]}
+                  pathPrefix={key}
+                  schema={schema[key] ?? {}}
+                  onChange={handleChange}
+                  extras={{ albums }}
+                />
+              </div>
+            ) : null
           )}
         </div>
       )}

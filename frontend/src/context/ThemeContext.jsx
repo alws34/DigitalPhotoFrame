@@ -32,10 +32,10 @@ export function ThemeProvider({ children }) {
   useEffect(() => {
     axios.get('/api/settings', { withCredentials: true })
       .then(res => {
-        const ui = res.data?.admin_ui ?? {};
-        const a = ui.accent_color ?? DEFAULTS.accent;
-        const m = ui.motion_intensity ?? DEFAULTS.motionIntensity;
-        const s = ui.sidebar_collapsed ?? DEFAULTS.sidebarCollapsed;
+        const adminUi = res.data?.admin_ui ?? {};
+        const a = adminUi.accent_color ?? DEFAULTS.accent;
+        const m = adminUi.motion_intensity ?? DEFAULTS.motionIntensity;
+        const s = res.data?.system?.sidebar_collapsed ?? DEFAULTS.sidebarCollapsed;
         setAccent(a);
         setMotionIntensity(m);
         setSidebarCollapsedState(s);
@@ -44,40 +44,39 @@ export function ThemeProvider({ children }) {
       .catch(() => applyTokens(DEFAULTS.accent, DEFAULTS.motionIntensity));
   }, []);
 
-  const saveAdminUiSetting = useCallback(async (key, value) => {
+  const saveSetting = useCallback(async (section, key, value) => {
     try {
       const res = await axios.get('/api/settings', { withCredentials: true });
       const current = res.data ?? {};
-      const next = { ...current, admin_ui: { ...(current.admin_ui ?? {}), [key]: value } };
+      const next = { ...current, [section]: { ...(current[section] ?? {}), [key]: value } };
       await axios.post('/api/settings', next, { withCredentials: true });
     } catch (e) {
-      console.error('Failed to save admin_ui setting', e);
+      console.error('Failed to save setting', e);
     }
   }, []);
 
   const setSidebarCollapsed = useCallback((val) => {
     setSidebarCollapsedState(val);
-    saveAdminUiSetting('sidebar_collapsed', val);
-  }, [saveAdminUiSetting]);
+    saveSetting('system', 'sidebar_collapsed', val);
+  }, [saveSetting]);
 
   const handleAccentChange = useCallback((val) => {
     setAccent(val);
     applyTokens(val, motionIntensity);
-    saveAdminUiSetting('accent_color', val);
-  }, [motionIntensity, saveAdminUiSetting]);
+    saveSetting('admin_ui', 'accent_color', val);
+  }, [motionIntensity, saveSetting]);
 
   const handleMotionChange = useCallback((val) => {
     setMotionIntensity(val);
     applyTokens(accent, val);
-    saveAdminUiSetting('motion_intensity', val);
-  }, [accent, saveAdminUiSetting]);
+    saveSetting('admin_ui', 'motion_intensity', val);
+  }, [accent, saveSetting]);
 
   return (
     <ThemeContext.Provider value={{
       accent, setAccent: handleAccentChange,
       motionIntensity, setMotionIntensity: handleMotionChange,
       sidebarCollapsed, setSidebarCollapsed,
-      saveAdminUiSetting,
     }}>
       {children}
     </ThemeContext.Provider>

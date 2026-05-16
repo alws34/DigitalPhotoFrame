@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import ClockKnob from "./ClockKnob";
 import ColorThemePicker from "./ColorThemePicker";
 import MotionSelect from "./MotionSelect";
+import OrientationButtons from "./OrientationButtons";
 
 export default function SettingField({ fieldKey, fieldPath, value, schema, onChange, depth = 0, extras = {} }) {
   const [showPassword, setShowPassword] = useState(false);
@@ -88,6 +89,12 @@ export default function SettingField({ fieldKey, fieldPath, value, schema, onCha
     );
   }
 
+  if (schema?.ui === "orientation_buttons") {
+    return row(
+      <OrientationButtons value={value ?? 0} onChange={(v) => onChange(fieldPath, v)} />
+    );
+  }
+
   if (schema?.ui === "album_select") {
     const albums = Array.isArray(extras?.albums) ? extras.albums : [];
     return row(
@@ -120,7 +127,7 @@ export default function SettingField({ fieldKey, fieldPath, value, schema, onCha
     const max = schema?.max;
     return row(
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-        {min !== undefined && max !== undefined && (
+        {min !== undefined && max !== undefined && !schema?.no_slider && (
           <input
             type="range"
             min={min} max={max} step={step}
