@@ -55,8 +55,10 @@ def get_default_settings() -> dict[str, Any]:
         },
         "effects": {
             "allow_translucent_background": True,
+            "background_blur_enabled": True,
             "background_blur_radius": 61,
             "background_opacity": 0.4,
+            "shadow_enabled": True,
             "shadow_blur_radius": 71,
             "shadow_opacity": 0.85,
         },
@@ -115,6 +117,7 @@ def get_default_settings() -> dict[str, Any]:
             "image_quality_encoding": 100,
             "log_file_path": "./FrameServer/PhotoFrame.log",
             "service_name": "PhotoFrame",
+            "sidebar_collapsed": False,
         },
         "ui": {
             "contrast_text": True,
@@ -159,11 +162,11 @@ SETTINGS_SCHEMA: dict = {
     "effects": {
         "allow_translucent_background": {"type": "bool",  "label": "Enable Translucent Background", "restart_required": False},
         "background_blur_enabled":      {"type": "bool",  "label": "Enable Background Blur",         "restart_required": False},
-        "background_blur_radius":       {"type": "int",   "label": "Background Blur",  "min": 0, "max": 200, "step": 2,    "restart_required": False},
-        "background_opacity":           {"type": "float", "label": "Background Opacity","min": 0.0,"max": 1.0,"step": 0.05, "restart_required": False},
+        "background_blur_radius":       {"type": "int",   "label": "Background Blur",  "min": 0, "max": 200, "step": 2,    "restart_required": False, "no_slider": True},
+        "background_opacity":           {"type": "float", "label": "Background Opacity","min": 0.0,"max": 1.0,"step": 0.05, "restart_required": False, "no_slider": True},
         "shadow_enabled":               {"type": "bool",  "label": "Enable Shadow",                  "restart_required": False},
-        "shadow_blur_radius":           {"type": "int",   "label": "Shadow Blur",      "min": 0, "max": 200, "step": 2,    "restart_required": False},
-        "shadow_opacity":               {"type": "float", "label": "Shadow Opacity",   "min": 0.0,"max": 1.0,"step": 0.05, "restart_required": False},
+        "shadow_blur_radius":           {"type": "int",   "label": "Shadow Blur",      "min": 0, "max": 200, "step": 2,    "restart_required": False, "no_slider": True},
+        "shadow_opacity":               {"type": "float", "label": "Shadow Opacity",   "min": 0.0,"max": 1.0,"step": 0.05, "restart_required": False, "no_slider": True},
     },
     "mqtt": {
         "base_topic":       {"type": "str",      "label": "Base Topic",           "restart_required": False},

@@ -20,6 +20,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 import cv2
 import numpy as np
+import psutil
 from EffectHandler import EffectHandler
 from image_handler import Image_Utils
 from overlay import OverlayRenderer
@@ -221,6 +222,10 @@ class PhotoFrameServer(iFrame):
 
         on_settings_changed(self._on_settings_changed)
 
+        # Stats overlay cache
+        self._stats_last_refresh: float = 0.0
+        self._stats_text: str = ""
+
     def _blank_frame(self):
         # neutral gray, screen-sized
         return np.full((self.screen_height, self.screen_width, 3), 32, dtype=np.uint8)
@@ -385,6 +390,20 @@ class PhotoFrameServer(iFrame):
                 )
             except Exception:
                 # Fallback to raw frame if overlay fails to prevent a hard crash/freeze
+                pass
+
+        # 2b. Stats overlay (CPU/RAM)
+        if self._overlay and self._settings.get('stats', {}).get('show', False):
+            try:
+                now_ts = time.time()
+                if now_ts - self._stats_last_refresh >= 5.0:
+                    cpu = round(psutil.cpu_percent())
+                    ram = round(psutil.virtual_memory().percent)
+                    self._stats_text = f"CPU {cpu}% | RAM {ram}%"
+                    self._stats_last_refresh = now_ts
+                color = self._settings.get('stats', {}).get('font_color', 'white')
+                frame_bgr = self._overlay.render_stats(frame_bgr, self._stats_text, color)
+            except Exception:
                 pass
 
         # 3. Update internal buffers

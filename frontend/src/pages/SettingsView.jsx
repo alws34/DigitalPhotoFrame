@@ -2,22 +2,29 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import SettingsSection from "../components/settings/SettingsSection";
 
 const HIDDEN_KEYS = new Set(["about"]);
-const MERGED_KEYS = new Set(["backend_configs", "autoupdate", "playback"]);
+const MERGED_KEYS = new Set(["backend_configs", "autoupdate", "playback", "screen", "admin_ui", "stats", "effects"]);
 
 const TAB_GROUPS = {
-  system: ["backend_configs", "autoupdate"],
+  system: ["backend_configs", "autoupdate", "screen", "admin_ui"],
+  ui: ["stats", "effects"],
   stream: ["playback"],
 };
 
 const TAB_LABELS = {
   open_meteo: "Weather",
-  admin_ui:   "Admin UI",
+  ui: "Frame UI",
 };
+
+const TAB_ORDER = ["system", "ui", "albums", "mqtt", "open_meteo"];
 
 const SECTION_LABELS = {
   backend_configs: "Backend Config",
   autoupdate:      "Auto Update",
   playback:        "Playback",
+  screen:          "Screen",
+  admin_ui:        "Admin UI",
+  stats:           "Stats",
+  effects:         "Effects",
 };
 
 function tabLabel(key) {
@@ -109,12 +116,14 @@ export default function SettingsView() {
     return () => es.close();
   }, [fetchSettings]);
 
-  // Build ordered tab list: system first, rest alphabetical, merged keys hidden
+  // Build ordered tab list: pinned TAB_ORDER first, unknown tabs at the end, merged keys hidden
   const tabs = useMemo(() => {
     if (!settings) return [];
-    const keys = Object.keys(settings).filter((k) => !HIDDEN_KEYS.has(k) && !MERGED_KEYS.has(k));
-    const rest = keys.filter((k) => k !== "system").sort();
-    return ["system", ...rest].filter((k) => keys.includes(k));
+    const keys = new Set(Object.keys(settings).filter((k) => !HIDDEN_KEYS.has(k) && !MERGED_KEYS.has(k)));
+    const pinned = TAB_ORDER.filter((k) => keys.has(k));
+    const pinnedSet = new Set(pinned);
+    const rest = [...keys].filter((k) => !pinnedSet.has(k)).sort();
+    return [...pinned, ...rest];
   }, [settings]);
 
   useEffect(() => {
