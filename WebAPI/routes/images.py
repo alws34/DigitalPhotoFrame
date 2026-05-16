@@ -69,11 +69,13 @@ def update_metadata():
     backend = current_app.config['backend']
     if not backend.is_authenticated():
         return jsonify({"error": "unauthorized"}), 401
-    
+
     data = request.json or {}
     file_hash = data.get("hash")
     caption = data.get("caption", "")
     uploader = data.get("uploader")
+    location = data.get("location")
+    new_filename = data.get("new_filename")
 
     if not file_hash:
         return jsonify({"error": "Hash not provided."}), 400
@@ -83,14 +85,28 @@ def update_metadata():
     if file_hash not in metadata_db:
         return jsonify({"error": "Metadata not found for this hash."}), 404
 
-    metadata_db[file_hash]["caption"] = caption
+    entry = metadata_db[file_hash]
+    entry["caption"] = caption
     if uploader is not None:
-        metadata_db[file_hash]["uploader"] = uploader
+        entry["uploader"] = uploader
+    if location is not None:
+        entry["location"] = location
 
-    backend.save_metadata_db({file_hash: metadata_db[file_hash]})
-    backend.latest_metadata = metadata_db[file_hash]
-    
-    return jsonify({"message": "Metadata updated successfully."})
+    if new_filename and new_filename != entry.get("filename"):
+        old_path = os.path.join(backend.IMAGE_DIR, entry["filename"])
+        new_path = os.path.join(backend.IMAGE_DIR, new_filename)
+        if os.path.exists(new_path):
+            return jsonify({"error": "A file with that name already exists."}), 409
+        try:
+            os.rename(old_path, new_path)
+            entry["filename"] = new_filename
+        except OSError as e:
+            return jsonify({"error": f"Rename failed: {e}"}), 500
+
+    backend.save_metadata_db({file_hash: entry})
+    backend.latest_metadata = entry
+
+    return jsonify({"message": "Metadata updated successfully.", "filename": entry["filename"]})
 
 @images_bp.route("/upload", methods=["POST"])
 def upload_files():

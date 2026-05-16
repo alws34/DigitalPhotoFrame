@@ -1,10 +1,20 @@
 import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
-import { Upload, Trash2, Image as ImageIcon, Loader2 } from 'lucide-react';
+import { Upload, Trash2, Image as ImageIcon, Loader2, X } from 'lucide-react';
 
 function encodeImagePath(p) {
   return p.split('/').map(encodeURIComponent).join('/');
 }
+
+const overlayStyle = {
+  position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)',
+  display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+};
+const modalStyle = {
+  background: 'rgba(20,25,40,0.98)', border: '1px solid var(--glass-border)',
+  borderRadius: '16px', padding: '2rem', width: '520px', maxWidth: '92vw',
+  boxShadow: 'var(--glass-shadow)', maxHeight: '90vh', overflowY: 'auto',
+};
 
 export default function GalleryView() {
   const [images, setImages] = useState([]);
@@ -13,6 +23,13 @@ export default function GalleryView() {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [activeAlbum, setActiveAlbum] = useState(null);
   const activeAlbumRef = useRef(null);
+
+  const [selectedImage, setSelectedImage] = useState(null);
+  const [editState, setEditState] = useState({ filename: '', uploader: '', location: '' });
+  const [metaHash, setMetaHash] = useState(null);
+  const [metaLoading, setMetaLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
 
   const fetchImages = async () => {
     try {
@@ -30,7 +47,6 @@ export default function GalleryView() {
   useEffect(() => {
     fetchImages();
 
-    // Poll active album; refetch images when it changes
     const poll = async () => {
       try {
         const res = await axios.get('/api/albums/active', { withCredentials: true });
@@ -50,6 +66,57 @@ export default function GalleryView() {
     const timer = setInterval(poll, 5000);
     return () => clearInterval(timer);
   }, []);
+
+  const openModal = async (img) => {
+    setSelectedImage(img);
+    setEditState({ filename: img.name, uploader: '', location: '' });
+    setMetaHash(null);
+    setSaveError('');
+    setMetaLoading(true);
+    try {
+      const res = await axios.get(`/api/images/metadata?filename=${encodeURIComponent(img.name)}`);
+      const meta = res.data;
+      setMetaHash(meta.hash || null);
+      setEditState({
+        filename: meta.filename || img.name,
+        uploader: meta.uploader || '',
+        location: meta.location || '',
+      });
+    } catch (err) {
+      console.error('Failed to fetch metadata', err);
+    } finally {
+      setMetaLoading(false);
+    }
+  };
+
+  const closeModal = () => {
+    setSelectedImage(null);
+    setMetaHash(null);
+    setSaveError('');
+  };
+
+  const handleSave = async () => {
+    if (!metaHash) return;
+    setSaving(true);
+    setSaveError('');
+    try {
+      const originalName = selectedImage.name;
+      const res = await axios.post('/api/images/metadata', {
+        hash: metaHash,
+        uploader: editState.uploader,
+        location: editState.location,
+        caption: '',
+        new_filename: editState.filename !== originalName ? editState.filename : undefined,
+      });
+      const updatedName = res.data.filename || editState.filename;
+      await fetchImages();
+      setSelectedImage({ ...selectedImage, name: updatedName });
+    } catch (err) {
+      setSaveError(err?.response?.data?.error || 'Save failed');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const handleFileUpload = async (e) => {
     const files = Array.from(e.target.files || []);
@@ -103,11 +170,11 @@ export default function GalleryView() {
   };
 
   const handleDelete = async (filename) => {
-    if (!window.confirm(`Are you sure you want to delete ${filename}?`)) return;
-    
+    if (!window.confirm(`Delete ${filename}?`)) return;
     try {
       await axios.delete(`/api/images/${encodeImagePath(filename)}`);
-      setImages(images.filter(img => img.name !== filename));
+      setImages(prev => prev.filter(img => img.name !== filename));
+      if (selectedImage?.name === filename) closeModal();
     } catch (err) {
       console.error('Delete failed', err);
       alert('Delete failed');
@@ -119,20 +186,20 @@ export default function GalleryView() {
       <header style={{ marginBottom: '2rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: '1rem' }}>
         <div>
           <h1 style={{ margin: 0, fontSize: '2rem', fontWeight: 600 }}>Gallery</h1>
-          <p style={{ margin: '0.5rem 0 0', color: 'var(--text-muted)' }}>
+          <p style={{ margin: '0.5rem 0 0', color: 'var(--text-secondary)' }}>
             {activeAlbum && activeAlbum.name ? `${activeAlbum.name} · ` : ''}{images.length} photos
           </p>
         </div>
-        
+
         <div>
-          <label 
-            htmlFor="upload-images" 
+          <label
+            htmlFor="upload-images"
             className="primary"
-            style={{ 
-              display: 'inline-flex', 
-              alignItems: 'center', 
-              gap: '0.5rem', 
-              padding: '0.6em 1.2em', 
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              padding: '0.6em 1.2em',
               borderRadius: '8px',
               backgroundColor: 'var(--primary)',
               color: 'white',
@@ -144,10 +211,10 @@ export default function GalleryView() {
             {uploading ? <Loader2 size={18} className="spin" /> : <Upload size={18} />}
             {uploading ? `Uploading… ${uploadProgress}%` : 'Upload Photos'}
           </label>
-          <input 
-            type="file" 
-            id="upload-images" 
-            multiple 
+          <input
+            type="file"
+            id="upload-images"
+            multiple
             accept="image/*,.heic,.heif"
             style={{ display: 'none' }}
             onChange={handleFileUpload}
@@ -157,32 +224,34 @@ export default function GalleryView() {
       </header>
 
       {loading ? (
-        <div style={{ display: 'flex', justifyContent: 'center', padding: '4rem', color: 'var(--text-muted)' }}>
+        <div style={{ display: 'flex', justifyContent: 'center', padding: '4rem', color: 'var(--text-secondary)' }}>
           <Loader2 size={32} className="spin" />
         </div>
       ) : images.length === 0 ? (
         <div className="glass-panel fade-in" style={{ padding: '4rem 2rem', textAlign: 'center' }}>
-          <ImageIcon size={48} color="var(--text-muted)" style={{ marginBottom: '1rem', opacity: 0.5 }} />
+          <ImageIcon size={48} color="var(--text-secondary)" style={{ marginBottom: '1rem', opacity: 0.5 }} />
           <h3>No Photos Found</h3>
-          <p style={{ color: 'var(--text-muted)' }}>Upload some photos to see them here.</p>
+          <p style={{ color: 'var(--text-secondary)' }}>Upload some photos to see them here.</p>
         </div>
       ) : (
-        <div style={{ 
-          display: 'grid', 
-          gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', 
-          gap: '1.5rem' 
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))',
+          gap: '1.5rem'
         }}>
           {images.map((img, idx) => (
-            <div 
-              key={img.name} 
+            <div
+              key={img.name}
               className="glass-panel fade-in"
-              style={{ 
-                overflow: 'hidden', 
+              style={{
+                overflow: 'hidden',
                 position: 'relative',
-                animationDelay: `${idx * 0.05}s`
+                animationDelay: `${idx * 0.05}s`,
+                cursor: 'pointer',
               }}
+              onClick={() => openModal(img)}
             >
-              <div style={{ aspectRatio: '4/3', backgroundColor: '#000', position: 'relative' }}>
+              <div style={{ aspectRatio: '4/3', backgroundColor: '#000' }}>
                 <img
                   src={`/api/images/thumb/${encodeImagePath(img.name)}?w=400`}
                   alt={img.name}
@@ -192,57 +261,114 @@ export default function GalleryView() {
                     e.target.src = `/api/images/${encodeImagePath(img.name)}`;
                   }}
                 />
-                
-                {/* Overlay actions */}
-                <div 
-                  className="image-actions"
-                  style={{
-                    position: 'absolute',
-                    top: 0, left: 0, right: 0, bottom: 0,
-                    background: 'rgba(0,0,0,0.5)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    opacity: 0,
-                    transition: 'opacity 0.2s ease',
-                  }}
-                >
-                  <button 
-                    className="danger"
-                    onClick={() => handleDelete(img.name)}
-                    style={{ padding: '0.5rem', borderRadius: '50%', display: 'flex' }}
-                    title="Delete Image"
-                  >
-                    <Trash2 size={18} />
-                  </button>
-                </div>
               </div>
-              
-              <div style={{ padding: '1rem' }}>
-                <div style={{ 
-                  whiteSpace: 'nowrap', 
-                  overflow: 'hidden', 
+
+              <div style={{ padding: '0.75rem 1rem' }}>
+                <div style={{
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   fontWeight: 500,
-                  fontSize: '0.95rem'
+                  fontSize: '0.9rem'
                 }} title={img.name}>
                   {img.name}
                 </div>
-                <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
+                <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
                   {img.date_added ? new Date(img.date_added).toLocaleDateString() : 'Unknown date'}
                 </div>
               </div>
-
-              {/* Add hover style via inline JS since we can't easily do it in pure inline style without styled-components */}
-              <style>{`
-                .glass-panel:hover .image-actions { opacity: 1 !important; }
-                .spin { animation: spin 1s linear infinite; }
-                @keyframes spin { 100% { transform: rotate(360deg); } }
-              `}</style>
             </div>
           ))}
         </div>
       )}
+
+      {/* Image detail modal */}
+      {selectedImage && (
+        <div style={overlayStyle} onClick={closeModal}>
+          <div style={modalStyle} onClick={e => e.stopPropagation()}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
+              <h2 style={{ margin: 0, fontSize: '1.2rem' }}>Photo Details</h2>
+              <button
+                onClick={closeModal}
+                style={{ background: 'none', border: 'none', padding: '4px', display: 'flex', color: 'var(--text-secondary)' }}
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <img
+              src={`/api/images/thumb/${encodeImagePath(selectedImage.name)}?w=600`}
+              alt={selectedImage.name}
+              style={{ width: '100%', borderRadius: '8px', marginBottom: '1.5rem', maxHeight: '280px', objectFit: 'contain', background: '#000' }}
+              onError={e => { e.target.src = `/api/images/${encodeImagePath(selectedImage.name)}`; }}
+            />
+
+            {metaLoading ? (
+              <div style={{ display: 'flex', justifyContent: 'center', padding: '1.5rem' }}>
+                <Loader2 size={24} className="spin" />
+              </div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                  <span style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>Filename</span>
+                  <input
+                    value={editState.filename}
+                    onChange={e => setEditState(s => ({ ...s, filename: e.target.value }))}
+                    disabled={!metaHash}
+                  />
+                </label>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                  <span style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>Uploader</span>
+                  <input
+                    value={editState.uploader}
+                    onChange={e => setEditState(s => ({ ...s, uploader: e.target.value }))}
+                    disabled={!metaHash}
+                    placeholder="Who uploaded this?"
+                  />
+                </label>
+                <label style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                  <span style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>Location</span>
+                  <input
+                    value={editState.location}
+                    onChange={e => setEditState(s => ({ ...s, location: e.target.value }))}
+                    disabled={!metaHash}
+                    placeholder="Where was this taken?"
+                  />
+                </label>
+
+                {saveError && (
+                  <p style={{ color: 'var(--danger)', fontSize: '0.85rem', margin: 0 }}>{saveError}</p>
+                )}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '1.5rem', gap: '0.75rem' }}>
+              <button
+                className="danger"
+                onClick={() => handleDelete(selectedImage.name)}
+                style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}
+              >
+                <Trash2 size={15} /> Delete
+              </button>
+              <div style={{ display: 'flex', gap: '0.75rem' }}>
+                <button onClick={closeModal}>Cancel</button>
+                <button
+                  className="primary"
+                  onClick={handleSave}
+                  disabled={saving || !metaHash || metaLoading}
+                >
+                  {saving ? <Loader2 size={15} className="spin" style={{ display: 'inline' }} /> : 'Save'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <style>{`
+        .spin { animation: spin 1s linear infinite; }
+        @keyframes spin { 100% { transform: rotate(360deg); } }
+      `}</style>
     </div>
   );
 }
