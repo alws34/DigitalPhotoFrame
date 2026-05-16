@@ -116,7 +116,6 @@ def get_default_settings() -> dict[str, Any]:
             "image_dir": "Images",
             "image_quality_encoding": 100,
             "log_file_path": "./FrameServer/PhotoFrame.log",
-            "service_name": "PhotoFrame",
             "sidebar_collapsed": False,
         },
         "ui": {
@@ -228,7 +227,6 @@ SETTINGS_SCHEMA: dict = {
         "image_dir":              {"type": "str",  "label": "Image Directory",    "restart_required": False},
         "image_quality_encoding": {"type": "int",  "label": "Image Quality (%)", "min": 1, "max": 100, "step": 5, "restart_required": False, "no_slider": True},
         "log_file_path":          {"type": "str",  "label": "Log File Path",     "restart_required": False},
-        "service_name":           {"type": "str",  "label": "Service Name",      "restart_required": False},
         "sidebar_collapsed":      {"type": "bool", "label": "Sidebar Collapsed", "restart_required": False},
     },
     "ui": {

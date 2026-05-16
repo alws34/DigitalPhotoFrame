@@ -226,6 +226,7 @@ class PhotoFrameServer(iFrame):
         # Stats overlay cache
         self._stats_last_refresh: float = 0.0
         self._stats_text: str = ""
+        self._stats_frame_to_stream = None
 
     def _blank_frame(self):
         # neutral gray, screen-sized
@@ -443,6 +444,10 @@ class PhotoFrameServer(iFrame):
             except Exception:
                 pass
 
+        # 2c. Save stats-included frame for stream (set unconditionally so stream
+        #     always has the most recent frame at this point, with or without stats).
+        self._stats_frame_to_stream = frame_bgr
+
         # 3. Update internal buffers
         self.frame_to_stream = frame_bgr
 
@@ -527,7 +532,12 @@ class PhotoFrameServer(iFrame):
     def get_stream_frame(self):
         """Return the frame for the web stream — raw (no overlay) by default."""
         show_overlay = (self._settings or {}).get("stream", {}).get("show_overlay", False)
+        stats_show = (self._settings or {}).get("stats", {}).get("show", False)
         if not show_overlay:
+            if stats_show:
+                stats_frame = getattr(self, '_stats_frame_to_stream', None)
+                if isinstance(stats_frame, np.ndarray) and stats_frame.size:
+                    return stats_frame
             raw = self._raw_frame_to_stream
             if isinstance(raw, np.ndarray) and raw.size:
                 return raw

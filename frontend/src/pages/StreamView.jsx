@@ -1,11 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
-import { Expand, Maximize, Play, Pause, Layers } from 'lucide-react';
+import { Expand, Maximize, Layers } from 'lucide-react';
 
 const POLL_INTERVAL_MS = 200; // 5 fps — sufficient for photo frame monitoring
 
 export default function StreamView() {
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [isPlaying, setIsPlaying] = useState(true);
   const [showOverlay, setShowOverlay] = useState(false);
   const [snapshotUrl, setSnapshotUrl] = useState(null);
   const [error, setError] = useState(false);
@@ -29,16 +28,12 @@ export default function StreamView() {
   };
 
   useEffect(() => {
-    if (!isPlaying) {
-      clearInterval(intervalRef.current);
-      return;
-    }
     intervalRef.current = setInterval(fetchSnapshot, POLL_INTERVAL_MS);
     return () => {
       clearInterval(intervalRef.current);
       setSnapshotUrl(prev => { if (prev) URL.revokeObjectURL(prev); return null; });
     };
-  }, [isPlaying]);
+  }, []);
 
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) {
@@ -68,25 +63,26 @@ export default function StreamView() {
 
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           <button
-            onClick={() => {
+            onClick={async () => {
               const next = !showOverlay;
               setShowOverlay(next);
-              fetch('/api/settings', {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                credentials: 'include',
-                body: JSON.stringify({ stream: { show_overlay: next } }),
-              }).catch(() => {});
+              try {
+                const res = await fetch('/api/settings', { credentials: 'include' });
+                const current = await res.json();
+                await fetch('/api/settings', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  credentials: 'include',
+                  body: JSON.stringify({ ...current, stream: { ...(current.stream ?? {}), show_overlay: next } }),
+                });
+              // eslint-disable-next-line no-empty
+              } catch {}
             }}
             style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', opacity: showOverlay ? 1 : 0.5 }}
             title={showOverlay ? 'Hide overlay' : 'Show overlay'}
           >
             <Layers size={18} />
             Overlay {showOverlay ? 'On' : 'Off'}
-          </button>
-          <button onClick={() => setIsPlaying(!isPlaying)} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            {isPlaying ? <Pause size={18} /> : <Play size={18} />}
-            {isPlaying ? 'Pause Stream' : 'Resume'}
           </button>
         </div>
       </header>
@@ -107,23 +103,18 @@ export default function StreamView() {
           animationDelay: '0.2s'
         }}
       >
-        {isPlaying && snapshotUrl ? (
+        {snapshotUrl ? (
           <img
             src={snapshotUrl}
             alt="Live Stream"
             style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' }}
           />
-        ) : isPlaying && error ? (
+        ) : error ? (
           <div style={{ color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem' }}>
             <p>Stream unavailable — frame server may be starting up</p>
           </div>
-        ) : isPlaying ? (
-          <div style={{ color: 'var(--text-muted)' }}>Connecting…</div>
         ) : (
-          <div style={{ color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1rem' }}>
-            <Pause size={48} opacity={0.5} />
-            <p>Stream Paused</p>
-          </div>
+          <div style={{ color: 'var(--text-muted)' }}>Connecting…</div>
         )}
 
         <button

@@ -165,6 +165,16 @@ export default function SettingField({ fieldKey, fieldPath, value, schema, onCha
     );
   }
 
+  if (ftype === "str") {
+    return row(
+      <input
+        type="text"
+        value={value ?? ""}
+        onChange={(e) => onChange(fieldPath, e.target.value)}
+      />
+    );
+  }
+
   if (typeof value === "string") {
     return row(
       <input

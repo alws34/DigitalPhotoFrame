@@ -49,6 +49,11 @@ export default function SettingsSection({ data, pathPrefix, schema, onChange, de
           return null;
         }
 
+        // Skip primitive fields that have no schema entry (orphaned/legacy fields)
+        if (!fieldSchema && typeof value !== "object" && !Array.isArray(value)) {
+          return null;
+        }
+
         return (
           <SettingField
             key={key}
