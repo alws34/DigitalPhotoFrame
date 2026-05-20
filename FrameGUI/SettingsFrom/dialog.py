@@ -287,14 +287,14 @@ class SettingsDialog(QtWidgets.QDialog):
         layout = QtWidgets.QVBoxLayout(container)
         layout.setAlignment(QtCore.Qt.AlignTop)
 
-        layout.addWidget(self._build_stats_widget())
-
-        # Settings sections (refreshed on hot-reload via _populate_system_settings)
+        # Settings sections first so they're visible without scrolling
         self._system_settings_container = QtWidgets.QWidget()
         self._system_settings_layout = QtWidgets.QVBoxLayout(self._system_settings_container)
         self._system_settings_layout.setContentsMargins(0, 0, 0, 0)
         self._populate_system_settings(settings)
         layout.addWidget(self._system_settings_container)
+
+        layout.addWidget(self._build_stats_widget())
         layout.addStretch(1)
         return container
 
