@@ -4,7 +4,18 @@ from __future__ import annotations
 import json
 import os
 import time
+import zoneinfo
 from typing import Any
+
+
+def apply_system_timezone(settings: dict) -> None:
+    """Apply system.timezone from settings to the process environment."""
+    tz = settings.get("system", {}).get("timezone", "")
+    if tz:
+        os.environ["TZ"] = tz
+    else:
+        os.environ.pop("TZ", None)
+    time.tzset()
 
 
 def _get_db_path() -> str:
@@ -117,6 +128,7 @@ def get_default_settings() -> dict[str, Any]:
             "image_quality_encoding": 100,
             "log_file_path": "./FrameServer/PhotoFrame.log",
             "sidebar_collapsed": False,
+            "timezone": "",
         },
         "ui": {
             "contrast_text": True,
@@ -228,6 +240,12 @@ SETTINGS_SCHEMA: dict = {
         "image_quality_encoding": {"type": "int",  "label": "Image Quality (%)", "min": 1, "max": 100, "step": 5, "restart_required": False, "no_slider": True},
         "log_file_path":          {"type": "str",  "label": "Log File Path",     "restart_required": False},
         "sidebar_collapsed":      {"type": "bool", "label": "Sidebar Collapsed", "restart_required": False},
+        "timezone": {
+            "type":             "enum",
+            "label":            "Timezone",
+            "choices":          [""] + sorted(zoneinfo.available_timezones()),
+            "restart_required": False,
+        },
     },
     "ui": {
         "contrast_text":   {"type": "bool", "label": "Contrast Text",  "restart_required": False},

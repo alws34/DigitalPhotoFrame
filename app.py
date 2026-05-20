@@ -27,8 +27,10 @@ def main() -> None:
     args = p.parse_args()
 
     from Utilities import config_events
-    from Utilities.config_store import load_settings
+    from Utilities.config_store import apply_system_timezone, load_settings
     settings = load_settings(json_path=_abs_path(args.settings))
+    apply_system_timezone(settings)
+    config_events.on_settings_changed(apply_system_timezone)
     config_events.start_watcher()
 
     from app_modes import _run_gui, _run_headless, _run_pygame

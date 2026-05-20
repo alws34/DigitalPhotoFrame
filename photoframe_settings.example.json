@@ -17,7 +17,8 @@
   "system": {
     "image_dir": "Images",
     "service_name": "PhotoFrame",
-    "sidebar_collapsed": false
+    "sidebar_collapsed": false,
+    "timezone": ""
   },
   "effects": {
     "background_blur_enabled": true,
