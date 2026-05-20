@@ -243,7 +243,7 @@ SETTINGS_SCHEMA: dict = {
         "timezone": {
             "type":             "enum",
             "label":            "Timezone",
-            "choices":          ["System Default"] + sorted(zoneinfo.available_timezones()),
+            "choices":          ["System Default"] + sorted(zoneinfo.available_timezones() or []),
             "restart_required": False,
         },
     },

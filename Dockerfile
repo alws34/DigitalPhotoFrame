@@ -45,6 +45,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     network-manager \
     wireless-tools \
+    tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
