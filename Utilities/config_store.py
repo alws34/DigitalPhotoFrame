@@ -11,7 +11,7 @@ from typing import Any
 def apply_system_timezone(settings: dict) -> None:
     """Apply system.timezone from settings to the process environment."""
     tz = settings.get("system", {}).get("timezone", "")
-    if tz:
+    if tz and tz != "System Default":
         os.environ["TZ"] = tz
     else:
         os.environ.pop("TZ", None)
@@ -128,7 +128,7 @@ def get_default_settings() -> dict[str, Any]:
             "image_quality_encoding": 100,
             "log_file_path": "./FrameServer/PhotoFrame.log",
             "sidebar_collapsed": False,
-            "timezone": "",
+            "timezone": "System Default",
         },
         "ui": {
             "contrast_text": True,
@@ -243,7 +243,7 @@ SETTINGS_SCHEMA: dict = {
         "timezone": {
             "type":             "enum",
             "label":            "Timezone",
-            "choices":          [""] + sorted(zoneinfo.available_timezones()),
+            "choices":          ["System Default"] + sorted(zoneinfo.available_timezones()),
             "restart_required": False,
         },
     },

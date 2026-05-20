@@ -77,7 +77,7 @@ def test_system_timezone_in_defaults():
     cs = _get_cs()
     defaults = cs.get_default_settings()
     assert "timezone" in defaults["system"]
-    assert defaults["system"]["timezone"] == ""
+    assert defaults["system"]["timezone"] == "System Default"
 
 
 def test_system_timezone_schema_is_enum_with_choices():
@@ -85,7 +85,7 @@ def test_system_timezone_schema_is_enum_with_choices():
     desc = cs.get_field_schema("system.timezone")
     assert desc is not None
     assert desc["type"] == "enum"
-    assert "" in desc["choices"]
+    assert "System Default" in desc["choices"]
     assert "Asia/Jerusalem" in desc["choices"]
     assert desc["restart_required"] is False
 
@@ -98,6 +98,14 @@ def test_apply_system_timezone_sets_env():
     assert os.environ.get("TZ") == "Asia/Jerusalem"
     os.environ.pop("TZ", None)
     time.tzset()
+
+
+def test_apply_system_timezone_clears_env_on_system_default():
+    import os
+    cs = _get_cs()
+    os.environ["TZ"] = "US/Eastern"
+    cs.apply_system_timezone({"system": {"timezone": "System Default"}})
+    assert "TZ" not in os.environ
 
 
 def test_apply_system_timezone_clears_env_on_empty():
