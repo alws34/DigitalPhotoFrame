@@ -15,6 +15,7 @@ services:
       - /run/user/1000:/run/user/1000        # Wayland Socket
       - /dev/shm:/dev/shm                    # Prevents memory crashes
       - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket  # Host D-Bus → nmcli can reach NetworkManager
+      - /etc/localtime:/etc/localtime:ro                         # Inherit host timezone
     environment:
       - PHOTOFRAME_SECRET_KEY=${PHOTOFRAME_SECRET_KEY:-change-me-in-production}
       - DISPLAY=:0
@@ -25,6 +26,7 @@ services:
       - HOME=/tmp                           # Prevents Mesa writing to /.cache
       - XDG_CACHE_HOME=/tmp/mesa_cache
       - PF_DB_PATH=/data/photoframe.db
+      - TZ=${TZ:-Asia/Jerusalem}
     devices:
       - /dev/dri:/dev/dri                    # GPU Acceleration
     privileged: true
