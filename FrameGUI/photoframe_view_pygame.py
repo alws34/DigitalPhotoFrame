@@ -131,7 +131,10 @@ def _build_fields(settings: dict, sections: List[str]) -> List[tuple]:
                 result.append((path, label, py_type, (step, fmin, fmax)))
 
             elif ftype in ("enum", "color"):
-                result.append((path, label, "cycle", schema.get("choices", [])))
+                if schema.get("ui") == "timezone_select":
+                    result.append((path, label, "str", None))
+                else:
+                    result.append((path, label, "cycle", schema.get("choices", [])))
 
             elif ftype in ("str", "password", "numeric_string"):
                 result.append((path, label, ftype, None))
