@@ -245,6 +245,7 @@ SETTINGS_SCHEMA: dict = {
             "label":            "Timezone",
             "choices":          ["System Default"] + sorted(zoneinfo.available_timezones() or []),
             "restart_required": False,
+            "ui":               "timezone_select",
         },
     },
     "ui": {

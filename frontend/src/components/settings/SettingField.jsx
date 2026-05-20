@@ -4,6 +4,7 @@ import ColorThemePicker from "./ColorThemePicker";
 import CornerPicker from "./CornerPicker";
 import MotionSelect from "./MotionSelect";
 import OrientationButtons from "./OrientationButtons";
+import TimezoneSelect from "./TimezoneSelect";
 
 export default function SettingField({ fieldKey, fieldPath, value, schema, onChange, depth = 0, extras = {} }) {
   const [showPassword, setShowPassword] = useState(false);
@@ -46,6 +47,13 @@ export default function SettingField({ fieldKey, fieldPath, value, schema, onCha
           {showPassword ? "Hide" : "Show"}
         </button>
       </div>
+    );
+  }
+
+  if (schema?.ui === "timezone_select") {
+    const choices = schema?.choices ?? [];
+    return row(
+      <TimezoneSelect value={value ?? ""} choices={choices} onChange={(v) => onChange(fieldPath, v)} />
     );
   }
 

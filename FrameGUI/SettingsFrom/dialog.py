@@ -520,6 +520,20 @@ class SettingsDialog(QtWidgets.QDialog):
             w.textChanged.connect(on_str)
             return w
 
+        if schema and schema.get("ui") == "timezone_select":
+            choices = schema.get("choices", [])
+            w = QtWidgets.QComboBox()
+            w.setEditable(True)
+            w.addItems(choices)
+            if str(value) in choices:
+                w.setCurrentText(str(value))
+            completer = QtWidgets.QCompleter(choices)
+            completer.setCaseSensitivity(QtCore.Qt.CaseInsensitive)
+            completer.setFilterMode(QtCore.Qt.MatchContains)
+            w.setCompleter(completer)
+            w.currentTextChanged.connect(on_str)
+            return w
+
         if ftype in ("enum", "color"):
             choices = schema.get("choices", [str(value)])
             w = QtWidgets.QComboBox()
