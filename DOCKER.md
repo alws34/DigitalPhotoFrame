@@ -196,14 +196,27 @@ network_mode: host
 
 Or set `mqtt.host` to your broker's IP address (not `localhost`).
 
+## Dockerfile Architecture
+
+The `Dockerfile` uses a 4-stage multi-stage build for security, size, and reproducibility:
+
+1. **frontend-builder** — Node 20 compiles the React/Vite admin UI to `/build/frontend/dist`
+2. **python-deps** — Python 3.11-slim installs dependencies into `/install` (isolated build headers)
+3. **bytecode-compiler** — Compiles all `.py` source to `.pyc` bytecode files (Python 3.11+), then deletes all `.py` source
+4. **runtime** — Final image containing ONLY compiled `.pyc` files, built frontend, and runtime libraries
+
+**Key security benefit:** The runtime image contains NO human-readable Python source code — only compiled `.pyc` bytecode. This prevents accidental source disclosure while maintaining full functionality in Python 3.11+.
+
+**Build dependencies** (gcc, libffi-dev, libheif-dev) are NOT copied into the final image, only runtime libraries remain.
+
 ## Files Overview
 
 | File | Purpose |
 |------|---------|
-| `Dockerfile` | Multi-stage build (Node frontend + Python 3.11-slim + SDL2 runtime) |
+| `Dockerfile` | 4-stage multi-stage build: frontend builder → python deps → bytecode compiler → runtime (no source code) |
 | `docker-compose.yml` | Base compose config (works on Mac and Pi) |
 | `docker-compose.pi.yml` | Pi overlay: GPU, input, backlight, Wayland socket |
-| `requirements-docker.txt` | Python deps without PySide6/Qt (uses opencv-headless + pygame) |
+| `requirements-docker.txt` | Python runtime deps; excludes PySide6/Qt and unmaintained pyheif (uses pillow-heif instead) |
 | `install_docker_kiosk.sh` | One-command Pi setup (Docker + device permissions + systemd service) |
 | `update.sh` | Pull + rebuild + restart |
 | `restart.sh` | Restart container |

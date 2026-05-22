@@ -16,7 +16,6 @@
   },
   "system": {
     "image_dir": "Images",
-    "service_name": "PhotoFrame",
     "sidebar_collapsed": false,
     "timezone": "System Default"
   },

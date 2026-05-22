@@ -80,10 +80,10 @@ The installer sets up Docker, device permissions (GPU, backlight, touch), and a 
 git clone https://github.com/alws34/DigitalPhotoFrame.git
 cd DigitalPhotoFrame
 
-# Python environment
+# Python environment (project uses venv at env/)
 python3 -m venv env
 source env/bin/activate          # Windows: env\Scripts\activate
-pip install -e .
+env/bin/pip install -e . pytest ruff
 
 # Frontend (only needed to serve the built UI via Flask)
 cd frontend && npm install && npm run build && cd ..
@@ -93,8 +93,8 @@ cp photoframe_settings.example.json photoframe_settings.json
 
 # Run
 mkdir -p Images
-python app.py                    # fullscreen GUI
-python app.py --headless         # API + compositor only, no window
+env/bin/python app.py                    # fullscreen GUI
+env/bin/python app.py --headless         # API + compositor only, no window
 ```
 
 Admin UI: http://localhost:5002 — create an account on first launch.
@@ -103,9 +103,10 @@ Admin UI: http://localhost:5002 — create an account on first launch.
 
 ```bash
 cd frontend && npm run dev       # Vite dev server at http://localhost:5173
+cd frontend && npm test          # Run vitest + @testing-library tests
 ```
 
-Vite proxies API calls to the running Python backend automatically.
+Vite proxies API calls to the running Python backend automatically. Tests use vitest for fast iteration with React Testing Library.
 
 ---
 
@@ -114,6 +115,9 @@ Vite proxies API calls to the running Python backend automatically.
 ```
 app.py
 ├── PhotoFrameServer   FrameServer/ — image loading, transitions, overlay baking, frame_to_stream
+│                      ├── Effects/ — transition effects (auto-discovered plugins)
+│                      ├── image_utils.py — image hashing, caching
+│                      └── (proper Python package with __init__.py)
 ├── Backend            WebAPI/      — Flask API, auth, gallery, settings, MJPEG stream
 ├── MqttBridge         Utilities/MQTT/
 ├── ScreenScheduler    Utilities/screen_scheduler.py
@@ -122,9 +126,12 @@ app.py
 frontend/              React + Vite admin UI (served from frontend/dist by Flask)
 Utilities/sources/     Photo source drivers: local, immich, google_photos
 Utilities/Weather/     Open-Meteo weather provider
+Utilities/config_store.py  Settings persistence (SQLAlchemy + SQLite)
+Utilities/image_utils.py   Image hashing, cache operations
+Utilities/media_types.py   Supported media extensions
 ```
 
-**Settings** are stored in SQLite (`/data/photoframe.db` in Docker, `WebAPI/database.db` bare-metal). `photoframe_settings.json` is only used once for migration on first run — edits go through the admin UI or API.
+**Settings** are stored in SQLite (`/data/photoframe.db` in Docker, `WebAPI/database.db` bare-metal) via `Utilities/config_store.py`. `photoframe_settings.json` is only used once for migration on first run — edits go through the admin UI or API.
 
 **Stream path:** `PhotoFrameServer._send_frame()` bakes overlay + stats onto a BGR frame → `frame_to_stream`. Flask MJPEG endpoint reads this at `stream_fps`. A separate `_raw_frame_to_stream` serves the stream clean (no date/weather overlay) when the overlay toggle is off; stats still appear if enabled.
 
@@ -135,6 +142,17 @@ Utilities/Weather/     Open-Meteo weather provider
 AlphaDissolve, BarnDoorClose, BarnDoorOpen, Blinds, Checkerboard, CrossZoom, IrisClose, IrisOpen, Linear, LumaWipe, PixelDissolve, Plain, Ripple, Scroll, Shrink, SoftWipe, SpinZoomFade, Stretch, Swirl, Wipe, ZoomBlur, ZoomIn, ZoomOut
 
 Effects are generators that yield `np.uint8 (H, W, 3)` frames. Add a new one in `FrameServer/Effects/` — it is auto-discovered.
+
+---
+
+## Security
+
+- **CSRF protection** — all POST/PUT/DELETE routes enforce CSRF tokens via Flask-WTF.
+- **Path traversal fixed** — upload, serve, and delete routes validate paths against the configured image directory.
+- **Stream routes authenticated** — `/api/stream` and live view require an authenticated session.
+- **Auto-generated secret key** — if `supersecretkey` is not set in `photoframe_settings.json`, a new one is generated on first run.
+- **CORS scoped to localhost** — only `http://localhost:5002` (dev) or `http://localhost:5173` (Vite) are allowed in development.
+- **Password reset requires authentication** — users must be logged in before they can reset their own password.
 
 ---
 
@@ -162,10 +180,13 @@ The frame publishes a heartbeat and responds to control messages. Enable in Sett
 
 ## Performance (Raspberry Pi)
 
-- Overlay re-renders at most once per second or on weather change (cached RGBA alpha-blend)
-- Stats sampled every 5 seconds (psutil, fail-soft)
-- Idle streaming re-publishes last frame at `idle_fps` (default 5) — no flicker, no stall
-- To reduce CPU on Pi 3/4: lower `animation_fps`, reduce `stream_fps`, use 1280×720
+- **RenderConfig pre-computation** — render settings are cached in a NamedTuple, eliminating ~13 dict lookups per frame at 30 fps.
+- **Async image hashing** — per-slide image hash computation runs in a daemon thread (no longer blocks transitions).
+- **Thread-safe frame buffer** — single settings lock prevents race conditions; frame buffer access is synchronized.
+- **Overlay re-renders at most once per second** or on weather change (cached RGBA alpha-blend).
+- **Stats sampled every 5 seconds** (psutil, fail-soft).
+- **Idle streaming re-publishes last frame** at `idle_fps` (default 5) — no flicker, no stall.
+- To reduce CPU on Pi 3/4: lower `animation_fps`, reduce `stream_fps`, use 1280×720.
 
 ---
 

@@ -17,7 +17,7 @@ DigitalPhotoFrame is a long-running Python photo-frame/compositor with an option
 - `README.md`: product behavior, stream semantics, and user-facing terminology.
 - `deploy.md`: backend/frontend build and deployment flow.
 - `photoframe_settings.example.json`: settings shape and safe defaults.
-- `Settings.py`: settings loading, caching, and saving behavior.
+- `Utilities/config_store.py`: settings loading, caching, and saving behavior (SQLAlchemy + SQLite).
 - `pyproject.toml`: Python version, packaging, Ruff, and pytest config.
 - `frontend/package.json`: frontend scripts and JS dependency versions.
 

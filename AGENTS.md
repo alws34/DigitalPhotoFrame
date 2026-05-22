@@ -17,18 +17,23 @@ Shared instructions for Claude Code, Codex, Cline, Cursor, and other coding agen
 - `README.md`: product behavior, user-facing terminology, stream semantics.
 - `deploy.md`: backend/frontend deployment and build expectations.
 - `photoframe_settings.example.json`: settings shape and safe defaults.
-- `Settings.py`: settings loading, caching, and saving behavior.
+- `Utilities/config_store.py`: settings loading, caching, and saving behavior (SQLAlchemy + SQLite).
 - `pyproject.toml`: Python version, package metadata, Ruff, and pytest config.
 - `frontend/package.json`: frontend scripts and JS dependency versions.
 
 ## Architecture
 
 - `app.py`: entry point; selects GUI vs headless mode and wires `PhotoFrameServer`, `Backend`, `MqttBridge`, and `AutoUpdater`.
-- `FrameServer/`: compositor, image loading, transitions, overlays, and frame production.
+- `FrameServer/`: proper Python package (with `__init__.py`); compositor, image loading, transitions, overlays, and frame production.
+  - `FrameServer/Effects/`: transition effects (auto-discovered plugins).
+  - `FrameServer/image_utils.py`: image hashing and caching.
 - `FrameGUI/`: PySide6 fullscreen UI and settings widgets.
 - `WebAPI/`: Flask backend, auth, settings/images routes, and serving of `frontend/dist`.
 - `frontend/`: Vite/React admin UI for login, stream, gallery, and settings.
 - `Utilities/`: weather providers, MQTT, scheduling, autoupdate, brightness, and helpers.
+  - `Utilities/config_store.py`: settings persistence (SQLAlchemy + SQLite).
+  - `Utilities/image_utils.py`: image hashing, cache operations.
+  - `Utilities/media_types.py`: supported media extensions.
 - `Tests/`: pytest regression coverage.
 
 ## Guardrails
