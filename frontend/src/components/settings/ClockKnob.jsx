@@ -1,4 +1,4 @@
-import React, { useCallback } from "react";
+import { useCallback } from "react";
 
 const CX = 70, CY = 70, HAND_R = 40, TICK_OUTER = 58;
 
@@ -54,7 +54,7 @@ export default function ClockKnob({ value, onChange }) {
 
       {/* Ticks */}
       {ticks.map(({ i, isMajor, x1, y1, x2, y2, lx, ly }) => (
-        <React.Fragment key={i}>
+        <g key={i}>
           <line x1={x1} y1={y1} x2={x2} y2={y2}
             stroke={i === hour ? "var(--accent)" : "rgba(255,255,255,0.25)"}
             strokeWidth={isMajor ? 2 : 1} />
@@ -62,7 +62,7 @@ export default function ClockKnob({ value, onChange }) {
             <text x={lx} y={ly} textAnchor="middle" dominantBaseline="middle"
               fill={i === hour ? "var(--accent)" : "var(--text-secondary)"} fontSize={9}>{i}</text>
           )}
-        </React.Fragment>
+        </g>
       ))}
 
       {/* Hand */}

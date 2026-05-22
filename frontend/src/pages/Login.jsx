@@ -1,24 +1,36 @@
 import { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate, Link } from 'react-router-dom';
-import { Image as ImageIcon, Lock, Eye, EyeOff } from 'lucide-react';
+import { Image as ImageIcon, Lock, Eye, EyeOff, Loader2 } from 'lucide-react';
 
 export default function Login() {
-  const [identity, setIdentity] = useState('');
-  const [password, setPassword] = useState('');
+  const [identity, setIdentity]       = useState('');
+  const [password, setPassword]       = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [error, setError] = useState('');
-  const { login } = useAuth();
-  const navigate = useNavigate();
+  const [error, setError]             = useState('');
+  const [loading, setLoading]         = useState(false);
+  const { login }   = useAuth();
+  const navigate    = useNavigate();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!identity.trim()) {
+      setError('Please enter your email or username.');
+      return;
+    }
+    if (!password) {
+      setError('Please enter your password.');
+      return;
+    }
+    setLoading(true);
     try {
       setError('');
       await login({ username: identity, password });
       navigate('/');
     } catch (err) {
       setError(err.response?.data?.error || 'Login failed');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -31,10 +43,10 @@ export default function Login() {
     }}>
       <div className="glass fade-in" style={{ padding: 40, width: 380, maxWidth: '100%' }}>
         <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
-          <div style={{ 
-            display: 'inline-flex', 
-            padding: '1rem', 
-            borderRadius: '50%', 
+          <div style={{
+            display: 'inline-flex',
+            padding: '1rem',
+            borderRadius: '50%',
             background: 'rgba(100, 108, 255, 0.1)',
             marginBottom: '1rem'
           }}>
@@ -45,11 +57,11 @@ export default function Login() {
         </div>
 
         {error && (
-          <div style={{ 
-            background: 'var(--danger)', 
-            color: 'white', 
-            padding: '0.75rem', 
-            borderRadius: '8px', 
+          <div style={{
+            background: 'var(--danger)',
+            color: 'white',
+            padding: '0.75rem',
+            borderRadius: '8px',
             marginBottom: '1.5rem',
             fontSize: '0.9rem',
             textAlign: 'center'
@@ -60,30 +72,30 @@ export default function Login() {
 
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
           <div>
-            <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+            <label htmlFor="login-identity" style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
               Email or Username
             </label>
-            <input 
-              type="text" 
+            <input
+              id="login-identity"
+              type="text"
               value={identity}
               onChange={(e) => setIdentity(e.target.value)}
               style={{ width: '100%' }}
-              required
               autoFocus
             />
           </div>
-          
+
           <div style={{ position: 'relative' }}>
-            <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+            <label htmlFor="login-password" style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
               Password
             </label>
             <div style={{ position: 'relative' }}>
-              <input 
-                type={showPassword ? "text" : "password"} 
+              <input
+                id="login-password"
+                type={showPassword ? "text" : "password"}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 style={{ width: '100%', paddingRight: '2.5rem' }}
-                required
               />
               <button
                 type="button"
@@ -109,8 +121,14 @@ export default function Login() {
             </div>
           </div>
 
-          <button type="submit" className="primary" style={{ marginTop: '1rem', padding: '0.75rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}>
-            <Lock size={18} /> Sign In
+          <button
+            type="submit"
+            className="primary"
+            disabled={loading}
+            style={{ marginTop: '1rem', padding: '0.75rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}
+          >
+            {loading ? <Loader2 size={18} className="spin" /> : <Lock size={18} />}
+            {loading ? 'Signing in…' : 'Sign In'}
           </button>
         </form>
 
@@ -118,9 +136,14 @@ export default function Login() {
           <div style={{ marginBottom: '1rem' }}>
             <Link to="/reset-password" style={{ color: 'var(--text-muted)', textDecoration: 'none' }}>Forgot password?</Link>
           </div>
-          Don't have an account? <Link to="/signup" style={{ color: 'var(--primary)', fontWeight: 500, textDecoration: 'none' }}>Sign up</Link>
+          Don&#39;t have an account? <Link to="/signup" style={{ color: 'var(--primary)', fontWeight: 500, textDecoration: 'none' }}>Sign up</Link>
         </div>
       </div>
+
+      <style>{`
+        .spin { animation: loginSpin 1s linear infinite; }
+        @keyframes loginSpin { 100% { transform: rotate(360deg); } }
+      `}</style>
     </div>
   );
 }

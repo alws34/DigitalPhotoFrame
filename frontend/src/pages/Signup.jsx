@@ -1,19 +1,23 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate, Link } from 'react-router-dom';
-import { UserPlus, Image as ImageIcon, Eye, EyeOff } from 'lucide-react';
+import { UserPlus, Image as ImageIcon, Eye, EyeOff, Loader2 } from 'lucide-react';
 
 export default function Signup() {
-  const [email, setEmail] = useState('');
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
+  const [email, setEmail]             = useState('');
+  const [username, setUsername]       = useState('');
+  const [password, setPassword]       = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
-  const [loading, setLoading] = useState(false);
-  
-  const { signup } = useAuth();
-  const navigate = useNavigate();
+  const [error, setError]             = useState('');
+  const [success, setSuccess]         = useState('');
+  const [loading, setLoading]         = useState(false);
+  const redirectTimerRef              = useRef(null);
+
+  const { signup }  = useAuth();
+  const navigate    = useNavigate();
+
+  // Clean up any pending redirect timer on unmount.
+  useEffect(() => () => clearTimeout(redirectTimerRef.current), []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -21,12 +25,12 @@ export default function Signup() {
       setError('');
       setSuccess('');
       setLoading(true);
-      
+
       await signup({ email, username, password });
-      
-      setSuccess('Account created successfully! Redirecting to login...');
-      setTimeout(() => navigate('/login'), 2000);
-      
+
+      setSuccess('Account created successfully! Redirecting to login…');
+      redirectTimerRef.current = setTimeout(() => navigate('/login'), 2000);
+
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to create account. Please check your details.');
     } finally {
@@ -35,20 +39,20 @@ export default function Signup() {
   };
 
   return (
-    <div style={{ 
-      display: 'flex', 
-      alignItems: 'center', 
-      justifyContent: 'center', 
+    <div style={{
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
       minHeight: '100vh',
       background: 'linear-gradient(135deg, #121212 0%, #1e1e1e 100%)',
       padding: '2rem'
     }}>
       <div className="glass-panel fade-in" style={{ padding: '2.5rem', width: '100%', maxWidth: '450px' }}>
         <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
-          <div style={{ 
-            display: 'inline-flex', 
-            padding: '1rem', 
-            borderRadius: '50%', 
+          <div style={{
+            display: 'inline-flex',
+            padding: '1rem',
+            borderRadius: '50%',
             background: 'rgba(100, 108, 255, 0.1)',
             marginBottom: '1rem'
           }}>
@@ -59,11 +63,11 @@ export default function Signup() {
         </div>
 
         {error && (
-          <div style={{ 
-            background: 'var(--danger)', 
-            color: 'white', 
-            padding: '0.75rem', 
-            borderRadius: '8px', 
+          <div style={{
+            background: 'var(--danger)',
+            color: 'white',
+            padding: '0.75rem',
+            borderRadius: '8px',
             marginBottom: '1.5rem',
             fontSize: '0.9rem',
             textAlign: 'center'
@@ -73,12 +77,12 @@ export default function Signup() {
         )}
 
         {success && (
-          <div style={{ 
-            background: 'rgba(100, 108, 255, 0.2)', 
+          <div style={{
+            background: 'rgba(100, 108, 255, 0.2)',
             color: 'var(--primary)',
             border: '1px solid var(--primary)',
-            padding: '0.75rem', 
-            borderRadius: '8px', 
+            padding: '0.75rem',
+            borderRadius: '8px',
             marginBottom: '1.5rem',
             fontSize: '0.9rem',
             textAlign: 'center'
@@ -89,11 +93,12 @@ export default function Signup() {
 
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
           <div>
-            <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+            <label htmlFor="signup-email" style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
               Email Address
             </label>
-            <input 
-              type="email" 
+            <input
+              id="signup-email"
+              type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               style={{ width: '100%' }}
@@ -103,11 +108,12 @@ export default function Signup() {
           </div>
 
           <div>
-            <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+            <label htmlFor="signup-username" style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
               Username
             </label>
-            <input 
-              type="text" 
+            <input
+              id="signup-username"
+              type="text"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               style={{ width: '100%' }}
@@ -117,14 +123,15 @@ export default function Signup() {
               title="Only letters, numbers, and underscores allowed"
             />
           </div>
-          
+
           <div>
-            <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+            <label htmlFor="signup-password" style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
               Password
             </label>
             <div style={{ position: 'relative' }}>
-              <input 
-                type={showPassword ? "text" : "password"} 
+              <input
+                id="signup-password"
+                type={showPassword ? "text" : "password"}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 style={{ width: '100%', paddingRight: '2.5rem' }}
@@ -133,6 +140,7 @@ export default function Signup() {
               />
               <button
                 type="button"
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
                 onClick={() => setShowPassword(!showPassword)}
                 style={{
                   position: 'absolute',
@@ -158,13 +166,14 @@ export default function Signup() {
             </div>
           </div>
 
-          <button 
-            type="submit" 
-            className="primary" 
-            disabled={loading || success}
+          <button
+            type="submit"
+            className="primary"
+            disabled={loading || !!success}
             style={{ marginTop: '1rem', padding: '0.75rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}
           >
-            <UserPlus size={18} /> {loading ? 'Creating...' : 'Sign Up'}
+            {loading ? <Loader2 size={18} className="spin" /> : <UserPlus size={18} />}
+            {loading ? 'Creating…' : 'Sign Up'}
           </button>
         </form>
 
@@ -172,6 +181,11 @@ export default function Signup() {
           Already have an account? <Link to="/login" style={{ color: 'var(--primary)', fontWeight: 500, textDecoration: 'none' }}>Sign in instead</Link>
         </div>
       </div>
+
+      <style>{`
+        .spin { animation: signupSpin 1s linear infinite; }
+        @keyframes signupSpin { 100% { transform: rotate(360deg); } }
+      `}</style>
     </div>
   );
 }

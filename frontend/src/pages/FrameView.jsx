@@ -30,7 +30,7 @@ export default function FrameView() {
     }}>
       <img
         src="/api/stream"
-        alt=""
+        alt="Photo frame live stream"
         style={{
           width: '100%',
           height: '100%',

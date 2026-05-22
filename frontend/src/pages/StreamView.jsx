@@ -1,23 +1,32 @@
-import { useState, useEffect, useRef } from 'react';
-import { Expand, Maximize, Layers } from 'lucide-react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Expand, Maximize, Layers, Loader2 } from 'lucide-react';
 import { withCsrf } from '../csrf';
 
 const POLL_INTERVAL_MS = 200; // 5 fps — sufficient for photo frame monitoring
 
 export default function StreamView() {
-  const [isFullscreen, setIsFullscreen] = useState(false);
-  const [showOverlay, setShowOverlay] = useState(false);
-  const [snapshotUrl, setSnapshotUrl] = useState(null);
-  const [error, setError] = useState(false);
-  const containerRef = useRef(null);
-  const intervalRef = useRef(null);
+  const [isFullscreen, setIsFullscreen]   = useState(false);
+  const [showOverlay, setShowOverlay]     = useState(false);
+  const [overlayBusy, setOverlayBusy]    = useState(false);
+  const [snapshotUrl, setSnapshotUrl]     = useState(null);
+  const [error, setError]                 = useState(false);
+  const containerRef  = useRef(null);
+  const intervalRef   = useRef(null);
+  const navigate      = useNavigate();
 
-  const fetchSnapshot = async () => {
+  const fetchSnapshot = useCallback(async () => {
     try {
-      const res = await fetch('/api/stream/snapshot');
+      const res = await fetch('/api/stream/snapshot', { credentials: 'include' });
+      if (res.status === 401) {
+        // Session expired — stop polling and send the user back to login.
+        clearInterval(intervalRef.current);
+        navigate('/login');
+        return;
+      }
       if (!res.ok) { setError(true); return; }
       const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
+      const url  = URL.createObjectURL(blob);
       setSnapshotUrl(prev => {
         if (prev) URL.revokeObjectURL(prev);
         return url;
@@ -26,7 +35,7 @@ export default function StreamView() {
     } catch {
       setError(true);
     }
-  };
+  }, [navigate]);
 
   useEffect(() => {
     intervalRef.current = setInterval(fetchSnapshot, POLL_INTERVAL_MS);
@@ -34,7 +43,7 @@ export default function StreamView() {
       clearInterval(intervalRef.current);
       setSnapshotUrl(prev => { if (prev) URL.revokeObjectURL(prev); return null; });
     };
-  }, []);
+  }, [fetchSnapshot]);
 
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) {
@@ -54,6 +63,29 @@ export default function StreamView() {
     return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
   }, []);
 
+  const handleOverlayToggle = async () => {
+    const next = !showOverlay;
+    setOverlayBusy(true);
+    try {
+      const res = await fetch('/api/settings', { credentials: 'include' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const current = await res.json();
+      await fetch('/api/settings', withCsrf({
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...current,
+          stream: { ...(current.stream ?? {}), show_overlay: next },
+        }),
+      }));
+      setShowOverlay(next);
+    } catch {
+      // Non-critical — overlay toggle failure should not interrupt the stream.
+    } finally {
+      setOverlayBusy(false);
+    }
+  };
+
   return (
     <div style={{ padding: '2rem', height: '100%', display: 'flex', flexDirection: 'column' }}>
       <header style={{ marginBottom: '1.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
@@ -64,24 +96,12 @@ export default function StreamView() {
 
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           <button
-            onClick={async () => {
-              const next = !showOverlay;
-              setShowOverlay(next);
-              try {
-                const res = await fetch('/api/settings', { credentials: 'include' });
-                const current = await res.json();
-                await fetch('/api/settings', withCsrf({
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ ...current, stream: { ...(current.stream ?? {}), show_overlay: next } }),
-                }));
-              // eslint-disable-next-line no-empty
-              } catch {}
-            }}
+            onClick={handleOverlayToggle}
+            disabled={overlayBusy}
             style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', opacity: showOverlay ? 1 : 0.5 }}
             title={showOverlay ? 'Hide overlay' : 'Show overlay'}
           >
-            <Layers size={18} />
+            {overlayBusy ? <Loader2 size={18} className="spin" /> : <Layers size={18} />}
             Overlay {showOverlay ? 'On' : 'Off'}
           </button>
         </div>
@@ -142,6 +162,11 @@ export default function StreamView() {
           {isFullscreen ? <Expand size={20} /> : <Maximize size={20} />}
         </button>
       </div>
+
+      <style>{`
+        .spin { animation: streamSpin 1s linear infinite; }
+        @keyframes streamSpin { 100% { transform: rotate(360deg); } }
+      `}</style>
     </div>
   );
 }

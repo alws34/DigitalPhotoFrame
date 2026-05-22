@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import ClockKnob from "./ClockKnob";
 import ColorThemePicker from "./ColorThemePicker";
 import CornerPicker from "./CornerPicker";

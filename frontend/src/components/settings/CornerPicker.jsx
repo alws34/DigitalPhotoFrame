@@ -1,5 +1,3 @@
-import React from "react";
-
 // Renders a 2x2 grid of corner buttons.
 // value: "top-left" | "top-right" | "bottom-left" | "bottom-right"
 // onChange: (value) => void

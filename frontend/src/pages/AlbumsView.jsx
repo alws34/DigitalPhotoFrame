@@ -301,7 +301,7 @@ function ImmichModal({ onClose, onAdd }) {
 // ---------------------------------------------------------------------------
 // Browse & Subscribe panel
 // ---------------------------------------------------------------------------
-function BrowsePanel({ source, subscribedAlbums, onSubscribe, onClose }) {
+function BrowsePanel({ source, subscribedAlbums, onSubscribe, onClose, onError }) {
   const [remoteAlbums, setRemoteAlbums] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadErr, setLoadErr] = useState('');
@@ -349,7 +349,7 @@ function BrowsePanel({ source, subscribedAlbums, onSubscribe, onClose }) {
       onSubscribe(created);
     } catch (e) {
       console.error('Subscribe failed', e);
-      alert('Subscribe failed: ' + e.message);
+      onError(e?.response?.data?.error || e.message || 'Subscribe failed');
     } finally {
       setSubscribing(null);
     }
@@ -432,7 +432,7 @@ function BrowsePanel({ source, subscribedAlbums, onSubscribe, onClose }) {
 // ---------------------------------------------------------------------------
 // Source card
 // ---------------------------------------------------------------------------
-function SourceCard({ source, albums, onSynced, onRemoved, onUnsubscribe, onSubscribed }) {
+function SourceCard({ source, albums, onSynced, onRemoved, onUnsubscribe, onSubscribed, onError }) {
   const [syncing, setSyncing] = useState(false);
   const [removing, setRemoving] = useState(false);
   const [browsing, setBrowsing] = useState(false);
@@ -449,7 +449,7 @@ function SourceCard({ source, albums, onSynced, onRemoved, onUnsubscribe, onSubs
       onSynced(source.id);
     } catch (e) {
       console.error('Sync failed', e);
-      alert('Sync failed: ' + e.message);
+      onError(e?.response?.data?.error || e.message || 'Sync failed');
     } finally {
       setSyncing(false);
     }
@@ -466,7 +466,7 @@ function SourceCard({ source, albums, onSynced, onRemoved, onUnsubscribe, onSubs
       onRemoved(source.id);
     } catch (e) {
       console.error('Remove failed', e);
-      alert('Remove failed: ' + e.message);
+      onError(e?.response?.data?.error || e.message || 'Remove failed');
       setRemoving(false);
     }
   };
@@ -481,7 +481,7 @@ function SourceCard({ source, albums, onSynced, onRemoved, onUnsubscribe, onSubs
       onUnsubscribe(album.id);
     } catch (e) {
       console.error('Unsubscribe failed', e);
-      alert('Unsubscribe failed: ' + e.message);
+      onError(e?.response?.data?.error || e.message || 'Unsubscribe failed');
     }
   };
 
@@ -610,6 +610,7 @@ function SourceCard({ source, albums, onSynced, onRemoved, onUnsubscribe, onSubs
             onSubscribed(newAlbum);
           }}
           onClose={() => setBrowsing(false)}
+          onError={onError}
         />
       )}
     </div>
@@ -624,7 +625,9 @@ const POLL_INTERVAL_MS = 5000;
 export default function AlbumsView() {
   const [sources, setSources] = useState([]);
   const [albums, setAlbums] = useState([]);
-  const [activeAlbum, setActiveAlbum] = useState(MOCK_ACTIVE);
+  const [activeAlbum, setActiveAlbum] = useState(null);
+  const [alerts, setAlerts] = useState([]);
+  const dismissAlert = (idx) => setAlerts((prev) => prev.filter((_, i) => i !== idx));
   const [loading, setLoading] = useState(true);
   const [showImmichModal, setShowImmichModal] = useState(false);
   const [showGoogleModal, setShowGoogleModal] = useState(false);
@@ -678,18 +681,25 @@ export default function AlbumsView() {
   }, [loadAll]);
 
   // ── Polling when sync in progress ─────────────────────────────────────
+  // Track whether any album is syncing with a ref so the effect only
+  // recreates the interval when the boolean transitions, not on every
+  // albums array change.
+  const anySyncRef = useRef(false);
+  const anySync = albums.some((a) => a.sync_in_progress);
+
   useEffect(() => {
-    const anySync = albums.some((a) => a.sync_in_progress);
+    if (anySync === anySyncRef.current) return;
+    anySyncRef.current = anySync;
+
+    clearInterval(pollRef.current);
     if (anySync) {
       pollRef.current = setInterval(async () => {
         const fresh = await fetchAlbums();
         setAlbums(fresh);
       }, POLL_INTERVAL_MS);
-    } else {
-      clearInterval(pollRef.current);
     }
     return () => clearInterval(pollRef.current);
-  }, [albums, fetchAlbums]);
+  }, [anySync, fetchAlbums]);
 
   // ── Active album selector ──────────────────────────────────────────────
   const handleActiveChange = async (albumId) => {
@@ -727,7 +737,7 @@ export default function AlbumsView() {
       setSources((prev) => [...prev, created]);
     } catch (e) {
       console.warn('POST /api/sources (local) not yet implemented:', e.message);
-      alert('Local folder source API is not yet available.');
+      setAlerts((prev) => [...prev, e?.response?.data?.error || e.message || 'Local folder source API is not yet available.']);
     }
   };
 
@@ -775,6 +785,31 @@ export default function AlbumsView() {
         </p>
       </header>
 
+      {/* Dismissible alert list */}
+      {alerts.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1.5rem' }}>
+          {alerts.map((msg, idx) => (
+            <div
+              key={idx}
+              style={{
+                background: 'rgba(220,50,50,0.15)', border: '1px solid var(--danger)',
+                borderRadius: '8px', padding: '0.75rem 1rem',
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem',
+              }}
+            >
+              <span style={{ color: 'var(--danger)', fontSize: '0.9rem' }}>{msg}</span>
+              <button
+                onClick={() => dismissAlert(idx)}
+                aria-label="Dismiss"
+                style={{ background: 'none', border: 'none', padding: '2px', color: 'var(--danger)', cursor: 'pointer', display: 'flex', flexShrink: 0 }}
+              >
+                <X size={16} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: '4rem', color: 'var(--text-secondary)' }}>
           <Loader2 size={32} className="spin" />
@@ -782,32 +817,34 @@ export default function AlbumsView() {
       ) : (
         <>
           {/* ── 1. Active Album selector ─────────────────────────────── */}
-          <section
-            className="glass-panel fade-in"
-            style={{ padding: '1.25rem 1.5rem', marginBottom: '2rem', display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}
-          >
-            <div style={{ fontWeight: 600, fontSize: '0.95rem', minWidth: 'max-content' }}>
-              Now Playing
-            </div>
-            <div style={{ position: 'relative', flex: 1, minWidth: '200px', maxWidth: '360px' }}>
-              <select
-                value={activeAlbum?.album_id ?? 'all'}
-                onChange={(e) => handleActiveChange(e.target.value)}
-                disabled={settingActive}
-                style={{ paddingRight: '2rem', appearance: 'none' }}
-              >
-                <option value="all">Local Images</option>
-                {albums.map((a) => (
-                  <option key={a.id} value={a.id}>{a.name}</option>
-                ))}
-              </select>
-              <ChevronDown
-                size={16}
-                style={{ position: 'absolute', right: '0.6rem', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: 'var(--text-secondary)' }}
-              />
-            </div>
-            {settingActive && <Loader2 size={16} className="spin" style={{ color: 'var(--accent)' }} />}
-          </section>
+          {activeAlbum !== null && (
+            <section
+              className="glass-panel fade-in"
+              style={{ padding: '1.25rem 1.5rem', marginBottom: '2rem', display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}
+            >
+              <div style={{ fontWeight: 600, fontSize: '0.95rem', minWidth: 'max-content' }}>
+                Now Playing
+              </div>
+              <div style={{ position: 'relative', flex: 1, minWidth: '200px', maxWidth: '360px' }}>
+                <select
+                  value={activeAlbum?.album_id ?? 'all'}
+                  onChange={(e) => handleActiveChange(e.target.value)}
+                  disabled={settingActive}
+                  style={{ paddingRight: '2rem', appearance: 'none' }}
+                >
+                  <option value="all">Local Images</option>
+                  {albums.map((a) => (
+                    <option key={a.id} value={a.id}>{a.name}</option>
+                  ))}
+                </select>
+                <ChevronDown
+                  size={16}
+                  style={{ position: 'absolute', right: '0.6rem', top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: 'var(--text-secondary)' }}
+                />
+              </div>
+              {settingActive && <Loader2 size={16} className="spin" style={{ color: 'var(--accent)' }} />}
+            </section>
+          )}
 
           {/* ── 2. Sources list ───────────────────────────────────────── */}
           <section style={{ marginBottom: '2rem' }}>
@@ -833,6 +870,7 @@ export default function AlbumsView() {
                   onRemoved={handleSourceRemoved}
                   onUnsubscribe={handleUnsubscribe}
                   onSubscribed={handleSubscribed}
+                  onError={(msg) => setAlerts((prev) => [...prev, msg])}
                 />
               ))
             )}

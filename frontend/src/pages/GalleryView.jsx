@@ -19,10 +19,12 @@ const modalStyle = {
 export default function GalleryView() {
   const [images, setImages] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState('');
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [activeAlbum, setActiveAlbum] = useState(null);
   const activeAlbumRef = useRef(null);
+  const [alerts, setAlerts] = useState([]);
 
   const [selectedImage, setSelectedImage] = useState(null);
   const [editState, setEditState] = useState({ filename: '', uploader: '', location: '' });
@@ -31,13 +33,17 @@ export default function GalleryView() {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
 
+  const dismissAlert = (idx) => setAlerts((prev) => prev.filter((_, i) => i !== idx));
+
   const fetchImages = async () => {
+    setFetchError('');
     try {
       const res = await axios.get('/api/images');
       setImages(res.data);
     } catch (err) {
       if (err?.response?.status !== 401) {
         console.error('Failed to fetch images', err);
+        setFetchError(err?.response?.data?.error || 'Failed to load photos. Please try again.');
       }
     } finally {
       setLoading(false);
@@ -111,6 +117,7 @@ export default function GalleryView() {
       const updatedName = res.data.filename || editState.filename;
       await fetchImages();
       setSelectedImage({ ...selectedImage, name: updatedName });
+      setEditState((s) => ({ ...s, filename: updatedName }));
     } catch (err) {
       setSaveError(err?.response?.data?.error || 'Save failed');
     } finally {
@@ -160,7 +167,10 @@ export default function GalleryView() {
       await fetchImages();
 
       if (errorCount > 0) {
-        alert(`Upload finished with ${errorCount} batch error(s). Some photos may not have been saved.`);
+        setAlerts((prev) => [
+          ...prev,
+          `Upload finished with ${errorCount} batch error(s). Some photos may not have been saved.`,
+        ]);
       }
     } finally {
       setUploading(false);
@@ -177,7 +187,10 @@ export default function GalleryView() {
       if (selectedImage?.name === filename) closeModal();
     } catch (err) {
       console.error('Delete failed', err);
-      alert('Delete failed');
+      setAlerts((prev) => [
+        ...prev,
+        err?.response?.data?.error || 'Delete failed. Please try again.',
+      ]);
     }
   };
 
@@ -222,6 +235,48 @@ export default function GalleryView() {
           />
         </div>
       </header>
+
+      {/* Fetch error banner */}
+      {fetchError && (
+        <div style={{
+          background: 'rgba(220,50,50,0.15)', border: '1px solid var(--danger)',
+          borderRadius: '8px', padding: '0.75rem 1rem', marginBottom: '1rem',
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem',
+        }}>
+          <span style={{ color: 'var(--danger)', fontSize: '0.9rem' }}>{fetchError}</span>
+          <button
+            onClick={() => fetchImages()}
+            style={{ fontSize: '0.85rem', padding: '0.3rem 0.8rem', flexShrink: 0 }}
+          >
+            Retry
+          </button>
+        </div>
+      )}
+
+      {/* Dismissible alert list */}
+      {alerts.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginBottom: '1rem' }}>
+          {alerts.map((msg, idx) => (
+            <div
+              key={idx}
+              style={{
+                background: 'rgba(220,50,50,0.15)', border: '1px solid var(--danger)',
+                borderRadius: '8px', padding: '0.75rem 1rem',
+                display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem',
+              }}
+            >
+              <span style={{ color: 'var(--danger)', fontSize: '0.9rem' }}>{msg}</span>
+              <button
+                onClick={() => dismissAlert(idx)}
+                aria-label="Dismiss"
+                style={{ background: 'none', border: 'none', padding: '2px', color: 'var(--danger)', cursor: 'pointer', display: 'flex', flexShrink: 0 }}
+              >
+                <X size={16} />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
 
       {loading ? (
         <div style={{ display: 'flex', justifyContent: 'center', padding: '4rem', color: 'var(--text-secondary)' }}>
@@ -290,6 +345,7 @@ export default function GalleryView() {
               <h2 style={{ margin: 0, fontSize: '1.2rem' }}>Photo Details</h2>
               <button
                 onClick={closeModal}
+                aria-label="Close"
                 style={{ background: 'none', border: 'none', padding: '4px', display: 'flex', color: 'var(--text-secondary)' }}
               >
                 <X size={20} />

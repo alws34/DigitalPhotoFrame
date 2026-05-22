@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import SettingField from "./SettingField";
 
 export default function SettingsSection({ data, pathPrefix, schema, onChange, depth = 0, extras = {} }) {
@@ -20,7 +20,7 @@ export default function SettingsSection({ data, pathPrefix, schema, onChange, de
               border: "1px solid var(--glass-border)", borderRadius: 10,
               marginTop: 6, overflow: "hidden", paddingLeft: depth * 8,
             }}>
-              <button onClick={() => toggle(key)} style={{
+              <button onClick={() => toggle(key)} aria-expanded={!isCollapsed} style={{
                 width: "100%", textAlign: "left", padding: "8px 14px",
                 background: "rgba(255,255,255,0.04)", border: "none", borderRadius: 0,
                 display: "flex", justifyContent: "space-between",

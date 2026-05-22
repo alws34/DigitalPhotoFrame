@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import SettingsSection from "../components/settings/SettingsSection";
 import { withCsrf } from "../csrf";
 
@@ -77,9 +77,13 @@ export default function SettingsView() {
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState("");
   const [showRestartModal, setShowRestartModal] = useState(false);
-  const originalRef = useRef(null);
-  const pendingRef = useRef(null);
+  const originalRef   = useRef(null);
+  const pendingRef    = useRef(null);
+  const statusTimerRef = useRef(null);
   const [albums, setAlbums] = useState([]);
+
+  // Clear any lingering "Saved" status timer on unmount.
+  useEffect(() => () => clearTimeout(statusTimerRef.current), []);
 
   const fetchSettings = useCallback(async () => {
     try {
@@ -93,20 +97,26 @@ export default function SettingsView() {
     }
   }, []);
 
-  useEffect(() => { fetchSettings(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    fetchSettings();
+  }, [fetchSettings]);
 
   useEffect(() => {
+    let cancelled = false;
     fetch("/api/albums", { credentials: "include" })
       .then((r) => (r.ok ? r.json() : []))
-      .then((d) => setAlbums(Array.isArray(d) ? d : []))
+      .then((d) => { if (!cancelled) setAlbums(Array.isArray(d) ? d : []); })
       .catch(() => {});
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
-    fetch("/api/settings/schema")
+    let cancelled = false;
+    fetch("/api/settings/schema", { credentials: "include" })
       .then((r) => r.json())
-      .then(setSchema)
+      .then((d) => { if (!cancelled) setSchema(d); })
       .catch(() => {});
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -161,7 +171,8 @@ export default function SettingsView() {
       originalRef.current = snapshot;
       if (pendingRef.current === snapshot) pendingRef.current = null;
       setStatus("Saved");
-      setTimeout(() => setStatus(""), 2000);
+      clearTimeout(statusTimerRef.current);
+      statusTimerRef.current = setTimeout(() => setStatus(""), 2000);
       if (needsRestart) setShowRestartModal(true);
     } catch (e) {
       setStatus(`Save failed: ${e.message}`);

@@ -1,16 +1,20 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { useNavigate, Link } from 'react-router-dom';
 import { Key, Eye, EyeOff, ArrowLeft, Loader2 } from 'lucide-react';
 
 export default function ResetPassword() {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
+  const [email, setEmail]             = useState('');
+  const [password, setPassword]       = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
-  const navigate = useNavigate();
+  const [loading, setLoading]         = useState(false);
+  const [error, setError]             = useState('');
+  const [success, setSuccess]         = useState('');
+  const redirectTimerRef              = useRef(null);
+  const navigate                      = useNavigate();
+
+  // Clean up any pending redirect timer on unmount.
+  useEffect(() => () => clearTimeout(redirectTimerRef.current), []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -21,7 +25,7 @@ export default function ResetPassword() {
     try {
       const res = await axios.post('/api/auth/reset-password', { email, password });
       setSuccess(res.data.message || 'Password reset successfully!');
-      setTimeout(() => navigate('/login'), 3000);
+      redirectTimerRef.current = setTimeout(() => navigate('/login'), 3000);
     } catch (err) {
       if (err.response?.status === 401) {
         setError('Password reset requires being logged in. Please sign in first, then change your password from Settings.');
@@ -34,10 +38,10 @@ export default function ResetPassword() {
   };
 
   return (
-    <div style={{ 
-      display: 'flex', 
-      alignItems: 'center', 
-      justifyContent: 'center', 
+    <div style={{
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
       minHeight: '100vh',
       background: 'linear-gradient(135deg, #121212 0%, #1e1e1e 100%)',
       padding: '2rem'
@@ -50,10 +54,10 @@ export default function ResetPassword() {
         </div>
 
         <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
-          <div style={{ 
-            display: 'inline-flex', 
-            padding: '1rem', 
-            borderRadius: '50%', 
+          <div style={{
+            display: 'inline-flex',
+            padding: '1rem',
+            borderRadius: '50%',
             background: 'rgba(100, 108, 255, 0.1)',
             marginBottom: '1rem'
           }}>
@@ -64,11 +68,11 @@ export default function ResetPassword() {
         </div>
 
         {error && (
-          <div style={{ 
-            background: 'var(--danger)', 
-            color: 'white', 
-            padding: '0.75rem', 
-            borderRadius: '8px', 
+          <div style={{
+            background: 'var(--danger)',
+            color: 'white',
+            padding: '0.75rem',
+            borderRadius: '8px',
             marginBottom: '1.5rem',
             fontSize: '0.9rem',
             textAlign: 'center'
@@ -78,12 +82,12 @@ export default function ResetPassword() {
         )}
 
         {success && (
-          <div style={{ 
-            background: 'rgba(100, 108, 255, 0.2)', 
+          <div style={{
+            background: 'rgba(100, 108, 255, 0.2)',
             color: 'var(--primary)',
             border: '1px solid var(--primary)',
-            padding: '0.75rem', 
-            borderRadius: '8px', 
+            padding: '0.75rem',
+            borderRadius: '8px',
             marginBottom: '1.5rem',
             fontSize: '0.9rem',
             textAlign: 'center'
@@ -94,11 +98,12 @@ export default function ResetPassword() {
 
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
           <div>
-            <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+            <label htmlFor="reset-email" style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
               Email Address
             </label>
-            <input 
-              type="email" 
+            <input
+              id="reset-email"
+              type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               style={{ width: '100%' }}
@@ -106,14 +111,15 @@ export default function ResetPassword() {
               placeholder="your@email.com"
             />
           </div>
-          
+
           <div>
-            <label style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
+            <label htmlFor="reset-password" style={{ display: 'block', marginBottom: '0.5rem', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
               New Password
             </label>
             <div style={{ position: 'relative' }}>
-              <input 
-                type={showPassword ? "text" : "password"} 
+              <input
+                id="reset-password"
+                type={showPassword ? "text" : "password"}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 style={{ width: '100%', paddingRight: '2.5rem' }}
@@ -123,6 +129,7 @@ export default function ResetPassword() {
               />
               <button
                 type="button"
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
                 onClick={() => setShowPassword(!showPassword)}
                 style={{
                   position: 'absolute',
@@ -145,17 +152,22 @@ export default function ResetPassword() {
             </div>
           </div>
 
-          <button 
-            type="submit" 
-            className="primary" 
-            disabled={loading || success}
+          <button
+            type="submit"
+            className="primary"
+            disabled={loading || !!success}
             style={{ marginTop: '1rem', padding: '0.75rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}
           >
             {loading ? <Loader2 size={18} className="spin" /> : <Key size={18} />}
-            {loading ? 'Resetting...' : 'Reset Password'}
+            {loading ? 'Resetting…' : 'Reset Password'}
           </button>
         </form>
       </div>
+
+      <style>{`
+        .spin { animation: resetSpin 1s linear infinite; }
+        @keyframes resetSpin { 100% { transform: rotate(360deg); } }
+      `}</style>
     </div>
   );
 }

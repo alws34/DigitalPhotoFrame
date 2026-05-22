@@ -1,9 +1,19 @@
-import React, { useRef, useState } from "react";
+import { useRef, useState } from "react";
 
 export default function TimezoneSelect({ value, choices, onChange }) {
   const [query, setQuery] = useState(value ?? "");
   const [open, setOpen] = useState(false);
   const skipBlur = useRef(false);
+  // Track the last committed value prop so we can detect external updates.
+  // Stored as state so we can trigger a re-render with the new query.
+  const [committedValue, setCommittedValue] = useState(value ?? "");
+
+  // Derived-state pattern (React docs recommended way): when the prop changes
+  // from outside, sync query without an effect.
+  if (value !== committedValue) {
+    setCommittedValue(value ?? "");
+    setQuery(value ?? "");
+  }
 
   const filtered = query.trim()
     ? choices.filter((c) => c.toLowerCase().includes(query.toLowerCase())).slice(0, 80)
