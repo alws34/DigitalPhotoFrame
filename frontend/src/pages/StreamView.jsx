@@ -96,10 +96,12 @@ export default function StreamView() {
 
         <div style={{ display: 'flex', gap: '0.5rem' }}>
           <button
+            type="button"
             onClick={handleOverlayToggle}
             disabled={overlayBusy}
             style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', opacity: showOverlay ? 1 : 0.5 }}
             title={showOverlay ? 'Hide overlay' : 'Show overlay'}
+            aria-label={showOverlay ? 'Hide overlay' : 'Show overlay'}
           >
             {overlayBusy ? <Loader2 size={18} className="spin" /> : <Layers size={18} />}
             Overlay {showOverlay ? 'On' : 'Off'}
@@ -155,9 +157,11 @@ export default function StreamView() {
             opacity: 0.7,
             transition: 'opacity 0.2s',
           }}
+          type="button"
           onMouseEnter={(e) => e.currentTarget.style.opacity = 1}
           onMouseLeave={(e) => e.currentTarget.style.opacity = 0.7}
           title={isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
+          aria-label={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
         >
           {isFullscreen ? <Expand size={20} /> : <Maximize size={20} />}
         </button>

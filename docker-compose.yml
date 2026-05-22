@@ -4,31 +4,48 @@ services:
     container_name: photoframe
     restart: unless-stopped
     network_mode: host
-    user: "1000:1000"                        # Run as pi user to access Wayland socket
-    ports:
-      - "${PHOTOFRAME_PORT:-5002}:${PHOTOFRAME_PORT:-5002}"
+    # Run as pi user (UID 1000) to access Wayland socket and write to /data.
+    # Must match the host UID that owns the Wayland session socket.
+    user: "1000:1000"
     volumes:
       - ./Images:/app/Images
-      - ./photoframe_settings.json:/app/photoframe_settings.json:ro  # seed for one-time migration; settings are stored in /data DB after first run
+      # photoframe_settings.json is seeded read-only for one-time DB migration;
+      # after first run, settings live in the SQLite DB at /data/photoframe.db.
+      - ./photoframe_settings.json:/app/photoframe_settings.json:ro
       - photoframe-data:/data
-      - /tmp/.X11-unix:/tmp/.X11-unix        # X11 Socket (fallback)
-      - /run/user/1000:/run/user/1000        # Wayland Socket
-      - /dev/shm:/dev/shm                    # Prevents memory crashes
-      - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket  # Host D-Bus → nmcli can reach NetworkManager
-      - /etc/localtime:/etc/localtime:ro                         # Inherit host timezone
+      - /tmp/.X11-unix:/tmp/.X11-unix        # X11 socket (fallback for X11 mode)
+      - /run/user/1000:/run/user/1000        # Wayland compositor socket
+      - /dev/shm:/dev/shm                    # Shared memory — prevents pygame/SDL OOM crashes
+      - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket  # Host D-Bus for nmcli → NetworkManager
+      - /etc/localtime:/etc/localtime:ro     # Inherit host timezone without setting TZ var
     environment:
+      # PHOTOFRAME_SECRET_KEY — Flask session signing key.
+      # MUST be changed to a strong random value in any non-development deployment.
+      # Generate one with: python -c "import secrets; print(secrets.token_hex(32))"
+      # Store the result in a .env file (never commit it to version control).
       - PHOTOFRAME_SECRET_KEY=${PHOTOFRAME_SECRET_KEY:-change-me-in-production}
       - DISPLAY=:0
       - WAYLAND_DISPLAY=wayland-0
       - XDG_RUNTIME_DIR=/run/user/1000
-      - SDL_VIDEODRIVER=wayland              # Pi OS Bookworm uses Wayland (labwc)
+      - SDL_VIDEODRIVER=wayland              # Pi OS Bookworm default WM is labwc (Wayland)
       - LIBGL_ALWAYS_SOFTWARE=1             # Mesa software fallback if GPU EGL unavailable
-      - HOME=/tmp                           # Prevents Mesa writing to /.cache
+      - HOME=/tmp                           # Prevent Mesa writing to /.cache (read-only root)
       - XDG_CACHE_HOME=/tmp/mesa_cache
       - PF_DB_PATH=/data/photoframe.db
       - TZ=${TZ:-Asia/Jerusalem}
     devices:
-      - /dev/dri:/dev/dri                    # GPU Acceleration
+      - /dev/dri:/dev/dri                    # GPU device node for hardware acceleration
+    # NOTE: privileged: true is required ONLY for Pi GPIO/backlight access and
+    # certain Wayland socket permissions. For headless server deployments where
+    # no display hardware is managed, remove this line and rely on device/volume
+    # mounts above instead. Never run privileged in untrusted environments.
     privileged: true
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:5002/"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
 volumes:
   photoframe-data:

@@ -1,26 +1,63 @@
+# DigitalPhotoFrame — Docker runtime dependencies
+#
+# EXCLUDED intentionally:
+#   - pyheif: unmaintained, fails to build on standard Linux due to missing
+#     build-system support; pillow-heif (below) is the actively maintained
+#     replacement and covers all HEIC/HEIF decoding needs.
+#   - PySide6: Qt GUI is not used in the Docker (headless/pygame) target;
+#     the package is enormous and would bloat the image by ~400 MB.
+#   - pandas: not required at runtime; listed in pyproject.toml for dev only.
+#
+# Security-critical packages (must always be present):
+#   argon2-cffi  — preferred password hashing in auth_security.py (optional
+#                  import; falls back to pbkdf2 if absent, but argon2 is
+#                  strongly preferred in production).
+#   cryptography — required by Utilities/encryption.py for Fernet key handling.
+#
+# Pin strategy: exact pins for reproducible builds; ranges only where upstream
+# packages enforce compatibility constraints (paho-mqtt, pygame, qrcode).
+
+# --- Web framework -----------------------------------------------------------
 blinker==1.9.0
-cryptography>=42.0
-certifi==2026.2.25
-charset-normalizer==3.4.4
 click==8.3.1
 Flask==3.1.3
 flask-cors==6.0.2
-idna==3.11
 itsdangerous==2.2.0
 Jinja2==3.1.6
 MarkupSafe==3.0.3
+Werkzeug==3.1.6
+
+# --- HTTP / networking -------------------------------------------------------
+certifi==2026.2.25
+charset-normalizer==3.4.4
+idna==3.11
+requests==2.32.5
+urllib3==2.6.3
+
+# --- Image processing --------------------------------------------------------
 numpy==2.4.2
 opencv-python-headless==4.13.0.92
 pillow==12.1.1
 pillow_heif==1.3.0
-psutil==7.2.2
-requests==2.32.5
+
+# --- Database ----------------------------------------------------------------
 SQLAlchemy==2.0.48
+
+# --- Security ----------------------------------------------------------------
+argon2-cffi>=21.3.0
+cryptography>=42.0
+
+# --- Utilities ---------------------------------------------------------------
+psutil==7.2.2
 tqdm==4.67.3
 typing_extensions==4.15.0
-urllib3==2.6.3
 watchdog==6.0.0
-Werkzeug==3.1.6
+
+# --- MQTT --------------------------------------------------------------------
 paho-mqtt>=1.6.0,<3.0
+
+# --- Display (pygame mode) ---------------------------------------------------
 pygame>=2.5.0
+
+# --- QR code generation ------------------------------------------------------
 qrcode[pil]>=7.4

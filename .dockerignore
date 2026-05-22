@@ -1,20 +1,64 @@
+# ==============================================================================
+# .dockerignore — DigitalPhotoFrame
+#
+# Keeps the Docker build context lean.  Excludes development artifacts, runtime
+# data files (managed as volumes), secrets, and anything not needed inside the
+# build stages.
+# ==============================================================================
+
+# Python virtual environment — never copy into build context
 env/
-.git/
-.github/
-.claude/
+
+# Python build and cache artifacts
+*.egg-info/
 __pycache__/
 *.pyc
 *.pyo
+.ruff_cache/
+.pytest_cache/
+
+# Node modules — npm ci inside frontend-builder stage fetches these fresh
 node_modules/
 frontend/node_modules/
+
+# Pre-built frontend artefacts — the frontend-builder stage rebuilds from source
 frontend/dist/
-docs/
+
+# Test suite — not needed in any Docker stage
 Tests/
+
+# Documentation and developer tooling
+docs/
+.claude/
+AGENTS.md
+CLAUDE.md
+DESIGN_SKILLS.md
+PROJECT_HANDOFF.md
+CODE_OF_CONDUCT.md
+CONTRIBUTING.md
+DOCKER.md
+deploy.md
+*.md
+
+# Git history
+.git/
+.github/
+
+# Runtime data files — these are injected as Docker volumes at runtime, not
+# baked into the image. Baking them would hard-code stale state into layers.
+metadata.json
+photoframe_settings.json
+
+# Local development and backup files
 *.log
 *.db
 *.bak
 config_backups/
 _thumbs/
-.ruff_cache/
-.pytest_cache/
-*.egg-info/
+
+# Editor / OS noise
+.DS_Store
+*.swp
+*.swo
+.env
+.env.*

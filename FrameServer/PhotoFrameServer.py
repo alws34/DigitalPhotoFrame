@@ -5,12 +5,14 @@ import logging
 import math
 import os
 import os as _os
+import queue
 import random as rand
 import threading
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from enum import Enum
+from typing import NamedTuple
 
 import cv2
 import numpy as np
@@ -79,6 +81,67 @@ class AnimationStatus(Enum):
     ANIMATION_ERROR = 2
 
 
+class RenderConfig(NamedTuple):
+    """Immutable snapshot of settings fields read on every frame.
+
+    Built once per settings-change event; read lock-free in _send_frame
+    and run_photoframe. All mutable dict values (margins) are converted
+    to plain tuples or primitives so no per-frame allocation is needed.
+    """
+
+    # pre-computed per settings change; avoids ~10 dict lookups at 30fps
+    animation_fps: int
+    transition_fps: int
+    show_weather: bool
+    show_overlay: bool
+    stats_show: bool
+    contrast_text: bool
+    datetime_corner: str
+    weather_corner: str
+    stats_corner: str
+    stats_color: str
+    stats_margin_x: int
+    stats_margin_y: int
+    # margins stored as a plain dict snapshot — immutable after construction
+    margins: dict
+    anim_duration: float
+    delay_between: float
+
+
+def _build_render_config(settings: dict) -> RenderConfig:
+    """Extract render-critical fields from the settings dict into a RenderConfig.
+
+    Called only on settings change (off the frame path), never per frame.
+    """
+    ui_cfg = settings.get("ui", {}) or {}
+    stats_cfg = settings.get("stats", {}) or {}
+    stream_cfg = settings.get("stream", {}) or {}
+    playback_cfg = settings.get("playback", {}) or {}
+
+    raw_margins = ui_cfg.get("margins", {}) or {}
+    # Build a new dict that is safe to read without .copy() in the frame path
+    margins_snapshot = dict(raw_margins)
+    margins_snapshot.setdefault("spacing_between", ui_cfg.get("spacing_between", 50))
+
+    return RenderConfig(
+        animation_fps=int(playback_cfg.get("animation_fps") or 30),
+        transition_fps=int(playback_cfg.get("transition_fps") or 30),
+        show_weather=bool(ui_cfg.get("show_weather", True)),
+        show_overlay=bool(stream_cfg.get("show_overlay", False)),
+        stats_show=bool(stats_cfg.get("show", False)),
+        contrast_text=bool(ui_cfg.get("contrast_text", False)),
+        datetime_corner=str(ui_cfg.get("datetime_corner", "bottom-left")),
+        weather_corner=str(ui_cfg.get("weather_corner", "bottom-right")),
+        stats_corner=str(stats_cfg.get("corner", "top-left")),
+        stats_color=str(stats_cfg.get("font_color", "white")),
+        stats_margin_x=int(stats_cfg.get("margin_x", 20)),
+        stats_margin_y=int(stats_cfg.get("margin_y", 20)),
+        margins=margins_snapshot,
+        anim_duration=float(playback_cfg.get("animation_duration") or 10),
+        delay_between=float(playback_cfg.get("delay_between_images") or 30),
+    )
+
+
 class PhotoFrameServer(iFrame):
     """
     Server owns:
@@ -110,7 +173,15 @@ class PhotoFrameServer(iFrame):
             self.logger.exception("Failed to set OpenCV optimizations: %s", e)
 
         self._settings: dict = _load_settings()
+        # Single lock protecting self._settings; _settings_reload_lock removed
+        # (H2: two locks guarding the same field caused torn-read risk).
         self._settings_lock = threading.Lock()
+        # Lock-free render config: written off-path on settings change, read
+        # lock-free in _send_frame — immutable NamedTuple swap is atomic on CPython.
+        self._render_cfg: RenderConfig = _build_render_config(self._settings)
+        # Frame buffer lock: protects _raw_frame_to_stream / frame_to_stream /
+        # _stats_frame_to_stream against concurrent reads in get_stream_frame (M6).
+        self._frame_lock = threading.Lock()
 
         if not self.set_images_dir(images_dir=images_dir):
             logging.error("Failed to set images directory. Exiting.")
@@ -201,9 +272,6 @@ class PhotoFrameServer(iFrame):
         except Exception as e:
             logging.warning("Could not register HEIF/HEIC plugin: %s", e)
 
-        self._settings_updated_flag = False
-        self._settings_reload_lock = threading.Lock()
-
         # Compatibility shim so app.py can still pass srv.settings_handler to Backend()
         # (removed in Task 6)
         self.settings_handler = self._settings
@@ -215,12 +283,23 @@ class PhotoFrameServer(iFrame):
         self._stats_text: str = ""
         self._stats_frame_to_stream = None
 
+        # Background metadata worker (H3): SHA-256 + JSON I/O moved off the
+        # transition path; transitions enqueue work here and proceed immediately.
+        self._metadata_queue: queue.Queue = queue.Queue()
+        self._metadata_worker = threading.Thread(
+            target=self._metadata_worker_loop,
+            name="MetadataWorker",
+            daemon=True,
+        )
+        self._metadata_worker.start()
+
     def _blank_frame(self):
         # neutral gray, screen-sized
         return np.full((self.screen_height, self.screen_width, 3), 32, dtype=np.uint8)
 
     def _reload_runtime_settings(self, reload_from_disk: bool = True) -> None:
-        with self._settings_reload_lock:
+        # Consolidated to _settings_lock — _settings_reload_lock removed (H2).
+        with self._settings_lock:
             if reload_from_disk:
                 self._settings = _load_settings()
             playback = self._settings.get("playback", {}) or {}
@@ -229,16 +308,25 @@ class PhotoFrameServer(iFrame):
             self._transition_frame_interval = 1.0 / max(
                 1.0, float(self._transition_fps)
             )
+            # Rebuild render config snapshot under the same lock so it is
+            # always consistent with self._settings after this call.
+            self._render_cfg = _build_render_config(self._settings)
 
     def _on_settings_changed(self, new_data: dict) -> None:
+        # Build snapshot before acquiring lock to keep critical section short.
+        new_render_cfg = _build_render_config(new_data)
         with self._settings_lock:
             self._settings = new_data
+            # Atomic NamedTuple replacement; _send_frame reads this lock-free
+            # because CPython attribute assignment is atomic for simple objects.
+            self._render_cfg = new_render_cfg
         # Keep the legacy alias in sync so run_photoframe() picks up new values
         self.settings_handler = new_data
 
-        playback = new_data.get("playback", {})
-        self._target_fps = int(playback.get("animation_fps", 30))
-        self._transition_fps = int(playback.get("transition_fps", self._target_fps))
+        # Sync scalar fps attrs from the new render config snapshot.
+        # pre-computed per settings change; avoids playback dict lookups per frame
+        self._target_fps = new_render_cfg.animation_fps
+        self._transition_fps = new_render_cfg.transition_fps
         self._transition_frame_interval = 1.0 / max(1.0, float(self._transition_fps))
 
         # Rebuild overlay so font size / panel changes take effect immediately
@@ -355,40 +443,38 @@ class PhotoFrameServer(iFrame):
 
         # 2. Bake Overlay (Date/Time/Weather)
         # Save raw frame before overlay so stream can serve clean frames.
-        self._raw_frame_to_stream = frame_bgr
+        # _render_cfg read is lock-free: NamedTuple attribute access is atomic
+        # on CPython; writes only happen off the frame path in settings events.
+        rcfg = (
+            self._render_cfg
+        )  # single attribute read; pre-computed per settings change
 
-        # This is the most CPU-intensive part; we optimize by caching settings.
+        # Store raw frame before overlay (lock-protected for get_stream_frame thread safety).
+        with self._frame_lock:
+            self._raw_frame_to_stream = frame_bgr
+
         if self._overlay:
             try:
-                ui_cfg = self._settings.get("ui", {}) or {}
-                show_weather = ui_cfg.get("show_weather", True)
-                contrast_text = ui_cfg.get("contrast_text", False)
-
-                # Fetch settings once per refresh
-                margins = ui_cfg.get("margins", {}).copy()
-                margins.setdefault("spacing_between", ui_cfg.get("spacing_between", 50))
-
+                # All fields pre-computed per settings change; avoids ~6 dict lookups at 30fps
                 with self._weather_lock:
-                    weather = self._weather_data if show_weather else {}
+                    weather = self._weather_data if rcfg.show_weather else {}
 
-                # Optimized call (Assuming overlay.py is using Numpy blending)
-                datetime_corner = ui_cfg.get("datetime_corner", "bottom-left")
-                weather_corner = ui_cfg.get("weather_corner", "bottom-right")
                 frame_bgr = self._overlay.render_datetime_and_weather(
                     frame_bgr,
-                    margins,
+                    rcfg.margins,  # pre-computed snapshot; no per-frame .copy() needed
                     weather,
-                    datetime_corner=datetime_corner,
-                    weather_corner=weather_corner,
+                    datetime_corner=rcfg.datetime_corner,
+                    weather_corner=rcfg.weather_corner,
                     font_color=(255, 255, 255),
-                    contrast_text=contrast_text,
+                    contrast_text=rcfg.contrast_text,
                 )
             except Exception:
                 # Fallback to raw frame if overlay fails to prevent a hard crash/freeze
                 pass
 
         # 2b. Stats overlay (CPU/RAM/Temp/Disk/Brightness)
-        if self._overlay and self._settings.get("stats", {}).get("show", False):
+        # rcfg.stats_show pre-computed; avoids nested dict lookup at 30fps
+        if self._overlay and rcfg.stats_show:
             try:
                 now_ts = time.time()
                 if now_ts - self._stats_last_refresh >= 5.0:
@@ -427,28 +513,25 @@ class PhotoFrameServer(iFrame):
                         f"Bright {bright_str}"
                     )
                     self._stats_last_refresh = now_ts
-                stats_cfg = self._settings.get("stats", {})
-                color = stats_cfg.get("font_color", "white")
-                corner = stats_cfg.get("corner", "top-left")
-                margin_x = int(stats_cfg.get("margin_x", 20))
-                margin_y = int(stats_cfg.get("margin_y", 20))
+                # All stats fields pre-computed per settings change; avoids 4 dict lookups at 30fps
                 frame_bgr = self._overlay.render_stats(
                     frame_bgr,
                     self._stats_text,
-                    color,
-                    corner=corner,
-                    margin_x=margin_x,
-                    margin_y=margin_y,
+                    rcfg.stats_color,
+                    corner=rcfg.stats_corner,
+                    margin_x=rcfg.stats_margin_x,
+                    margin_y=rcfg.stats_margin_y,
                 )
             except Exception:
                 pass
 
         # 2c. Save stats-included frame for stream (set unconditionally so stream
         #     always has the most recent frame at this point, with or without stats).
-        self._stats_frame_to_stream = frame_bgr
-
-        # 3. Update internal buffers
-        self.frame_to_stream = frame_bgr
+        # Lock protects concurrent reads in get_stream_frame (M6).
+        with self._frame_lock:
+            self._stats_frame_to_stream = frame_bgr
+            # 3. Update internal buffers
+            self.frame_to_stream = frame_bgr
 
         # 4. Dispatch to Pygame GUI (Main Thread will pick this up)
         if self._gui_frame and hasattr(self._gui_frame, "set_frame"):
@@ -528,20 +611,27 @@ class PhotoFrameServer(iFrame):
         return self._blank_frame()
 
     def get_stream_frame(self):
-        """Return the frame for the web stream — raw (no overlay) by default."""
-        show_overlay = (
-            (self._settings or {}).get("stream", {}).get("show_overlay", False)
-        )
-        stats_show = (self._settings or {}).get("stats", {}).get("show", False)
-        if not show_overlay:
-            if stats_show:
-                stats_frame = getattr(self, "_stats_frame_to_stream", None)
-                if isinstance(stats_frame, np.ndarray) and stats_frame.size:
-                    return stats_frame
-            raw = self._raw_frame_to_stream
-            if isinstance(raw, np.ndarray) and raw.size:
-                return raw
-        return self.get_live_frame()
+        """Return the frame for the web stream — raw (no overlay) by default.
+
+        Lock is held only for the buffer reference read, not during JPEG
+        encoding (which happens in the capture loop after this returns).
+        pre-computed render config avoids nested dict lookups on every poll (M6).
+        """
+        # rcfg read is lock-free (immutable NamedTuple, atomic attribute swap)
+        rcfg = self._render_cfg
+        with self._frame_lock:
+            if not rcfg.show_overlay:
+                if rcfg.stats_show:
+                    stats_frame = self._stats_frame_to_stream
+                    if isinstance(stats_frame, np.ndarray) and stats_frame.size:
+                        return stats_frame
+                raw = self._raw_frame_to_stream
+                if isinstance(raw, np.ndarray) and raw.size:
+                    return raw
+            frame = self.frame_to_stream
+        if isinstance(frame, np.ndarray) and frame.size:
+            return frame
+        return self._blank_frame()
 
     def update_frame_to_stream(self, frame_bgr: np.ndarray) -> None:
         pass
@@ -846,10 +936,9 @@ class PhotoFrameServer(iFrame):
             self._send_frame(self.current_image)
             return False
 
-        try:
-            self.update_image_metadata(image2_path)
-        except Exception:
-            pass
+        # H3: SHA-256 + JSON I/O moved off the transition path.
+        # Enqueue path for background worker; transition proceeds immediately.
+        self._metadata_queue.put_nowait(image2_path)
 
         self.next_image = self.image_handler.resize_image_with_background(
             img2, self.screen_width, self.screen_height
@@ -898,9 +987,10 @@ class PhotoFrameServer(iFrame):
         self._send_frame(self.current_image)
 
         while self.is_running:
-            playback = self.settings_handler.get("playback", {})
-            anim_duration = playback.get("animation_duration") or 10
-            delay = playback.get("delay_between_images") or 30
+            # pre-computed per settings change; avoids playback dict lookups per slide
+            rcfg = self._render_cfg
+            anim_duration = rcfg.anim_duration
+            delay = rcfg.delay_between
 
             if anim_duration > 0:
                 is_video = self.start_image_transition(
@@ -967,6 +1057,7 @@ class PhotoFrameServer(iFrame):
 
         _join(getattr(self, "_date_time_thread", None), "DateTimeThread")
         _join(getattr(self, "_weather_thread", None), "WeatherThread")
+        _join(getattr(self, "_metadata_worker", None), "MetadataWorker")
 
         try:
             if self._gui_frame and hasattr(self._gui_frame, "stop"):
@@ -976,7 +1067,37 @@ class PhotoFrameServer(iFrame):
 
         logging.info("PhotoFrameServer.stop_services: done.")
 
-    # ------------- Metadata (server-owned) -------------
+    # ------------- Metadata background worker (H3) -------------
+
+    def _metadata_worker_loop(self) -> None:
+        """Drain _metadata_queue and call update_image_metadata off the frame path.
+
+        SHA-256 hashing and JSON I/O are expensive; moving them here lets
+        start_image_transition return immediately and keeps the compositor loop
+        unblocked. Worker runs as a daemon thread so it exits with the process.
+
+        NOTE: WebAPI uses SQLite (WebAPI/database.py) for the same metadata;
+        this JSON store (_load/_save_metadata_db) is a divergent second store.
+        A future pass should migrate update_image_metadata to SQLite and
+        remove the JSON file path entirely.
+        """
+        while True:
+            try:
+                image_path = self._metadata_queue.get(timeout=1.0)
+            except queue.Empty:
+                if not self.is_running:
+                    break
+                continue
+            try:
+                self.update_image_metadata(image_path)
+            except Exception:
+                logging.exception(
+                    "MetadataWorker: update_image_metadata failed for %r", image_path
+                )
+            finally:
+                self._metadata_queue.task_done()
+
+    # ------------- Metadata I/O (server-owned) -------------
 
     def _metadata_db_path(self) -> str:
         return os.path.join("metadata.json")

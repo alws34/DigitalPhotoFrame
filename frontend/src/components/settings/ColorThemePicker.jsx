@@ -13,7 +13,10 @@ export default function ColorThemePicker({ value, onChange }) {
         return (
           <button
             key={t.value}
+            type="button"
             title={t.label}
+            aria-label={`Select ${t.label} theme`}
+            aria-pressed={selected}
             onClick={() => onChange(t.value)}
             style={{
               width: 32,

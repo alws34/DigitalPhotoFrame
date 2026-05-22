@@ -444,6 +444,9 @@ class APIServer:
     # -----------------------------------------------------------------
 
     def _is_valid_frame(self, frame) -> bool:
+        # Superseded by _sanitize_frame which now handles all validation and
+        # normalization in _capture_loop (M6). Kept for backward compatibility
+        # with any external callers; _capture_loop no longer uses it directly.
         if not isinstance(frame, ndarray):
             return False
         if frame.dtype == object:
@@ -475,31 +478,18 @@ class APIServer:
                 got_new = self._new_frame_ev.wait(timeout=timeout)
                 if got_new:
                     self._new_frame_ev.clear()
-                    frame = self.Frame.get_stream_frame()
-
-                    if self._is_valid_frame(frame):
-                        if frame.ndim == 2:
-                            frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
-                        elif frame.ndim == 3 and frame.shape[2] == 4:
-                            frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
-
-                        if frame.dtype != np.uint8:
-                            try:
-                                frame = frame.astype(np.uint8)
-                            except Exception as e:
-                                print(
-                                    f"[Backend] cannot cast frame dtype {frame.dtype} to uint8: {e}"
-                                )
-                                frame = None
-
-                        if frame is not None:
-                            ok, jpg = cv2.imencode(
-                                ".jpg",
-                                frame,
-                                [cv2.IMWRITE_JPEG_QUALITY, self.encoding_quality],
-                            )
-                            if ok:
-                                last_jpeg = jpg.tobytes()
+                    raw = self.Frame.get_stream_frame()
+                    # Delegate all sanitization to _sanitize_frame; eliminates
+                    # inline duplication of dtype/channel checks (M6).
+                    frame = self._sanitize_frame(raw)
+                    if frame is not None:
+                        ok, jpg = cv2.imencode(
+                            ".jpg",
+                            frame,
+                            [cv2.IMWRITE_JPEG_QUALITY, self.encoding_quality],
+                        )
+                        if ok:
+                            last_jpeg = jpg.tobytes()
 
                 now = time.perf_counter()
                 if now >= next_deadline:
@@ -527,23 +517,8 @@ class APIServer:
                 print(f"[Backend] capture loop error: {e}")
                 time.sleep(0.5)
 
-    def _encode_and_queue(self, frame: ndarray):
-        frame = self._sanitize_frame(frame)
-        if frame is None:
-            return
-        success, jpg = cv2.imencode(
-            ".jpg",
-            frame,
-            [cv2.IMWRITE_JPEG_QUALITY, self.encoding_quality],
-        )
-        if not success:
-            return
-        data = jpg.tobytes()
-        try:
-            self._jpeg_queue.put_nowait(data)
-        except Full:
-            _ = self._jpeg_queue.get_nowait()
-            self._jpeg_queue.put_nowait(data)
+    # _encode_and_queue removed: it was only called from _capture_loop's
+    # old inline path, which now uses _sanitize_frame directly (M6).
 
     # -----------------------------------------------------------------
     # Settings / users / metadata

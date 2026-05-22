@@ -22,8 +22,11 @@ export default function CornerPicker({ value, onChange }) {
         return (
           <button
             key={c.value}
+            type="button"
             onClick={() => onChange(c.value)}
-            title={c.value}
+            title={c.value.replace(/-/g, ' ')}
+            aria-label={`Select ${c.value.replace(/-/g, ' ')}`}
+            aria-pressed={selected}
             style={{
               width: 44,
               height: 44,

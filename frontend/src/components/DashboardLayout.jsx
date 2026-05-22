@@ -38,8 +38,10 @@ export default function DashboardLayout() {
             </div>
           )}
           <button
+            type="button"
             onClick={() => setSidebarCollapsed(!collapsed)}
             title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
             style={{
               background: 'transparent',
               border: 'none',
@@ -107,8 +109,10 @@ export default function DashboardLayout() {
           )}
 
           <button
+            type="button"
             onClick={logout}
-            title={collapsed ? 'Sign Out' : undefined}
+            title="Sign Out"
+            aria-label="Sign Out"
             style={{
               display: 'flex',
               alignItems: 'center',
