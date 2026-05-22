@@ -1,7 +1,8 @@
-import hashlib
 import json
+import logging
 import os
 import platform
+import secrets
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -41,6 +42,7 @@ has_pyheif = False
 
 try:
     from pillow_heif import register_heif_opener
+
     register_heif_opener()
     has_pillow_heif = True
     print("[Backend] HEIF/HEIC plugin registered successfully (pillow-heif).")
@@ -51,14 +53,14 @@ except Exception as e:
     print(f"[Backend] Could not register HEIF/HEIC plugin: {e}")
     has_pillow_heif = False
 
-import logging
-
 from Utilities.config_store import load_settings as _cs_load
 from Utilities.config_store import save_settings as _cs_save
+from Utilities.image_utils import compute_image_hash as _compute_image_hash
 
 if platform.system() in ("Linux", "Darwin"):
     try:
         import pyheif
+
         has_pyheif = True
     except ImportError:
         has_pyheif = False
@@ -67,6 +69,7 @@ if platform.system() in ("Linux", "Darwin"):
 # ---------------------------------------------------------------------
 # Helpers for nested form parsing
 # ---------------------------------------------------------------------
+
 
 def _parse_value(s: str):
     if isinstance(s, bool):
@@ -99,7 +102,7 @@ def _split_bracketed(key: str):
             break
         parts.append(key[i:j])
         k = key.find("]", j + 1)
-        parts.append(key[j + 1:k])
+        parts.append(key[j + 1 : k])
         i = k + 1
     return [p for p in parts if p != ""]
 
@@ -161,6 +164,7 @@ def _assign_path(root, parts, value):
 # Backend
 # ---------------------------------------------------------------------
 
+
 class APIServer:
     def __init__(self, frame: iFrame, image_dir=None, settings_path=None):
         base = Path(__file__).parent
@@ -169,9 +173,19 @@ class APIServer:
             static_folder=str(base.parent / "frontend" / "dist"),
             static_url_path="/",
         )
-        CORS(self.app, supports_credentials=True)
-
-        env_secret = os.getenv("PHOTOFRAME_SECRET_KEY")
+        # The SPA is served by Flask itself, so production traffic is
+        # same-origin and needs no CORS header. Only the Vite dev server
+        # (a separate origin) requires cross-origin access; restrict the
+        # allowed origins to localhost dev ports instead of echoing any
+        # origin back, which would let any site make credentialed requests.
+        CORS(
+            self.app,
+            origins=[
+                "http://localhost:5173",
+                "http://127.0.0.1:5173",
+            ],
+            supports_credentials=True,
+        )
         self.app.config.update(
             SESSION_COOKIE_HTTPONLY=True,
             SESSION_COOKIE_SECURE=False,
@@ -194,7 +208,7 @@ class APIServer:
         _init_settings = _cs_load()
 
         # --- Resolve IMAGE_DIR using 'system' or root ---
-        sys_cfg = (_init_settings.get("system", {}) or {})
+        sys_cfg = _init_settings.get("system", {}) or {}
         img_cfg = (
             image_dir
             or sys_cfg.get("image_dir")
@@ -210,8 +224,10 @@ class APIServer:
 
         # --- Resolve log_file_path using 'system' or root ---
         try:
-            cfg_log_path = sys_cfg.get("log_file_path") or _init_settings.get("log_file_path")
-            
+            cfg_log_path = sys_cfg.get("log_file_path") or _init_settings.get(
+                "log_file_path"
+            )
+
             if cfg_log_path:
                 self.LOG_FILE_PATH = (
                     cfg_log_path
@@ -228,24 +244,34 @@ class APIServer:
             print(f"[Backend] Could not apply log_file_path override: {e}")
 
         backend_cfg = _init_settings.get("backend_configs") or {}
-        self.app.secret_key = env_secret or backend_cfg.get("supersecretkey", "CHANGE_ME")
+        self.app.secret_key = self._resolve_secret_key(backend_cfg)
         self.stream_h = int(backend_cfg.get("stream_height", 1080))
         self.stream_w = int(backend_cfg.get("stream_width", 1920))
         self.port = int(backend_cfg.get("server_port", 5001))
         self.host = str(backend_cfg.get("host", "0.0.0.0"))
 
         self.ALLOWED_EXTENSIONS = {
-            ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tiff", ".webp",
-            ".heic", ".heif", ".mov", ".mp4"
+            ".png",
+            ".jpg",
+            ".jpeg",
+            ".gif",
+            ".bmp",
+            ".tiff",
+            ".webp",
+            ".heic",
+            ".heif",
+            ".mov",
+            ".mp4",
         }
         self.SELECTED_COLOR = "#ffcccc"
 
         self.latest_metadata = {}
         self._metadata_lock = threading.Lock()
         self._ensure_storage_files()
-        
+
         # Initialize SQLite DB and migrate metadata.json if needed
         from WebAPI.database import init_db, migrate_jsons_if_needed
+
         init_db()
         migrate_jsons_if_needed(self.METADATA_FILE)
 
@@ -295,7 +321,9 @@ class APIServer:
             try:
                 frame = frame.astype(np.uint8)
             except Exception as e:
-                print(f"[Backend] _sanitize_frame: cannot cast dtype {frame.dtype} to uint8: {e}")
+                print(
+                    f"[Backend] _sanitize_frame: cannot cast dtype {frame.dtype} to uint8: {e}"
+                )
                 return None
 
         return frame
@@ -336,6 +364,61 @@ class APIServer:
         base = os.path.dirname(os.path.dirname(__file__))
         return os.path.abspath(os.path.join(base, path))
 
+    # Known insecure placeholder values that must never be used as a real key.
+    _INSECURE_SECRET_KEYS = frozenset(
+        {
+            "",
+            "CHANGE_ME",
+            "CHANGE_ME_IN_PRODUCTION",
+            "supersecretkey",
+        }
+    )
+
+    def _resolve_secret_key(self, backend_cfg: dict) -> str:
+        """Resolve the Flask secret key with a safe fallback.
+
+        Priority: PHOTOFRAME_SECRET_KEY env var, then the configured
+        supersecretkey setting. If neither yields a strong value, a random
+        key is generated, persisted to a local file (git-ignored), and
+        reused on subsequent startups so sessions survive restarts.
+        """
+        env_secret = (os.getenv("PHOTOFRAME_SECRET_KEY") or "").strip()
+        if env_secret and env_secret not in self._INSECURE_SECRET_KEYS:
+            return env_secret
+
+        cfg_secret = str(backend_cfg.get("supersecretkey", "") or "").strip()
+        if cfg_secret and cfg_secret not in self._INSECURE_SECRET_KEYS:
+            return cfg_secret
+
+        # Fall back to a persisted, randomly generated key.
+        key_path = self.set_absolute_paths(".pf_secret_key")
+        try:
+            if os.path.exists(key_path):
+                with open(key_path, "r", encoding="utf-8") as f:
+                    stored = f.read().strip()
+                if stored and stored not in self._INSECURE_SECRET_KEYS:
+                    return stored
+        except Exception as e:
+            print(f"[Backend] Could not read {key_path}: {e}")
+
+        new_key = secrets.token_hex(32)
+        try:
+            with open(key_path, "w", encoding="utf-8") as f:
+                f.write(new_key)
+            try:
+                os.chmod(key_path, 0o600)
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"[Backend] Could not persist generated secret key: {e}")
+        logging.warning(
+            "[Backend] No secure secret key configured; generated a new "
+            "random key (stored at %s). Set PHOTOFRAME_SECRET_KEY or "
+            "backend_configs.supersecretkey for a stable key.",
+            key_path,
+        )
+        return new_key
+
     def _ensure_storage_files(self) -> None:
         os.makedirs(self.IMAGE_DIR, exist_ok=True)
 
@@ -364,15 +447,21 @@ class APIServer:
         if not isinstance(frame, ndarray):
             return False
         if frame.dtype == object:
-            print(f"[Backend] _capture_loop: got dtype=object, shape={frame.shape}, skipping")
+            print(
+                f"[Backend] _capture_loop: got dtype=object, shape={frame.shape}, skipping"
+            )
             return False
         if frame.ndim not in (2, 3):
-            print(f"[Backend] _capture_loop: unexpected ndim={frame.ndim}, shape={frame.shape}")
+            print(
+                f"[Backend] _capture_loop: unexpected ndim={frame.ndim}, shape={frame.shape}"
+            )
             return False
         return True
 
     def _capture_loop(self):
-        idle_fps = float((_cs_load().get("backend_configs") or {}).get("idle_fps", 5)) or 5.0
+        idle_fps = (
+            float((_cs_load().get("backend_configs") or {}).get("idle_fps", 5)) or 5.0
+        )
         interval = 1.0 / max(0.1, idle_fps)
 
         last_jpeg = self._make_heartbeat_jpeg(self.stream_w, self.stream_h)
@@ -398,7 +487,9 @@ class APIServer:
                             try:
                                 frame = frame.astype(np.uint8)
                             except Exception as e:
-                                print(f"[Backend] cannot cast frame dtype {frame.dtype} to uint8: {e}")
+                                print(
+                                    f"[Backend] cannot cast frame dtype {frame.dtype} to uint8: {e}"
+                                )
                                 frame = None
 
                         if frame is not None:
@@ -413,7 +504,9 @@ class APIServer:
                 now = time.perf_counter()
                 if now >= next_deadline:
                     if last_jpeg is None:
-                        last_jpeg = self._make_heartbeat_jpeg(self.stream_w, self.stream_h)
+                        last_jpeg = self._make_heartbeat_jpeg(
+                            self.stream_w, self.stream_h
+                        )
 
                     self._last_jpeg = last_jpeg
 
@@ -463,7 +556,9 @@ class APIServer:
         _cs_save(data)
 
     def allowed_file(self, filename):
-        return "." in filename and Path(filename).suffix.lower() in self.ALLOWED_EXTENSIONS
+        return (
+            "." in filename and Path(filename).suffix.lower() in self.ALLOWED_EXTENSIONS
+        )
 
     def get_images_from_directory(self):
         root = Path(self.IMAGE_DIR)
@@ -478,10 +573,12 @@ class APIServer:
 
     def load_metadata_db(self):
         from WebAPI.database import get_all_metadata
+
         return get_all_metadata()
 
     def save_metadata_db(self, data):
         from WebAPI.database import delete_metadata, get_all_metadata, update_metadata
+
         current_data = get_all_metadata()
         for h, d in data.items():
             update_metadata(h, d)
@@ -490,11 +587,7 @@ class APIServer:
                 delete_metadata(h)
 
     def compute_image_hash(self, image_path):
-        hash_obj = hashlib.sha256()
-        with open(image_path, "rb") as f:
-            for chunk in iter(lambda: f.read(4096), b""):
-                hash_obj.update(chunk)
-        return hash_obj.hexdigest()
+        return _compute_image_hash(image_path)
 
     # -----------------------------------------------------------------
     # Metadata update APIs (shared with older code)
@@ -502,9 +595,10 @@ class APIServer:
 
     def update_image_metadata(self, image_path):
         from WebAPI.database import get_metadata, update_metadata
+
         image_hash = self.compute_image_hash(image_path)
         existing = get_metadata(image_hash)
-        
+
         if existing:
             entry = existing
         else:
@@ -528,6 +622,7 @@ class APIServer:
 
     def mjpeg_stream(self, screen_w, screen_h):
         from queue import Empty
+
         boundary_line = b"--frame\r\n"
         while self.Frame.get_is_running():
             try:
@@ -552,7 +647,7 @@ class APIServer:
         Generates a thumbnail. Handles both Images (PIL) and Videos (OpenCV).
         """
         ext = os.path.splitext(src_path)[1].lower()
-        
+
         # 1. Handle Videos
         if ext in (".mov", ".mp4"):
             self._make_video_thumb(src_path, dst_path, w)
@@ -565,7 +660,7 @@ class APIServer:
                 ratio = w / float(im.width)
                 h = max(1, int(im.height * ratio))
                 im = im.resize((w, h), Image.Resampling.LANCZOS)
-                
+
                 os.makedirs(os.path.dirname(dst_path), exist_ok=True)
                 im.save(dst_path, "WEBP", quality=75, method=6)
         except Exception as e:
@@ -576,21 +671,21 @@ class APIServer:
             cap = cv2.VideoCapture(src_path)
             if not cap.isOpened():
                 return
-            
+
             ret, frame = cap.read()
             cap.release()
-            
+
             if ret and frame is not None:
                 h_orig, w_orig = frame.shape[:2]
                 ratio = w / float(w_orig)
                 h = max(1, int(h_orig * ratio))
-                
+
                 frame = cv2.resize(frame, (w, h), interpolation=cv2.INTER_AREA)
                 os.makedirs(os.path.dirname(dst_path), exist_ok=True)
                 cv2.imwrite(dst_path, frame, [cv2.IMWRITE_WEBP_QUALITY, 75])
         except Exception as e:
             print(f"[Backend] Video thumb generation failed for {src_path}: {e}")
-            
+
     def _make_heartbeat_jpeg(self, w, h):
         try:
             img = np.zeros(
@@ -616,7 +711,8 @@ class APIServer:
         return (
             b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x00\x00\x01\x00\x01\x00\x00"
             b"\xff\xdb\x00C\x00"
-            + b"\x08" * 64
+            + b"\x08"
+            * 64
             + b"\xff\xc0\x00\x11\x08\x00\x10\x00\x10\x03\x01\x22\x00\x02\x11\x01\x03\x11\x01"
             b"\xff\xc4\x00\x14\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
             b"\xff\xda\x00\x0c\x03\x01\x00\x02\x11\x03\x11\x00?\x00"
@@ -632,33 +728,37 @@ class APIServer:
         self.app.config["restart_fn"] = fn
 
     def setup_routes(self):
-        self.app.config['backend'] = self
-        self.app.config['restart_fn'] = None
-        
+        self.app.config["backend"] = self
+        self.app.config["restart_fn"] = None
+
         # --- RFC 9457 Error Handlers ---
         @self.app.errorhandler(HTTPException)
         def handle_exception(e):
             # SPA fallback: serve index.html for 404s on non-API routes
             if e.code == 404 and not request.path.startswith("/api/"):
                 return send_from_directory(self.app.static_folder, "index.html")
-            response = jsonify({
-                "title": e.name,
-                "status": e.code,
-                "detail": e.description,
-                "instance": request.path
-            })
+            response = jsonify(
+                {
+                    "title": e.name,
+                    "status": e.code,
+                    "detail": e.description,
+                    "instance": request.path,
+                }
+            )
             response.content_type = "application/problem+json"
             return response, e.code
 
         @self.app.errorhandler(Exception)
         def handle_unexpected_error(e):
             logging.exception("Unexpected error: %s", e)
-            response = jsonify({
-                "title": "Internal Server Error",
-                "status": 500,
-                "detail": "An unexpected error occurred.",
-                "instance": request.path
-            })
+            response = jsonify(
+                {
+                    "title": "Internal Server Error",
+                    "status": 500,
+                    "detail": "An unexpected error occurred.",
+                    "instance": request.path,
+                }
+            )
             response.content_type = "application/problem+json"
             return response, 500
 
@@ -678,13 +778,55 @@ class APIServer:
         self.app.register_blueprint(maintenance_bp)
         self.app.register_blueprint(sources_bp)
         self.app.register_blueprint(albums_bp)
-        
-        @self.app.route('/', defaults={'path': ''})
-        @self.app.route('/<path:path>')
+
+        # --- CSRF enforcement for state-changing API requests ---
+        # Any non-idempotent request under these prefixes must carry a valid
+        # CSRF token (X-CSRF-Token header or csrf_token form field) that
+        # matches the one minted into the session at login.
+        _CSRF_PROTECTED_PREFIXES = (
+            "/api/settings",
+            "/api/images",
+            "/api/albums",
+            "/api/sources",
+            "/api/maintenance",
+        )
+
+        @self.app.before_request
+        def _enforce_csrf():
+            if request.method not in ("POST", "PUT", "PATCH", "DELETE"):
+                return None
+            path = request.path
+            if not any(path.startswith(p) for p in _CSRF_PROTECTED_PREFIXES):
+                return None
+            try:
+                self._require_csrf()
+            except PermissionError:
+                return jsonify({"error": "Invalid or missing CSRF token."}), 403
+            return None
+
+        @self.app.after_request
+        def _expose_csrf_cookie(response):
+            # Mirror the session CSRF token into a JS-readable cookie so the
+            # SPA can echo it back in the X-CSRF-Token header. The token is
+            # not secret on its own — security comes from it matching the
+            # value bound to the HttpOnly session cookie.
+            token = session.get("_csrf_token")
+            if token:
+                response.set_cookie(
+                    "XSRF-TOKEN",
+                    token,
+                    secure=False,
+                    httponly=False,
+                    samesite="Lax",
+                )
+            return response
+
+        @self.app.route("/", defaults={"path": ""})
+        @self.app.route("/<path:path>")
         def serve_react(path):
             if path and os.path.exists(os.path.join(self.app.static_folder, path)):
                 return send_from_directory(self.app.static_folder, path)
-            return send_from_directory(self.app.static_folder, 'index.html')
+            return send_from_directory(self.app.static_folder, "index.html")
 
     # -----------------------------------------------------------------
     # HEIC conversion
@@ -697,11 +839,14 @@ class APIServer:
         try:
             img_dir = Path(self.IMAGE_DIR)
             if not img_dir.is_dir():
-                print(f"[Backend] IMAGE_DIR does not exist or is not a directory: {img_dir}")
+                print(
+                    f"[Backend] IMAGE_DIR does not exist or is not a directory: {img_dir}"
+                )
                 return
 
             heic_files = [
-                p for p in img_dir.rglob("*")
+                p
+                for p in img_dir.rglob("*")
                 if p.is_file() and p.suffix.lower() in (".heic", ".heif")
             ]
 
@@ -724,15 +869,18 @@ class APIServer:
                     try:
                         self.store_image_metadata(out_path)
                     except Exception as e:
-                        print(f"[Backend] Could not update metadata for {out_path}: {e}")
+                        print(
+                            f"[Backend] Could not update metadata for {out_path}: {e}"
+                        )
 
             print("[Backend] HEIC normalization complete.")
 
         except Exception as e:
             print(f"[Backend] normalize_existing_heic_images failed: {e}")
 
-
-    def convert_heic_to_png(self, heic_path: str, output_path: str | None = None) -> str:
+    def convert_heic_to_png(
+        self, heic_path: str, output_path: str | None = None
+    ) -> str:
         if output_path is None:
             base, _ = os.path.splitext(heic_path)
             output_path = base + ".png"
@@ -769,6 +917,7 @@ class APIServer:
 
     def start(self):
         import socket as _socket
+
         host = self.host or "0.0.0.0"
         for attempt in range(10):
             try:
@@ -778,7 +927,9 @@ class APIServer:
                 s.close()
                 break
             except OSError:
-                print(f"[Backend] Port {self.port} busy, retrying in 3s ({attempt + 1}/10)…")
+                print(
+                    f"[Backend] Port {self.port} busy, retrying in 3s ({attempt + 1}/10)…"
+                )
                 time.sleep(3)
         self.app.run(
             host=host,

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { Expand, Maximize, Layers } from 'lucide-react';
+import { withCsrf } from '../csrf';
 
 const POLL_INTERVAL_MS = 200; // 5 fps — sufficient for photo frame monitoring
 
@@ -69,12 +70,11 @@ export default function StreamView() {
               try {
                 const res = await fetch('/api/settings', { credentials: 'include' });
                 const current = await res.json();
-                await fetch('/api/settings', {
+                await fetch('/api/settings', withCsrf({
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  credentials: 'include',
                   body: JSON.stringify({ ...current, stream: { ...(current.stream ?? {}), show_overlay: next } }),
-                });
+                }));
               // eslint-disable-next-line no-empty
               } catch {}
             }}

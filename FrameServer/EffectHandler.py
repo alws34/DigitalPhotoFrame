@@ -2,25 +2,25 @@
 # endregion Importing Effects
 import random as rand
 
-from Effects.AlphaDissolveEffect import AlphaDissolveEffect
-from Effects.BarnDoorCloseEffect import BarnDoorCloseEffect
-from Effects.BarnDoorOpenEffect import BarnDoorOpenEffect
-from Effects.BlindsEffect import BlindsEffect
-from Effects.CheckerboardEffect import CheckerboardEffect
-from Effects.CrossZoomEffect import CrossZoomEffect
-from Effects.IrisCloseEffect import IrisCloseEffect
-from Effects.IrisOpenEffect import IrisOpenEffect
-from Effects.LinearEffect import LinearEffect
-from Effects.LumaWipeEffect import LumaWipeEffect
-from Effects.PixelDissolveEffect import PixelDissolveEffect
-from Effects.ScrollEffect import ScrollEffect
-from Effects.ShrinkEffect import ShrinkEffect
-from Effects.SoftWipeEffect import SoftWipeEffect
-from Effects.StretchEffect import StretchEffect
-from Effects.WipeEffect import WipeEffect
-from Effects.ZoomBlurEffect import ZoomBlurEffect
-from Effects.ZoomInEffect import ZoomInEffect
-from Effects.ZoomOutEffect import ZoomOutEffect
+from FrameServer.Effects.AlphaDissolveEffect import AlphaDissolveEffect
+from FrameServer.Effects.BarnDoorCloseEffect import BarnDoorCloseEffect
+from FrameServer.Effects.BarnDoorOpenEffect import BarnDoorOpenEffect
+from FrameServer.Effects.BlindsEffect import BlindsEffect
+from FrameServer.Effects.CheckerboardEffect import CheckerboardEffect
+from FrameServer.Effects.CrossZoomEffect import CrossZoomEffect
+from FrameServer.Effects.IrisCloseEffect import IrisCloseEffect
+from FrameServer.Effects.IrisOpenEffect import IrisOpenEffect
+from FrameServer.Effects.LinearEffect import LinearEffect
+from FrameServer.Effects.LumaWipeEffect import LumaWipeEffect
+from FrameServer.Effects.PixelDissolveEffect import PixelDissolveEffect
+from FrameServer.Effects.ScrollEffect import ScrollEffect
+from FrameServer.Effects.ShrinkEffect import ShrinkEffect
+from FrameServer.Effects.SoftWipeEffect import SoftWipeEffect
+from FrameServer.Effects.StretchEffect import StretchEffect
+from FrameServer.Effects.WipeEffect import WipeEffect
+from FrameServer.Effects.ZoomBlurEffect import ZoomBlurEffect
+from FrameServer.Effects.ZoomInEffect import ZoomInEffect
+from FrameServer.Effects.ZoomOutEffect import ZoomOutEffect
 
 
 class EffectHandler:
@@ -43,15 +43,17 @@ class EffectHandler:
             14: LinearEffect,
             15: LumaWipeEffect,
             16: SoftWipeEffect,
-            #17: RippleEffect,
-            #18: SpinZoomFadeEffect,
+            # 17: RippleEffect,
+            # 18: SpinZoomFadeEffect,
             19: CrossZoomEffect,
             20: ZoomBlurEffect,
             # 21: SwirlEffect,
             # 22: PlainEffect
         }
-        self.current_effect_idx = -1
-        
+        self._shuffled_effects = list(self.effects.keys())
+        rand.shuffle(self._shuffled_effects)
+        self._effect_idx = 0
+
     def get_effects(self):
         return self.effects
 
@@ -61,11 +63,10 @@ class EffectHandler:
         return keys
 
     def get_random_effect(self):
-        '''Returns a different effect each time.'''
-        shuffled_effects = list(self.effects.keys())
-        if len(shuffled_effects) == 0:
-            shuffled_effects = list(self.effects.keys())
-        rand.shuffle(shuffled_effects)
-        self.current_effect_idx = (
-            self.current_effect_idx + 1) % len(shuffled_effects)
-        return shuffled_effects[self.current_effect_idx]
+        """Return a different effect each time; reshuffle only when the deck is exhausted."""
+        if self._effect_idx >= len(self._shuffled_effects):
+            rand.shuffle(self._shuffled_effects)
+            self._effect_idx = 0
+        effect = self._shuffled_effects[self._effect_idx]
+        self._effect_idx += 1
+        return effect

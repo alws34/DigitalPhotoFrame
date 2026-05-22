@@ -10,7 +10,7 @@ maintenance_bp = Blueprint("maintenance_bp", __name__, url_prefix="/api/maintena
 @maintenance_bp.route("/restart", methods=["POST"])
 def restart_service():
     backend = current_app.config.get("backend")
-    if backend and not backend.is_authenticated():
+    if not backend or not backend.is_authenticated():
         return jsonify({"error": "unauthorized"}), 401
 
     restart_fn = current_app.config.get("restart_fn")

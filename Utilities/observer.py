@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
+from Utilities.media_types import SUPPORTED_MEDIA_EXTENSIONS
+
 if TYPE_CHECKING:
     from FrameServer.PhotoFrameServer import iFrame
 
@@ -21,6 +23,7 @@ class iBoserver(ABC):
     @abstractmethod
     def reload_images(self) -> int: ...
 
+
 class ImageChangeHandler(FileSystemEventHandler):
     def __init__(self, observer: "ImagesObserver", images_dir: str):
         self.observer = observer
@@ -29,6 +32,7 @@ class ImageChangeHandler(FileSystemEventHandler):
     # Any create/delete/move triggers the coalescing event.
     def on_any_event(self, event):
         self.observer._notify_fs_event()
+
 
 class ImagesObserver(iBoserver):
     def __init__(self, frame: "iFrame", images_dir: str = "Images"):
@@ -48,7 +52,9 @@ class ImagesObserver(iBoserver):
 
     def start_observer(self):
         if self._started:
-            self.frame.send_log_message("Directory observer already started; skipping.", logging.DEBUG)
+            self.frame.send_log_message(
+                "Directory observer already started; skipping.", logging.DEBUG
+            )
             return
 
         # Initial load
@@ -117,14 +123,18 @@ class ImagesObserver(iBoserver):
             try:
                 self.reload_images()
             except Exception:
-                self.frame.send_log_message("ImagesObserver: reload failed", logging.ERROR)
+                self.frame.send_log_message(
+                    "ImagesObserver: reload failed", logging.ERROR
+                )
 
     def reload_images(self) -> int:
         new_list = self.get_images_from_directory()
         # Compare by set to ignore ordering-only differences
         if set(new_list) != set(self.images):
             self.images = new_list
-            self.frame.send_log_message(f"Images changed. Now tracking {len(self.images)} images.", logging.INFO)
+            self.frame.send_log_message(
+                f"Images changed. Now tracking {len(self.images)} images.", logging.INFO
+            )
             # Ask the frame to refresh its own list/shuffle, but do not restart transitions
             try:
                 if hasattr(self.frame, "update_images_list"):
@@ -134,10 +144,9 @@ class ImagesObserver(iBoserver):
         return len(self.images)
 
     def get_images_from_directory(self) -> list:
-        valid_extensions = (".jpg", ".jpeg", ".png", ".gif", ".bmp", ".heic", ".heif")
         images = []
         for root, _, files in os.walk(self.images_dir):
             for file in files:
-                if file.lower().endswith(valid_extensions):
+                if file.lower().endswith(SUPPORTED_MEDIA_EXTENSIONS):
                     images.append(os.path.join(root, file))
         return images

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Loader2, RefreshCw, Trash2, Plus, BookImage, FolderOpen, Check, X, ChevronDown } from 'lucide-react';
+import { withCsrf } from '../csrf';
 
 // ---------------------------------------------------------------------------
 // Mock data — used as fallback when API is not yet implemented
@@ -118,23 +119,21 @@ function GooglePhotosModal({ onClose, onAdd }) {
     setErr('');
     try {
       // 1. Create source
-      const createRes = await fetch('/api/sources', {
+      const createRes = await fetch('/api/sources', withCsrf({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({ type: 'google_photos', name }),
-      });
+      }));
       if (!createRes.ok) throw new Error(await createRes.text());
       const created = await createRes.json();
 
       // 2. Start OAuth — compute redirect URI from current origin
       const redir = `${window.location.origin}/api/sources/${created.id}/auth/callback`;
-      const authRes = await fetch(`/api/sources/${created.id}/auth/start`, {
+      const authRes = await fetch(`/api/sources/${created.id}/auth/start`, withCsrf({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({ client_id: clientId, client_secret: clientSecret, redirect_uri: redir }),
-      });
+      }));
       if (!authRes.ok) throw new Error(await authRes.text());
       const { redirect_url } = await authRes.json();
 
@@ -230,17 +229,16 @@ function ImmichModal({ onClose, onAdd }) {
     setBusy(true);
     setErr('');
     try {
-      const res = await fetch('/api/sources', {
+      const res = await fetch('/api/sources', withCsrf({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({
           type: 'immich',
           name,
           config: { base_url: baseUrl },
           credentials: { api_key: apiKey },
         }),
-      });
+      }));
       if (!res.ok) throw new Error(await res.text());
       const created = await res.json();
       onAdd(created);
@@ -337,16 +335,15 @@ function BrowsePanel({ source, subscribedAlbums, onSubscribe, onClose }) {
   const handleSubscribe = async (album) => {
     setSubscribing(album.remote_id);
     try {
-      const res = await fetch('/api/albums', {
+      const res = await fetch('/api/albums', withCsrf({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({
           source_id: source.id,
           remote_id: album.remote_id,
           name: album.name,
         }),
-      });
+      }));
       if (!res.ok) throw new Error(await res.text());
       const created = await res.json();
       onSubscribe(created);
@@ -445,10 +442,9 @@ function SourceCard({ source, albums, onSynced, onRemoved, onUnsubscribe, onSubs
   const handleSync = async () => {
     setSyncing(true);
     try {
-      const res = await fetch(`/api/sources/${source.id}/sync`, {
+      const res = await fetch(`/api/sources/${source.id}/sync`, withCsrf({
         method: 'POST',
-        credentials: 'include',
-      });
+      }));
       if (!res.ok) throw new Error(await res.text());
       onSynced(source.id);
     } catch (e) {
@@ -463,10 +459,9 @@ function SourceCard({ source, albums, onSynced, onRemoved, onUnsubscribe, onSubs
     if (!window.confirm(`Remove source "${source.name}" and all its subscribed albums?`)) return;
     setRemoving(true);
     try {
-      const res = await fetch(`/api/sources/${source.id}`, {
+      const res = await fetch(`/api/sources/${source.id}`, withCsrf({
         method: 'DELETE',
-        credentials: 'include',
-      });
+      }));
       if (!res.ok) throw new Error(await res.text());
       onRemoved(source.id);
     } catch (e) {
@@ -479,10 +474,9 @@ function SourceCard({ source, albums, onSynced, onRemoved, onUnsubscribe, onSubs
   const handleUnsubscribe = async (album) => {
     if (!window.confirm(`Unsubscribe from "${album.name}"? Local files will be removed.`)) return;
     try {
-      const res = await fetch(`/api/albums/${encodeURIComponent(album.id)}`, {
+      const res = await fetch(`/api/albums/${encodeURIComponent(album.id)}`, withCsrf({
         method: 'DELETE',
-        credentials: 'include',
-      });
+      }));
       if (!res.ok) throw new Error(await res.text());
       onUnsubscribe(album.id);
     } catch (e) {
@@ -701,12 +695,11 @@ export default function AlbumsView() {
   const handleActiveChange = async (albumId) => {
     setSettingActive(true);
     try {
-      const res = await fetch('/api/albums/active', {
+      const res = await fetch('/api/albums/active', withCsrf({
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({ album_id: albumId }),
-      });
+      }));
       if (!res.ok) throw new Error(await res.text());
       const updated = await res.json();
       setActiveAlbum(updated);
@@ -724,12 +717,11 @@ export default function AlbumsView() {
 
   const handleAddLocal = async () => {
     try {
-      const res = await fetch('/api/sources', {
+      const res = await fetch('/api/sources', withCsrf({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({ type: 'local', name: 'Local Folder' }),
-      });
+      }));
       if (!res.ok) throw new Error(await res.text());
       const created = await res.json();
       setSources((prev) => [...prev, created]);

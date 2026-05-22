@@ -1,5 +1,4 @@
 # region imports
-import hashlib
 import itertools
 import json
 import logging
@@ -7,28 +6,25 @@ import math
 import os
 import os as _os
 import random as rand
-import sys
 import threading
 import time
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from enum import Enum
 
-# Ensure FrameServer's own directory is on the path for bare sibling imports
-sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
 import cv2
 import numpy as np
 import psutil
-from EffectHandler import EffectHandler
-from image_handler import Image_Utils
-from overlay import OverlayRenderer
 from pillow_heif import register_heif_opener
 
+from FrameServer.EffectHandler import EffectHandler
+from FrameServer.image_handler import Image_Utils
+from FrameServer.overlay import OverlayRenderer
 from Utilities.brightness import get_brightness_percent
 from Utilities.config_events import on_settings_changed
 from Utilities.config_store import load_settings as _load_settings
+from Utilities.image_utils import compute_image_hash as _compute_image_hash
+from Utilities.media_types import SUPPORTED_MEDIA_EXTENSIONS
 from Utilities.observer import ImagesObserver
 from Utilities.Weather.weather_adapter import build_weather_client
 
@@ -73,21 +69,7 @@ class iFrame(ABC):
         pass
 
 
-# region Logging Setup
-log_file_path = os.path.join(os.path.dirname(__file__), "PhotoFrame.log")
-logging.basicConfig(
-    filename=log_file_path,
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S"
-)
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.INFO)
-console_formatter = logging.Formatter("%(levelname)s - %(message)s")
-console_handler.setFormatter(console_formatter)
-logging.getLogger().addHandler(console_handler)
-logging.info("PhotoFrame server starting...")
-# endregion Logging Setup
+logger = logging.getLogger(__name__)
 
 SETTINGS_PATH = ""
 
@@ -106,7 +88,14 @@ class PhotoFrameServer(iFrame):
     Client displays frames only.
     """
 
-    def __init__(self, width=1920, height=1080, iframe: iFrame = None, images_dir=None, settings_path="settings.json"):
+    def __init__(
+        self,
+        width=1920,
+        height=1080,
+        iframe: iFrame = None,
+        images_dir=None,
+        settings_path="settings.json",
+    ):
         global SETTINGS_PATH
         SETTINGS_PATH = settings_path
         self._gui_frame = iframe
@@ -126,19 +115,17 @@ class PhotoFrameServer(iFrame):
         if not self.set_images_dir(images_dir=images_dir):
             logging.error("Failed to set images directory. Exiting.")
             raise FileNotFoundError(
-                "Images directory not found and could not be created.")
+                "Images directory not found and could not be created."
+            )
 
         self.screen_width = width
         self.screen_height = height
 
-        # --- FPS from 'playback' or root ---
+        # --- FPS from 'playback' ---
         playback = self._settings.get("playback", {})
-        self._target_fps = int(playback.get(
-            "animation_fps") or self._settings.get("animation_fps") or 30)
-        self._transition_fps = int(playback.get(
-            "transition_fps") or self._settings.get("transition_fps") or 30)
-        self._transition_frame_interval = 1.0 / \
-            max(1.0, float(self._transition_fps))
+        self._target_fps = int(playback.get("animation_fps") or 30)
+        self._transition_fps = int(playback.get("transition_fps") or 30)
+        self._transition_frame_interval = 1.0 / max(1.0, float(self._transition_fps))
 
         self.current_image_idx = 0
         self.current_effect_idx = 0
@@ -167,12 +154,12 @@ class PhotoFrameServer(iFrame):
                 time_font_size=int(ui_cfg.get("time_font_size", 80)),
                 date_font_size=int(ui_cfg.get("date_font_size", 60)),
                 stats_font_size=int(
-                    (self._settings.get("stats", {}) or {}).get("font_size", 20)),
+                    (self._settings.get("stats", {}) or {}).get("font_size", 20)
+                ),
                 desired_size=(self.screen_width, self.screen_height),
             )
         except Exception:
-            logging.exception(
-                "Failed to create OverlayRenderer; overlays disabled")
+            logging.exception("Failed to create OverlayRenderer; overlays disabled")
             self._overlay = None
         self._weather_data = {}
         self._weather_lock = threading.Lock()
@@ -237,12 +224,11 @@ class PhotoFrameServer(iFrame):
             if reload_from_disk:
                 self._settings = _load_settings()
             playback = self._settings.get("playback", {}) or {}
-            self._target_fps = int(playback.get(
-                "animation_fps") or self._settings.get("animation_fps") or 30)
-            self._transition_fps = int(playback.get(
-                "transition_fps") or self._settings.get("transition_fps") or 30)
-            self._transition_frame_interval = 1.0 / \
-                max(1.0, float(self._transition_fps))
+            self._target_fps = int(playback.get("animation_fps") or 30)
+            self._transition_fps = int(playback.get("transition_fps") or 30)
+            self._transition_frame_interval = 1.0 / max(
+                1.0, float(self._transition_fps)
+            )
 
     def _on_settings_changed(self, new_data: dict) -> None:
         with self._settings_lock:
@@ -252,10 +238,8 @@ class PhotoFrameServer(iFrame):
 
         playback = new_data.get("playback", {})
         self._target_fps = int(playback.get("animation_fps", 30))
-        self._transition_fps = int(playback.get(
-            "transition_fps", self._target_fps))
-        self._transition_frame_interval = 1.0 / \
-            max(1.0, float(self._transition_fps))
+        self._transition_fps = int(playback.get("transition_fps", self._target_fps))
+        self._transition_frame_interval = 1.0 / max(1.0, float(self._transition_fps))
 
         # Rebuild overlay so font size / panel changes take effect immediately
         ui_cfg = new_data.get("ui", {}) or {}
@@ -270,7 +254,9 @@ class PhotoFrameServer(iFrame):
                 font_path=font_path,
                 time_font_size=int(ui_cfg.get("time_font_size", 80)),
                 date_font_size=int(ui_cfg.get("date_font_size", 60)),
-                stats_font_size=int((new_data.get("stats", {}) or {}).get("font_size", 20)),
+                stats_font_size=int(
+                    (new_data.get("stats", {}) or {}).get("font_size", 20)
+                ),
                 desired_size=(self.screen_width, self.screen_height),
             )
         except Exception:
@@ -307,13 +293,10 @@ class PhotoFrameServer(iFrame):
             self.update_images_list()
             # Keep shuffle stable if empty; otherwise reshuffle for new content
             if len(self.images) > 0:
-                self.shuffled_images = self.image_handler.shuffle_images(
-                    self.images)
-            logging.info(
-                "Images directory changed. Found %d images.", len(self.images))
+                self.shuffled_images = self.image_handler.shuffle_images(self.images)
+            logging.info("Images directory changed. Found %d images.", len(self.images))
         except Exception:
-            logging.exception(
-                "Failed to update images list after directory change")
+            logging.exception("Failed to update images list after directory change")
 
     def start_date_time_loop(self):
         # runs in a worker thread, not the GUI thread
@@ -325,8 +308,9 @@ class PhotoFrameServer(iFrame):
             time.sleep(1)
 
     def _start_local_weather_loop(self) -> None:
-        poll_sec = int(self._settings.get(
-            "weather_poll_seconds", 900))  # default 15 min
+        poll_sec = int(
+            self._settings.get("weather_poll_seconds", 900)
+        )  # default 15 min
 
         def _weather_loop():
             while not self._weather_stop.is_set():
@@ -343,7 +327,8 @@ class PhotoFrameServer(iFrame):
                 self._weather_stop.wait(poll_sec)
 
         self._weather_thread = threading.Thread(
-            target=_weather_loop, name="WeatherThread", daemon=True)
+            target=_weather_loop, name="WeatherThread", daemon=True
+        )
         self._weather_thread.start()
 
     def _stop_weather_loop(self) -> None:
@@ -362,8 +347,11 @@ class PhotoFrameServer(iFrame):
         h, w = frame_bgr.shape[:2]
         if w != self.screen_width or h != self.screen_height:
             # Use fast cv2.resize only if the compositor failed to provide correct size
-            frame_bgr = cv2.resize(frame_bgr, (self.screen_width, self.screen_height),
-                                   interpolation=cv2.INTER_LINEAR)
+            frame_bgr = cv2.resize(
+                frame_bgr,
+                (self.screen_width, self.screen_height),
+                interpolation=cv2.INTER_LINEAR,
+            )
 
         # 2. Bake Overlay (Date/Time/Weather)
         # Save raw frame before overlay so stream can serve clean frames.
@@ -378,8 +366,7 @@ class PhotoFrameServer(iFrame):
 
                 # Fetch settings once per refresh
                 margins = ui_cfg.get("margins", {}).copy()
-                margins.setdefault("spacing_between",
-                                   ui_cfg.get("spacing_between", 50))
+                margins.setdefault("spacing_between", ui_cfg.get("spacing_between", 50))
 
                 with self._weather_lock:
                     weather = self._weather_data if show_weather else {}
@@ -388,7 +375,9 @@ class PhotoFrameServer(iFrame):
                 datetime_corner = ui_cfg.get("datetime_corner", "bottom-left")
                 weather_corner = ui_cfg.get("weather_corner", "bottom-right")
                 frame_bgr = self._overlay.render_datetime_and_weather(
-                    frame_bgr, margins, weather,
+                    frame_bgr,
+                    margins,
+                    weather,
                     datetime_corner=datetime_corner,
                     weather_corner=weather_corner,
                     font_color=(255, 255, 255),
@@ -399,7 +388,7 @@ class PhotoFrameServer(iFrame):
                 pass
 
         # 2b. Stats overlay (CPU/RAM/Temp/Disk/Brightness)
-        if self._overlay and self._settings.get('stats', {}).get('show', False):
+        if self._overlay and self._settings.get("stats", {}).get("show", False):
             try:
                 now_ts = time.time()
                 if now_ts - self._stats_last_refresh >= 5.0:
@@ -409,7 +398,13 @@ class PhotoFrameServer(iFrame):
                         temps = psutil.sensors_temperatures()
                         temp_val = None
                         if temps:
-                            for key in ("coretemp", "cpu_thermal", "cpu-thermal", "k10temp", "acpitz"):
+                            for key in (
+                                "coretemp",
+                                "cpu_thermal",
+                                "cpu-thermal",
+                                "k10temp",
+                                "acpitz",
+                            ):
                                 if key in temps and temps[key]:
                                     temp_val = round(temps[key][0].current)
                                     break
@@ -417,7 +412,7 @@ class PhotoFrameServer(iFrame):
                     except Exception:
                         temp_str = "N/A"
                     try:
-                        disk_free = psutil.disk_usage('/').free / (1024 ** 3)
+                        disk_free = psutil.disk_usage("/").free / (1024**3)
                         disk_str = f"{disk_free:.1f}GB"
                     except Exception:
                         disk_str = "N/A"
@@ -432,14 +427,18 @@ class PhotoFrameServer(iFrame):
                         f"Bright {bright_str}"
                     )
                     self._stats_last_refresh = now_ts
-                stats_cfg = self._settings.get('stats', {})
-                color = stats_cfg.get('font_color', 'white')
-                corner = stats_cfg.get('corner', 'top-left')
-                margin_x = int(stats_cfg.get('margin_x', 20))
-                margin_y = int(stats_cfg.get('margin_y', 20))
+                stats_cfg = self._settings.get("stats", {})
+                color = stats_cfg.get("font_color", "white")
+                corner = stats_cfg.get("corner", "top-left")
+                margin_x = int(stats_cfg.get("margin_x", 20))
+                margin_y = int(stats_cfg.get("margin_y", 20))
                 frame_bgr = self._overlay.render_stats(
-                    frame_bgr, self._stats_text, color,
-                    corner=corner, margin_x=margin_x, margin_y=margin_y,
+                    frame_bgr,
+                    self._stats_text,
+                    color,
+                    corner=corner,
+                    margin_x=margin_x,
+                    margin_y=margin_y,
                 )
             except Exception:
                 pass
@@ -475,7 +474,10 @@ class PhotoFrameServer(iFrame):
         try:
             # Prefer perf_counter() (monotonic, high-res) for pacing
             interval = float(
-                getattr(self, "_transition_frame_interval", self._transition_frame_interval))
+                getattr(
+                    self, "_transition_frame_interval", self._transition_frame_interval
+                )
+            )
             now = time.perf_counter()
             next_deadline = now  # send first frame immediately
 
@@ -509,11 +511,7 @@ class PhotoFrameServer(iFrame):
 
     # ------------- Utils -------------
     def compute_image_hash(self, image_path):
-        hash_obj = hashlib.sha256()
-        with open(image_path, "rb") as f:
-            for chunk in iter(lambda: f.read(4096), b""):
-                hash_obj.update(chunk)
-        return hash_obj.hexdigest()
+        return _compute_image_hash(image_path)
 
     def get_is_running(self):
         return self.is_running
@@ -531,11 +529,13 @@ class PhotoFrameServer(iFrame):
 
     def get_stream_frame(self):
         """Return the frame for the web stream — raw (no overlay) by default."""
-        show_overlay = (self._settings or {}).get("stream", {}).get("show_overlay", False)
+        show_overlay = (
+            (self._settings or {}).get("stream", {}).get("show_overlay", False)
+        )
         stats_show = (self._settings or {}).get("stats", {}).get("show", False)
         if not show_overlay:
             if stats_show:
-                stats_frame = getattr(self, '_stats_frame_to_stream', None)
+                stats_frame = getattr(self, "_stats_frame_to_stream", None)
                 if isinstance(stats_frame, np.ndarray) and stats_frame.size:
                     return stats_frame
             raw = self._raw_frame_to_stream
@@ -562,16 +562,11 @@ class PhotoFrameServer(iFrame):
                 print(f"[PhotoFrame LOG] {msg}")
 
     def get_images_from_directory(self):
-        image_extensions = [
-            ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".heic", ".heif",
-            ".mov", ".mp4"
-        ]
         image_paths = []
         for root, _dirs, files in os.walk(self.IMAGE_DIR):
             for file in files:
-                if file.lower().endswith(tuple(image_extensions)):
-                    image_path = os.path.join(root, file)
-                    image_paths.append(image_path)
+                if file.lower().endswith(SUPPORTED_MEDIA_EXTENSIONS):
+                    image_paths.append(os.path.join(root, file))
         return image_paths
 
     def get_random_image(self):
@@ -580,13 +575,13 @@ class PhotoFrameServer(iFrame):
             rand.shuffle(self.shuffled_images)
         if len(self.shuffled_images) == 0:
             return None
-        self.current_image_idx = (
-            self.current_image_idx + 1) % len(self.shuffled_images)
+        self.current_image_idx = (self.current_image_idx + 1) % len(
+            self.shuffled_images
+        )
         return self.shuffled_images[self.current_image_idx]
 
     def set_images_dir(self, images_dir=None):
-        base_root = os.path.abspath(
-            os.path.join(os.path.dirname(__file__), ".."))
+        base_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
         old_dir = getattr(self, "IMAGE_DIR", None)
 
@@ -596,10 +591,9 @@ class PhotoFrameServer(iFrame):
             else:
                 self.IMAGE_DIR = os.path.join(base_root, images_dir)
         else:
-            # --- Search 'system' -> 'image_dir', else root ---
+            # --- Read from canonical 'system.image_dir' ---
             sys_cfg = self._settings.get("system", {})
-            cfg = sys_cfg.get("image_dir") or self._settings.get(
-                "images_dir") or "Images"
+            cfg = sys_cfg.get("image_dir") or "Images"
 
             if os.path.isabs(cfg):
                 self.IMAGE_DIR = cfg
@@ -609,7 +603,8 @@ class PhotoFrameServer(iFrame):
         if not os.path.exists(self.IMAGE_DIR):
             os.makedirs(self.IMAGE_DIR, exist_ok=True)
             logging.warning(
-                "'%s' directory not found. Created a new one.", self.IMAGE_DIR)
+                "'%s' directory not found. Created a new one.", self.IMAGE_DIR
+            )
 
         logging.info("Using IMAGE_DIR = %s", self.IMAGE_DIR)
 
@@ -656,8 +651,7 @@ class PhotoFrameServer(iFrame):
                 return frame
             return None
         except Exception as e:
-            logging.error(
-                f"Failed to extract first frame from video {path}: {e}")
+            logging.error(f"Failed to extract first frame from video {path}: {e}")
             return None
 
     def _video_generator(self, video_path, total_duration):
@@ -682,7 +676,8 @@ class PhotoFrameServer(iFrame):
         if video_duration > 30.0:
             cap.release()
             logging.warning(
-                f"Video {os.path.basename(video_path)} is too long ({video_duration:.2f}s). Deleting.")
+                f"Video {os.path.basename(video_path)} is too long ({video_duration:.2f}s). Deleting."
+            )
             try:
                 os.remove(video_path)
                 self.update_images_list()
@@ -699,7 +694,8 @@ class PhotoFrameServer(iFrame):
             loop_count = max(loop_count, 1)
 
         logging.info(
-            f"Playing Video: {os.path.basename(video_path)} | VidLen: {video_duration:.1f}s | Target: {total_duration}s | Loops: {loop_count}")
+            f"Playing Video: {os.path.basename(video_path)} | VidLen: {video_duration:.1f}s | Target: {total_duration}s | Loops: {loop_count}"
+        )
 
         frame_interval = 1.0 / fps
 
@@ -732,8 +728,9 @@ class PhotoFrameServer(iFrame):
                 yield resized_frame
 
                 after_process = time.perf_counter()
-                next_frame_time = loop_start_time + \
-                    ((target_frame_index + 1) * frame_interval)
+                next_frame_time = loop_start_time + (
+                    (target_frame_index + 1) * frame_interval
+                )
                 sleep_time = next_frame_time - after_process
 
                 if sleep_time > 0:
@@ -741,7 +738,7 @@ class PhotoFrameServer(iFrame):
 
             # Optional: 1.5s Pause between loops (matches your previous style)
             if i < (loop_count - 1):
-                if 'resized_frame' in locals():
+                if "resized_frame" in locals():
                     pause_start = time.perf_counter()
                     while (time.perf_counter() - pause_start) < 1.5:
                         yield resized_frame
@@ -754,12 +751,12 @@ class PhotoFrameServer(iFrame):
             return self._get_first_video_frame(path)
 
         if not path:
-            logging.warning(
-                "PhotoFrameServer._load_image_safe: empty image path")
+            logging.warning("PhotoFrameServer._load_image_safe: empty image path")
             return None
         if not os.path.isfile(path):
             logging.warning(
-                "PhotoFrameServer._load_image_safe: missing image file %r", path)
+                "PhotoFrameServer._load_image_safe: missing image file %r", path
+            )
             return None
 
         ext = os.path.splitext(path)[1].lower()
@@ -769,6 +766,7 @@ class PhotoFrameServer(iFrame):
             try:
                 try:
                     from PIL import Image, ImageOps
+
                     pil_img = Image.open(path)
                     try:
                         pil_img = ImageOps.exif_transpose(pil_img)
@@ -780,25 +778,31 @@ class PhotoFrameServer(iFrame):
                     return arr
                 except Exception as e:
                     logging.warning(
-                        "PhotoFrameServer: Pillow HEIC decode failed for %r: %s", path, e)
+                        "PhotoFrameServer: Pillow HEIC decode failed for %r: %s",
+                        path,
+                        e,
+                    )
 
                 try:
                     import pyheif
 
                     heif = pyheif.read(path)
                     pil_img = Image.frombytes(
-                        heif.mode, heif.size, heif.data, "raw", heif.mode, heif.stride)
+                        heif.mode, heif.size, heif.data, "raw", heif.mode, heif.stride
+                    )
                     pil_img = pil_img.convert("RGB")
                     arr = np.array(pil_img)
                     arr = arr[:, :, ::-1].copy()
                     return arr
                 except Exception as e:
                     logging.warning(
-                        "PhotoFrameServer: HEIC decode failed for %r via pyheif: %s", path, e)
+                        "PhotoFrameServer: HEIC decode failed for %r via pyheif: %s",
+                        path,
+                        e,
+                    )
                     return None
             except Exception:
-                logging.exception(
-                    "PhotoFrameServer: HEIC decode crashed for %r", path)
+                logging.exception("PhotoFrameServer: HEIC decode crashed for %r", path)
                 return None
 
         img = cv2.imread(path)
@@ -810,7 +814,9 @@ class PhotoFrameServer(iFrame):
 
     # ------------- Main Transition Logic -------------
 
-    def start_image_transition(self, image1_path=None, image2_path=None, duration=5, hold_time=0):
+    def start_image_transition(
+        self, image1_path=None, image2_path=None, duration=5, hold_time=0
+    ):
         if self.current_image is None:
             first_path = image1_path or self.get_random_image()
             img1 = self._load_image_safe(first_path)
@@ -835,7 +841,8 @@ class PhotoFrameServer(iFrame):
 
         if img2 is None:
             logging.error(
-                "start_image_transition: failed to load next media. Skipping.")
+                "start_image_transition: failed to load next media. Skipping."
+            )
             self._send_frame(self.current_image)
             return False
 
@@ -850,15 +857,15 @@ class PhotoFrameServer(iFrame):
 
         effect_function = self.effects[self.EffectHandler.get_random_effect()]
         transition_gen = effect_function(
-            self.current_image, self.next_image, duration, fps=self._target_fps)
+            self.current_image, self.next_image, duration, fps=self._target_fps
+        )
 
         final_generator = transition_gen
 
         if is_video_transition:
             # Pass (duration + hold_time) so the video loops for the full experience
             # This covers the transition AND the delay
-            video_gen = self._video_generator(
-                image2_path, duration + hold_time)
+            video_gen = self._video_generator(image2_path, duration + hold_time)
             final_generator = itertools.chain(transition_gen, video_gen)
 
         self.status = self.update_frame(final_generator)
@@ -897,7 +904,8 @@ class PhotoFrameServer(iFrame):
 
             if anim_duration > 0:
                 is_video = self.start_image_transition(
-                    duration=anim_duration, hold_time=delay)
+                    duration=anim_duration, hold_time=delay
+                )
 
                 if not is_video:
                     hold_until = time.time() + delay
@@ -1000,13 +1008,16 @@ class PhotoFrameServer(iFrame):
     def _file_mtime_iso(self, path: str) -> str:
         try:
             ts = os.path.getmtime(path)
-            return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            return datetime.fromtimestamp(ts, tz=timezone.utc).strftime(
+                "%Y-%m-%dT%H:%M:%SZ"
+            )
         except Exception:
             return None
 
     def _extract_exif_datetime(self, path: str) -> str:
         try:
             from PIL import ExifTags, Image
+
             img = Image.open(path)
             exif = img.getexif()
             if not exif:
@@ -1021,7 +1032,9 @@ class PhotoFrameServer(iFrame):
                     continue
                 try:
                     dt = datetime.strptime(str(raw), "%Y:%m:%d %H:%M:%S")
-                    return dt.replace(tzinfo=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                    return dt.replace(tzinfo=timezone.utc).strftime(
+                        "%Y-%m-%dT%H:%M:%SZ"
+                    )
                 except Exception:
                     continue
             return None
@@ -1056,8 +1069,7 @@ class PhotoFrameServer(iFrame):
                     else:
                         img = cv2.imread(image_path)
                         if img is not None:
-                            height, width = int(
-                                img.shape[0]), int(img.shape[1])
+                            height, width = int(img.shape[0]), int(img.shape[1])
                 except Exception:
                     pass
 

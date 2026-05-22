@@ -1,4 +1,5 @@
 """Flask routes for /api/albums — album subscription and active album selection."""
+
 from flask import Blueprint, current_app, jsonify, request
 
 albums_bp = Blueprint("albums_bp", __name__, url_prefix="/api/albums")

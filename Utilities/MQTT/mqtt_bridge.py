@@ -27,22 +27,44 @@ except Exception:
 
 # Dotted paths that must never be exposed as MQTT entities
 MQTT_SKIP_PATHS = {
-    "mqtt.base_topic", "mqtt.client_id", "mqtt.discovery_prefix",
-    "mqtt.enabled", "mqtt.host", "mqtt.password", "mqtt.port",
-    "mqtt.retain_config", "mqtt.tls", "mqtt.username", "mqtt.discovery",
+    "mqtt.base_topic",
+    "mqtt.client_id",
+    "mqtt.discovery_prefix",
+    "mqtt.enabled",
+    "mqtt.host",
+    "mqtt.password",
+    "mqtt.port",
+    "mqtt.retain_config",
+    "mqtt.tls",
+    "mqtt.username",
+    "mqtt.discovery",
     "mqtt.interval_seconds",
-    "backend_configs.supersecretkey", "backend_configs.host",
-    "backend_configs.server_port", "backend_configs.stream_height",
-    "backend_configs.stream_width", "backend_configs.idle_fps",
-    "system.image_dir", "system.log_file_path", "system.service_name",
+    "backend_configs.supersecretkey",
+    "backend_configs.host",
+    "backend_configs.server_port",
+    "backend_configs.stream_height",
+    "backend_configs.stream_width",
+    "backend_configs.idle_fps",
+    "system.image_dir",
+    "system.log_file_path",
+    "system.service_name",
     "system.image_quality_encoding",
-    "autoupdate.repo_path", "autoupdate.remote", "autoupdate.branch",
-    "autoupdate.hour", "autoupdate.minute", "autoupdate.shallow_ok",
+    "autoupdate.repo_path",
+    "autoupdate.remote",
+    "autoupdate.branch",
+    "autoupdate.hour",
+    "autoupdate.minute",
+    "autoupdate.shallow_ok",
     "albums.active_album_id",  # handled by the dedicated album select entity
-    "about.image_path", "about.text", "about.version",
-    "ui.font_name", "ui.date_format",
-    "open_meteo.timeformat", "open_meteo.timezone",
-    "open_meteo.latitude", "open_meteo.longitude",
+    "about.image_path",
+    "about.text",
+    "about.version",
+    "ui.font_name",
+    "ui.date_format",
+    "open_meteo.timeformat",
+    "open_meteo.timezone",
+    "open_meteo.latitude",
+    "open_meteo.longitude",
     # brightness has its own dedicated entity with custom topic
     "screen.brightness",
 }
@@ -102,15 +124,17 @@ class MqttBridge:
         self.enabled = bool(self.cfg.get("enabled", False))
         self.host = self.cfg.get("host", "127.0.0.1")
         self.port = int(self.cfg.get("port", 1883))
-        self.username = (self.cfg.get("username") or None)
-        self.password = (self.cfg.get("password") or None)
+        self.username = self.cfg.get("username") or None
+        self.password = self.cfg.get("password") or None
         self.tls = bool(self.cfg.get("tls", False))
 
         node = (platform.node() or "device").lower()
         self.client_id = self.cfg.get("client_id") or f"photoframe-{node}"
         self.base_topic = self._clean_topic(self.cfg.get("base_topic") or "photoframe")
         self.discovery = bool(self.cfg.get("discovery", True))
-        self.discovery_prefix = self._clean_topic(self.cfg.get("discovery_prefix") or "homeassistant")
+        self.discovery_prefix = self._clean_topic(
+            self.cfg.get("discovery_prefix") or "homeassistant"
+        )
         self.retain_config = bool(self.cfg.get("retain_config", True))
         self.interval = int(self.cfg.get("interval_seconds", 10))
 
@@ -124,10 +148,10 @@ class MqttBridge:
         self.t_brightness_state = f"{self.base_topic}/{self.device_id}/brightness"
         self.t_service_state = f"{self.base_topic}/{self.device_id}/service_state"
         self.t_cmd_brightness = f"{self.base_topic}/{self.device_id}/cmd/brightness"
-        self.t_cmd_update   = f"{self.base_topic}/{self.device_id}/cmd/update"
-        self.t_cmd_restart  = f"{self.base_topic}/{self.device_id}/cmd/restart"
-        self.t_cmd_service  = f"{self.base_topic}/{self.device_id}/cmd/service"
-        self.t_cmd_screen   = f"{self.base_topic}/{self.device_id}/cmd/screen"
+        self.t_cmd_update = f"{self.base_topic}/{self.device_id}/cmd/update"
+        self.t_cmd_restart = f"{self.base_topic}/{self.device_id}/cmd/restart"
+        self.t_cmd_service = f"{self.base_topic}/{self.device_id}/cmd/service"
+        self.t_cmd_screen = f"{self.base_topic}/{self.device_id}/cmd/screen"
 
         self._ext_ip_cache = (None, 0)
 
@@ -144,13 +168,14 @@ class MqttBridge:
         self.last_disconnect_time = 0
         self.WATCHDOG_TIMEOUT = 60  # seconds
 
-
     def start(self):
         if not self.enabled:
             self._log("MQTT disabled; not starting.", logging.INFO)
             return
         if mqtt is None:
-            self._log("paho-mqtt not installed. Run: pip install paho-mqtt", logging.ERROR)
+            self._log(
+                "paho-mqtt not installed. Run: pip install paho-mqtt", logging.ERROR
+            )
             return
         if self.thread and self.thread.is_alive():
             return
@@ -202,7 +227,7 @@ class MqttBridge:
 
     # ---------- callbacks ----------
     def _on_connect(self, _c, _u, _f, rc):
-        self.connected = (rc == 0)
+        self.connected = rc == 0
         self.last_connect_time = time.time()
         if not self.connected:
             self._log(f"MQTT connect rc={rc}", logging.ERROR)
@@ -218,9 +243,13 @@ class MqttBridge:
         self.client.subscribe(self.t_cmd_service, qos=1)
         self.client.subscribe(self.t_cmd_screen, qos=1)
         # subscribe schema-driven settings commands
-        self.client.subscribe(f"{self.base_topic}/{self.device_id}/cmd/settings/#", qos=1)
+        self.client.subscribe(
+            f"{self.base_topic}/{self.device_id}/cmd/settings/#", qos=1
+        )
         # subscribe album command
-        self.client.subscribe(f"{self.base_topic}/{self.device_id}/cmd/albums/active", qos=1)
+        self.client.subscribe(
+            f"{self.base_topic}/{self.device_id}/cmd/albums/active", qos=1
+        )
 
         if self.discovery:
             self._publish_discovery_all()
@@ -284,7 +313,10 @@ class MqttBridge:
             return
 
         if dotted_path in MQTT_SKIP_PATHS:
-            self._log(f"Settings path {dotted_path!r} is on skip list; ignoring.", logging.WARNING)
+            self._log(
+                f"Settings path {dotted_path!r} is on skip list; ignoring.",
+                logging.WARNING,
+            )
             return
 
         stype = schema["type"]
@@ -295,24 +327,34 @@ class MqttBridge:
             try:
                 value = int(payload)
             except ValueError:
-                self._log(f"Invalid int payload for {dotted_path}: {payload!r}", logging.WARNING)
+                self._log(
+                    f"Invalid int payload for {dotted_path}: {payload!r}",
+                    logging.WARNING,
+                )
                 return
         elif stype == "float":
             try:
                 value = float(payload)
             except ValueError:
-                self._log(f"Invalid float payload for {dotted_path}: {payload!r}", logging.WARNING)
+                self._log(
+                    f"Invalid float payload for {dotted_path}: {payload!r}",
+                    logging.WARNING,
+                )
                 return
         elif stype in ("enum", "color"):
             if payload not in schema.get("choices", []):
                 self._log(
                     f"Invalid choice {payload!r} for {dotted_path}; "
-                    f"valid: {schema.get('choices', [])}", logging.WARNING
+                    f"valid: {schema.get('choices', [])}",
+                    logging.WARNING,
                 )
                 return
             value = payload
         else:
-            self._log(f"Settings type {stype!r} for {dotted_path} is not writable via MQTT.", logging.WARNING)
+            self._log(
+                f"Settings type {stype!r} for {dotted_path} is not writable via MQTT.",
+                logging.WARNING,
+            )
             return
 
         # apply
@@ -417,7 +459,17 @@ class MqttBridge:
             self._publish(topic, body, retain=self.retain_config)
 
         # Helper: only include state_class if not None
-        def sensor(object_id, name, vt, unit=None, device_class=None, icon=None, state_class=None, extra=None, unique_suffix=""):
+        def sensor(
+            object_id,
+            name,
+            vt,
+            unit=None,
+            device_class=None,
+            icon=None,
+            state_class=None,
+            extra=None,
+            unique_suffix="",
+        ):
             uid = f"{did}_{object_id}{unique_suffix}"
             cfg = {
                 "name": name,
@@ -507,24 +559,70 @@ class MqttBridge:
 
         # --- Diagnostic sensors ---
         sensor(
-            "external_ip", "External IP", "{{ value_json.external_ip }}",
+            "external_ip",
+            "External IP",
+            "{{ value_json.external_ip }}",
             icon="mdi:web",
             extra={"entity_category": "diagnostic"},
             unique_suffix="_v2",
         )
-        sensor("cpu", "CPU Usage", "{{ value_json.cpu_usage }}", unit="%", device_class="power_factor")
-        sensor("cputemp", "CPU Temperature", "{{ value_json.cpu_temp_c }}", unit="°C", device_class="temperature")
-        sensor("ram_pct", "RAM Usage", "{{ value_json.ram_percent }}", unit="%", device_class="power_factor")
-        sensor("ram_used", "RAM Used", "{{ value_json.ram_used_mb }}", unit="MB", icon="mdi:memory")
-        sensor("ram_total", "RAM Total", "{{ value_json.ram_total_mb }}", unit="MB", icon="mdi:memory")
         sensor(
-            "ssid", "Wi-Fi SSID", "{{ value_json.wifi_ssid }}",
+            "cpu",
+            "CPU Usage",
+            "{{ value_json.cpu_usage }}",
+            unit="%",
+            device_class="power_factor",
+        )
+        sensor(
+            "cputemp",
+            "CPU Temperature",
+            "{{ value_json.cpu_temp_c }}",
+            unit="°C",
+            device_class="temperature",
+        )
+        sensor(
+            "ram_pct",
+            "RAM Usage",
+            "{{ value_json.ram_percent }}",
+            unit="%",
+            device_class="power_factor",
+        )
+        sensor(
+            "ram_used",
+            "RAM Used",
+            "{{ value_json.ram_used_mb }}",
+            unit="MB",
+            icon="mdi:memory",
+        )
+        sensor(
+            "ram_total",
+            "RAM Total",
+            "{{ value_json.ram_total_mb }}",
+            unit="MB",
+            icon="mdi:memory",
+        )
+        sensor(
+            "ssid",
+            "Wi-Fi SSID",
+            "{{ value_json.wifi_ssid }}",
             icon="mdi:wifi",
             extra={"entity_category": "diagnostic"},
             unique_suffix="_v2",
         )
-        sensor("uptime", "Uptime", "{{ value_json.uptime_s }}", unit="s", icon="mdi:timer-outline")
-        sensor("brightness", "Screen Brightness", "{{ value_json.brightness }}", unit="%", icon="mdi:brightness-6")
+        sensor(
+            "uptime",
+            "Uptime",
+            "{{ value_json.uptime_s }}",
+            unit="s",
+            icon="mdi:timer-outline",
+        )
+        sensor(
+            "brightness",
+            "Screen Brightness",
+            "{{ value_json.brightness }}",
+            unit="%",
+            icon="mdi:brightness-6",
+        )
 
         # --- Schema-driven settings entities ---
         self._publish_schema_discovery(pub, dev)
@@ -636,7 +734,10 @@ class MqttBridge:
         try:
             current_settings = load_settings()
         except Exception as e:
-            self._log(f"_publish_all_settings_states: load_settings failed: {e}", logging.ERROR)
+            self._log(
+                f"_publish_all_settings_states: load_settings failed: {e}",
+                logging.ERROR,
+            )
             return
 
         for dotted_path, leaf in _iter_schema_leaves(SETTINGS_SCHEMA):
@@ -768,7 +869,9 @@ class MqttBridge:
             if sc is not None:
                 ok = bool(sc.set_brightness_percent(pct, allow_zero=True))
                 if not ok:
-                    self._log("ScreenController refused brightness change.", logging.WARNING)
+                    self._log(
+                        "ScreenController refused brightness change.", logging.WARNING
+                    )
                 self._publish_brightness_state()
                 return
         except Exception as e:
@@ -784,7 +887,6 @@ class MqttBridge:
             self._publish_brightness_state()
         except Exception as e:
             self._log(f"Fallback brightness write failed: {e}", logging.ERROR)
-
 
     # ---------- update / service ----------
     def _handle_cmd_update(self):
@@ -802,9 +904,12 @@ class MqttBridge:
         try:
             res = subprocess.run(
                 ["git", "-C", self._repo_path(), "pull", "--ff-only"],
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=120
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                timeout=120,
             )
-            ok = (res.returncode == 0)
+            ok = res.returncode == 0
             msg = res.stdout.strip()
             lvl = logging.INFO if ok else logging.WARNING
             self._log(f"git pull {'OK' if ok else 'FAILED'}: {msg[:300]}", lvl)
@@ -862,6 +967,7 @@ class MqttBridge:
                 self._publish_service_state()
             except Exception:
                 pass
+
         threading.Thread(target=_w, daemon=True).start()
 
     def _publish_service_state(self):
@@ -871,6 +977,7 @@ class MqttBridge:
     # ---------- helpers: backlight ----------
     def _list_backlights(self):
         import os
+
         base = "/sys/class/backlight"
         if not os.path.isdir(base):
             return []
@@ -885,6 +992,7 @@ class MqttBridge:
 
     def _read_brightness_values(self, dev):
         import os
+
         base = f"/sys/class/backlight/{dev}"
         try:
             with open(os.path.join(base, "max_brightness"), "r") as f:
@@ -895,8 +1003,11 @@ class MqttBridge:
         except Exception:
             return None, None
 
-    def _write_brightness_percent(self, dev, pct: int, allow_zero: bool = False) -> bool:
+    def _write_brightness_percent(
+        self, dev, pct: int, allow_zero: bool = False
+    ) -> bool:
         import os
+
         base = f"/sys/class/backlight/{dev}"
         try:
             with open(os.path.join(base, "max_brightness"), "r") as f:
@@ -914,12 +1025,18 @@ class MqttBridge:
                 f.write(str(value))
             return True
         except PermissionError:
-            cmd = f"echo {value} | sudo tee {path}"
+            # No shell: pass the brightness value (already an int) on stdin
+            # to `sudo tee` so it cannot be interpreted as a shell command.
             try:
-                subprocess.run(cmd, shell=True, check=True,
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run(
+                    ["sudo", "tee", path],
+                    input=str(int(value)).encode(),
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
                 return True
-            except subprocess.CalledProcessError:
+            except (subprocess.CalledProcessError, OSError, ValueError):
                 return False
         except Exception:
             return False
@@ -927,13 +1044,18 @@ class MqttBridge:
     # ---------- helpers: system ----------
     def _repo_path(self):
         import os
-        return self.settings.get("autoupdate", {}).get("repo_path", os.path.dirname(__file__))
+
+        return self.settings.get("autoupdate", {}).get(
+            "repo_path", os.path.dirname(__file__)
+        )
 
     def _is_user_service(self, name) -> bool:
         try:
             r = subprocess.run(
                 ["systemctl", "--user", "status", f"{name}.service"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=2,
             )
             return r.returncode in (0, 3)
         except Exception:
@@ -943,7 +1065,10 @@ class MqttBridge:
         try:
             r = subprocess.run(
                 ["systemctl", "--user", "is-active", f"{name}.service"],
-                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=3
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=3,
             )
             if r.returncode == 0 and (r.stdout or "").strip() == "active":
                 return True
@@ -952,7 +1077,10 @@ class MqttBridge:
         try:
             r = subprocess.run(
                 ["systemctl", "is-active", f"{name}.service"],
-                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=3
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                timeout=3,
             )
             return r.returncode == 0 and (r.stdout or "").strip() == "active"
         except Exception:
@@ -960,21 +1088,33 @@ class MqttBridge:
 
     def _restart_service(self, name):
         if self._is_user_service(name):
-            subprocess.run(["systemctl", "--user", "restart", f"{name}.service"], check=False)
+            subprocess.run(
+                ["systemctl", "--user", "restart", f"{name}.service"], check=False
+            )
         else:
-            subprocess.run(["sudo", "systemctl", "restart", f"{name}.service"], check=False)
+            subprocess.run(
+                ["sudo", "systemctl", "restart", f"{name}.service"], check=False
+            )
 
     def _start_service(self, name):
         if self._is_user_service(name):
-            subprocess.run(["systemctl", "--user", "start", f"{name}.service"], check=False)
+            subprocess.run(
+                ["systemctl", "--user", "start", f"{name}.service"], check=False
+            )
         else:
-            subprocess.run(["sudo", "systemctl", "start", f"{name}.service"], check=False)
+            subprocess.run(
+                ["sudo", "systemctl", "start", f"{name}.service"], check=False
+            )
 
     def _stop_service(self, name):
         if self._is_user_service(name):
-            subprocess.run(["systemctl", "--user", "stop", f"{name}.service"], check=False)
+            subprocess.run(
+                ["systemctl", "--user", "stop", f"{name}.service"], check=False
+            )
         else:
-            subprocess.run(["sudo", "systemctl", "stop", f"{name}.service"], check=False)
+            subprocess.run(
+                ["sudo", "systemctl", "stop", f"{name}.service"], check=False
+            )
 
     def _get_local_ip(self) -> str:
         if _get_local_ip_util:
@@ -997,7 +1137,9 @@ class MqttBridge:
         try:
             out = subprocess.check_output(
                 ["nmcli", "-t", "-f", "ACTIVE,SSID", "dev", "wifi"],
-                text=True, stderr=subprocess.DEVNULL, timeout=4
+                text=True,
+                stderr=subprocess.DEVNULL,
+                timeout=4,
             )
             for line in out.splitlines():
                 parts = line.split(":")
@@ -1023,7 +1165,9 @@ class MqttBridge:
         try:
             out = subprocess.check_output(
                 ["nmcli", "-t", "-f", "TYPE,NAME", "connection", "show", "--active"],
-                text=True, stderr=subprocess.DEVNULL, timeout=4
+                text=True,
+                stderr=subprocess.DEVNULL,
+                timeout=4,
             )
             for line in out.splitlines():
                 typ, name = (line.split(":") + ["", ""])[:2]
@@ -1046,7 +1190,8 @@ class MqttBridge:
         try:
             out = subprocess.check_output(
                 ["curl", "-sS", "--max-time", "3", "https://ipinfo.io/ip"],
-                text=True, stderr=subprocess.DEVNULL
+                text=True,
+                stderr=subprocess.DEVNULL,
             ).strip()
             if out and len(out) < 64:
                 self._ext_ip_cache = (out, time.time())
@@ -1054,7 +1199,6 @@ class MqttBridge:
         except Exception:
             pass
         return None
-
 
     # ---------- mqtt helpers ----------
     def _publish(self, topic, payload, qos=1, retain=False):

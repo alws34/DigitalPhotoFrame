@@ -6,16 +6,20 @@ from flask import (
     Blueprint,
     Response,
     current_app,
+    jsonify,
     request,
     stream_with_context,
 )
 
-stream_bp = Blueprint('stream_bp', __name__, url_prefix='/api/stream')
+stream_bp = Blueprint("stream_bp", __name__, url_prefix="/api/stream")
+
 
 @stream_bp.route("/snapshot", methods=["GET"])
 def snapshot():
     """Return a single JPEG frame — enables polling-based stream for cross-browser support."""
-    backend = current_app.config['backend']
+    backend = current_app.config["backend"]
+    if not backend.is_authenticated():
+        return jsonify({"error": "Unauthorized"}), 401
     data = backend._last_jpeg
     if not data:
         return Response(status=503)
@@ -28,9 +32,14 @@ def snapshot():
         },
     )
 
+
 @stream_bp.route("/", methods=["GET"], strict_slashes=False)
 def stream():
-    backend = current_app.config['backend']
+    backend = current_app.config["backend"]
+    # Authenticate before the generator starts; once streaming begins the
+    # response is committed and a 401 can no longer be sent.
+    if not backend.is_authenticated():
+        return jsonify({"error": "Unauthorized"}), 401
     default_w, default_h = 1920, 1080
     try:
         w = int(request.args.get("width", default_w))
@@ -51,8 +60,12 @@ def stream():
         direct_passthrough=True,
     )
 
+
 @stream_bp.route("/test", methods=["GET"])
 def stream_test():
+    backend = current_app.config["backend"]
+    if not backend.is_authenticated():
+        return jsonify({"error": "Unauthorized"}), 401
     boundary_line = b"--frame\r\n"
 
     def gen():

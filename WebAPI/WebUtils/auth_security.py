@@ -22,13 +22,17 @@ from WebAPI.database import (
 # Optional argon2 (preferred)
 try:
     from argon2 import PasswordHasher  # pip install argon2-cffi
-    _ARGON2 = PasswordHasher(time_cost=2, memory_cost=256*1024, parallelism=2)  # ~256 MB, tune down on tiny devices
+
+    _ARGON2 = PasswordHasher(
+        time_cost=2, memory_cost=256 * 1024, parallelism=2
+    )  # ~256 MB, tune down on tiny devices
     _USE_ARGON2 = True
 except Exception:
     _USE_ARGON2 = False
 
 EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$")
 USERNAME_RE = re.compile(r"^[A-Za-z0-9._\-]{3,32}$")
+
 
 # Basic password policy: length >= 10, and at least 3 classes among [lower, upper, digit, symbol].
 def password_policy_ok(pw: str) -> bool:
@@ -41,11 +45,14 @@ def password_policy_ok(pw: str) -> bool:
     classes += any(c in r"!@#$%^&*()_+-=[]{};':\",.<>/?\|" for c in pw)
     return classes >= 3
 
+
 def _constant_time_eq(a: str, b: str) -> bool:
     return hmac.compare_digest(a, b)
 
+
 def _now() -> float:
     return time.time()
+
 
 @dataclass
 class UserRecord:
@@ -62,6 +69,7 @@ class UserRecord:
     lock_until: float = 0.0
     password_changed_at: Optional[float] = None
 
+
 class UserStore:
     def __init__(self):
         pass
@@ -72,7 +80,9 @@ class UserStore:
     def _hash_password(self, password: str) -> Tuple[str, str]:
         if _USE_ARGON2:
             return _ARGON2.hash(password), "argon2"
-        return generate_password_hash(password, method="pbkdf2:sha256", salt_length=16), "pbkdf2"
+        return generate_password_hash(
+            password, method="pbkdf2:sha256", salt_length=16
+        ), "pbkdf2"
 
     def _verify_password(self, algo: str, pw_hash: str, password: str) -> bool:
         if algo == "argon2" and _USE_ARGON2:
@@ -83,7 +93,9 @@ class UserStore:
                 return False
         return check_password_hash(pw_hash, password)
 
-    def create_user(self, email: str, username: str, password: str, role: str = "user") -> str:
+    def create_user(
+        self, email: str, username: str, password: str, role: str = "user"
+    ) -> str:
         email = email.strip().lower()
         username = username.strip()
 
@@ -113,15 +125,17 @@ class UserStore:
         if not user:
             _ = check_password_hash(fake_hash, password)
             return None
-            
+
         if _now() < float(user.get("lock_until", 0.0)):
             return None
-            
-        ok = self._verify_password(user.get("algo", "pbkdf2"), user.get("pw_hash", ""), password)
+
+        ok = self._verify_password(
+            user.get("algo", "pbkdf2"), user.get("pw_hash", ""), password
+        )
         if ok:
             update_user_login(user["uid"], _now())
             return self.find_by_email_or_username(identity)
-            
+
         increment_failed_login(user["username"])
         user["failed_count"] = int(user.get("failed_count", 0)) + 1
         if user["failed_count"] >= 5:
@@ -131,11 +145,11 @@ class UserStore:
     def change_password(self, uid: str, new_password: str) -> None:
         if not password_policy_ok(new_password):
             raise ValueError("Password does not meet policy")
-            
+
         user = get_user_by_uid(uid)
         if not user:
             raise ValueError("User not found")
-            
+
         pw_hash, algo = self._hash_password(new_password)
         update_password_db(uid, pw_hash, algo, _now())
 
@@ -143,9 +157,11 @@ class UserStore:
         users = get_all_users()
         return {u["uid"]: u for u in users}
 
+
 # -------------- CSRF --------------
 
 CSRF_SESSION_KEY = "_csrf_token"
+
 
 def ensure_csrf(session_obj) -> str:
     tok = session_obj.get(CSRF_SESSION_KEY)
@@ -154,18 +170,22 @@ def ensure_csrf(session_obj) -> str:
         session_obj[CSRF_SESSION_KEY] = tok
     return tok
 
+
 def validate_csrf(session_obj, form_value: str) -> bool:
     want = session_obj.get(CSRF_SESSION_KEY, "")
     if not want or not form_value:
         return False
     return _constant_time_eq(want, form_value)
 
+
 # -------------- IP rate limiting (simple in-memory) --------------
+
 
 class RateLimiter:
     """
     Sliding window per key. Not persistent across restarts.
     """
+
     def __init__(self, limit: int, window_sec: int):
         self.limit = limit
         self.window = window_sec

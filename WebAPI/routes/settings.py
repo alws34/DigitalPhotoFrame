@@ -10,9 +10,47 @@ from flask import (
     stream_with_context,
 )
 
-from Utilities.config_store import SETTINGS_SCHEMA
+from Utilities.config_store import SETTINGS_SCHEMA, get_default_settings
 
-settings_bp = Blueprint('settings_bp', __name__, url_prefix='/api/settings')
+settings_bp = Blueprint("settings_bp", __name__, url_prefix="/api/settings")
+
+# Settings whose values are filesystem paths — must be plain strings without
+# null bytes so they can never smuggle hostile content into path operations.
+_PATH_SETTINGS = {
+    ("system", "image_dir"),
+    ("system", "log_file_path"),
+    ("autoupdate", "repo_path"),
+    ("about", "image_path"),
+}
+
+
+def _validate_settings(new_settings: dict) -> "str | None":
+    """Basic sanity validation of an incoming settings payload.
+
+    Returns an error string if invalid, or None if acceptable. This is a
+    defensive check, not a full schema validation: it rejects unknown
+    top-level sections and obviously malformed path values.
+    """
+    defaults = get_default_settings()
+    # admin_ui is a valid section that lives in the schema but not defaults.
+    known_sections = set(defaults.keys()) | {"admin_ui"}
+
+    for section, value in new_settings.items():
+        if section not in known_sections:
+            return f"Unknown settings section: {section}"
+        if not isinstance(value, dict):
+            return f"Settings section '{section}' must be an object."
+        for key, val in value.items():
+            if (section, key) in _PATH_SETTINGS:
+                if not isinstance(val, str):
+                    return f"Setting '{section}.{key}' must be a string."
+                if "\x00" in val:
+                    return f"Setting '{section}.{key}' contains an illegal character."
+            # Reject deeply nested non-serializable structures defensively.
+            if isinstance(val, (set, bytes)):
+                return f"Setting '{section}.{key}' has an unsupported type."
+    return None
+
 
 _sse_clients: list[queue.Queue] = []
 _sse_lock = threading.Lock()
@@ -30,14 +68,16 @@ def _broadcast_settings_updated() -> None:
 
 def _register_sse_broadcaster() -> None:
     from Utilities.config_events import on_settings_changed
+
     on_settings_changed(lambda _: _broadcast_settings_updated())
 
 
 _register_sse_broadcaster()
 
+
 @settings_bp.route("/", methods=["GET"], strict_slashes=False)
 def get_settings():
-    backend = current_app.config.get('backend')
+    backend = current_app.config.get("backend")
     if backend is None:
         return jsonify({"error": "backend unavailable"}), 500
     if not backend.is_authenticated():
@@ -50,37 +90,43 @@ def get_settings():
     except Exception as e:
         return jsonify({"error": "Failed to read settings", "details": str(e)}), 500
 
+
 @settings_bp.route("/schema", methods=["GET"], strict_slashes=False)
 def get_schema():
     backend = current_app.config.get("backend")
-    if backend and not backend.is_authenticated():
+    if not backend or not backend.is_authenticated():
         return jsonify({"error": "unauthorized"}), 401
     return jsonify(SETTINGS_SCHEMA)
 
 
 @settings_bp.route("/", methods=["POST"], strict_slashes=False)
 def update_settings():
-    backend = current_app.config.get('backend')
+    backend = current_app.config.get("backend")
     if backend is None:
         return jsonify({"error": "backend unavailable"}), 500
     if not backend.is_authenticated():
         return jsonify({"error": "unauthorized"}), 401
-    
+
     try:
         new_settings = request.get_json(silent=True)
         if not isinstance(new_settings, dict):
             return jsonify({"error": "Invalid payload."}), 400
-            
+
+        validation_error = _validate_settings(new_settings)
+        if validation_error:
+            return jsonify({"error": validation_error}), 400
+
         backend.save_settings(new_settings)
         return jsonify({"message": "Settings updated successfully."})
     except Exception as e:
         return jsonify({"error": f"Failed to update settings: {e}"}), 500
 
+
 @settings_bp.route("/events", methods=["GET"])
 def settings_events():
     """Server-Sent Events stream. Pushes 'settings_updated' when settings change."""
-    backend = current_app.config.get('backend')
-    if backend and not backend.is_authenticated():
+    backend = current_app.config.get("backend")
+    if not backend or not backend.is_authenticated():
         return jsonify({"error": "unauthorized"}), 401
 
     def event_stream():
@@ -114,11 +160,12 @@ def settings_events():
 
 @settings_bp.route("/system_stats", methods=["GET"])
 def system_stats():
-    backend = current_app.config['backend']
+    backend = current_app.config["backend"]
     if not backend.is_authenticated():
         return jsonify({"error": "unauthorized"}), 401
 
     import psutil
+
     try:
         cpu_usage = int(psutil.cpu_percent(interval=None))
         ram = psutil.virtual_memory()
@@ -131,19 +178,22 @@ def system_stats():
         except Exception:
             cpu_temp = "N/A"
 
-        return jsonify({
-            "cpu_usage": cpu_usage,
-            "ram_percent": ram_percent,
-            "ram_used": ram_used,
-            "ram_total": ram_total,
-            "cpu_temp": cpu_temp
-        })
+        return jsonify(
+            {
+                "cpu_usage": cpu_usage,
+                "ram_percent": ram_percent,
+                "ram_used": ram_used,
+                "ram_total": ram_total,
+                "cpu_temp": cpu_temp,
+            }
+        )
     except Exception as e:
         return jsonify({"error": f"Stats unavailable: {e}"}), 500
 
+
 @settings_bp.route("/logs", methods=["GET"])
 def get_logs():
-    backend = current_app.config['backend']
+    backend = current_app.config["backend"]
     if not backend.is_authenticated():
         return jsonify({"error": "unauthorized"}), 401
     try:
@@ -155,9 +205,10 @@ def get_logs():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
 @settings_bp.route("/clear_logs", methods=["POST"])
 def clear_logs():
-    backend = current_app.config['backend']
+    backend = current_app.config["backend"]
     if not backend.is_authenticated():
         return jsonify({"error": "unauthorized"}), 401
 

@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import SettingsSection from "../components/settings/SettingsSection";
+import { withCsrf } from "../csrf";
 
 const HIDDEN_KEYS = new Set(["about"]);
 const MERGED_KEYS = new Set(["backend_configs", "autoupdate", "playback", "screen", "admin_ui", "stats", "effects", "stream"]);
@@ -146,12 +147,11 @@ export default function SettingsView() {
     if (!snapshot) return;
     setSaving(true);
     try {
-      const res = await fetch("/api/settings", {
+      const res = await fetch("/api/settings", withCsrf({
         method: "POST",
-        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(snapshot),
-      });
+      }));
       if (!res.ok) throw new Error(await res.text());
 
       const changed = collectChangedPaths(originalRef.current, snapshot);
@@ -173,7 +173,7 @@ export default function SettingsView() {
   const handleRestart = async () => {
     setShowRestartModal(false);
     try {
-      await fetch("/api/maintenance/restart", { method: "POST", credentials: "include" });
+      await fetch("/api/maintenance/restart", withCsrf({ method: "POST" }));
       setStatus("Restarting…");
     } catch (e) {
       setStatus(`Restart failed: ${e.message}`);

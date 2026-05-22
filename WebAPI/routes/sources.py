@@ -1,4 +1,5 @@
 """Flask routes for /api/sources — source management and OAuth."""
+
 from flask import Blueprint, current_app, jsonify, request
 
 sources_bp = Blueprint("sources_bp", __name__, url_prefix="/api/sources")

@@ -23,7 +23,11 @@ export default function ResetPassword() {
       setSuccess(res.data.message || 'Password reset successfully!');
       setTimeout(() => navigate('/login'), 3000);
     } catch (err) {
-      setError(err.response?.data?.error || 'Failed to reset password. Please check your email.');
+      if (err.response?.status === 401) {
+        setError('Password reset requires being logged in. Please sign in first, then change your password from Settings.');
+      } else {
+        setError(err.response?.data?.error || 'Failed to reset password.');
+      }
     } finally {
       setLoading(false);
     }
@@ -56,7 +60,7 @@ export default function ResetPassword() {
             <Key size={48} color="var(--primary)" />
           </div>
           <h1 style={{ margin: 0, fontSize: '1.5rem' }}>Reset Password</h1>
-          <p style={{ color: 'var(--text-muted)', margin: '0.5rem 0 0' }}>Enter your email and a new password</p>
+          <p style={{ color: 'var(--text-muted)', margin: '0.5rem 0 0' }}>You must be logged in to reset a password</p>
         </div>
 
         {error && (
